@@ -21,7 +21,7 @@ eve add @kybernesis/arcana
 ```
 
 Package: [`@kybernesis/arcana`](https://www.npmjs.com/package/@kybernesis/arcana) ·
-[source](https://github.com/KybernesisAI/arcana-eve) ·
+[source](https://github.com/KybernesisAI/platform/tree/master/packages/arcana) ·
 [Arcana](https://kybernesis.ai/arcana)
 
 ### enterprise — control-plane governance
@@ -35,7 +35,7 @@ eve add @kybernesis/enterprise
 ```
 
 Package: [`@kybernesis/enterprise`](https://www.npmjs.com/package/@kybernesis/enterprise) ·
-[source](https://github.com/KybernesisAI/enterprise-eve)
+[source](https://github.com/KybernesisAI/platform/tree/master/packages/enterprise)
 
 ### multiplayer — shared conversations
 
