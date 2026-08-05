@@ -4,14 +4,19 @@
   "type": "registry:item",
   "title": "Kybernesis Arcana",
   "description": "Durable long-term memory for eve agents: Arcana MCP connection, recall/remember/brain-note skills, and recall-first instructions.",
-  "dependencies": ["@kybernesis/arcana"],
-  "envVars": { "ARCANA_API_KEY": "", "ARCANA_WORKSPACE": "" },
+  "dependencies": [
+    "@kybernesis/arcana"
+  ],
+  "envVars": {
+    "ARCANA_API_KEY": "",
+    "ARCANA_COMPANY_WORKSPACE": ""
+  },
   "files": [
     {
       "path": "registry/arcana.ts",
-      "content": "import arcana from \"@kybernesis/arcana\";\n\nexport default arcana({\n  apiKey: process.env.ARCANA_API_KEY!,\n  workspace: process.env.ARCANA_WORKSPACE ?? \"my-company\",\n});\n",
       "type": "registry:file",
-      "target": "agent/extensions/arcana.ts"
+      "target": "agent/extensions/arcana.ts",
+      "content": "import arcana from \"@kybernesis/arcana\";\n\n// One brain for shared surfaces, optionally a second for DMs. Hermetic eval\n// runs override ARCANA_COMPANY_WORKSPACE to \"<client>-eval\" (see the evals\n// item), which switches to the eval workspace's own key automatically.\nconst COMPANY = process.env.ARCANA_COMPANY_WORKSPACE ?? \"my-company\";\nconst DM = process.env.ARCANA_DM_WORKSPACE ?? COMPANY;\n\nexport default arcana({\n  apiKey:\n    (COMPANY.endsWith(\"-eval\") ? process.env.ARCANA_EVAL_API_KEY : undefined) ??\n    process.env.ARCANA_API_KEY!,\n  workspace: COMPANY,\n  // With @kybernesis/multiplayer, DM sessions carry surface:\"dm\" — route them\n  // to the DM workspace. Harmless (no-op) without multiplayer.\n  resolveWorkspace: (ctx) =>\n    ctx.session.auth.current?.attributes.surface === \"dm\" ? DM : undefined,\n});\n"
     }
   ]
 }

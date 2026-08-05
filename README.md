@@ -12,6 +12,7 @@ Kybernesis. Eve is the plumbing; this is the moat.
 | [`@kybernesis/enterprise`](./packages/enterprise) | Control-plane governance: offline token verification + per-agent grant enforcement (invite / grant / revoke / suspend) |
 | [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared conversations: per-speaker verified identity, attributed threads, no-re-mention continuation, dual surfaces |
 | [`@kybernesis/evals`](./packages/evals) | The baseline QA suite: memory/routing/smoke behaviors with every production hardening lesson as a default |
+| [`@kybernesis/create`](./packages/create) | The `kyb` CLI: `init` scaffolds a full governed/remembering/multiplayer/self-testing agent in one command; `doctor` preflights an engagement; `upgrade` bumps packages behind the eval gate |
 
 ## Also in this repo
 

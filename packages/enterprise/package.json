@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/enterprise",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Kybernesis enterprise governance for eve agents: control-plane token verification and per-agent grant enforcement (kybernesisAuth).",
   "license": "Apache-2.0",
   "type": "module",

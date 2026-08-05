@@ -13,7 +13,7 @@
       ],
       "envVars": {
         "ARCANA_API_KEY": "",
-        "ARCANA_WORKSPACE": ""
+        "ARCANA_COMPANY_WORKSPACE": ""
       },
       "files": [
         {

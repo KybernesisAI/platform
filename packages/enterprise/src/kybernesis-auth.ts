@@ -28,12 +28,24 @@ export interface KybernesisAuthOptions {
 }
 
 export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> {
-  const jwks = createRemoteJWKSet(new URL(`${options.issuer}/api/jwks`));
+  // Lazy JWKS init: building the URL eagerly makes a missing/invalid issuer
+  // fail at MODULE LOAD, which kills agent compile/boot (a freshly scaffolded
+  // agent without envs couldn't even run `eve info`). Deferring to first use
+  // means misconfiguration degrades to "governed callers get 401" instead.
+  let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
   return async (request) => {
     const token = extractBearerToken(request.headers.get("authorization"));
     const bundle = request.headers.get("x-kybernesis-bundle");
     if (!token || !bundle) return null;
+
+    if (!jwks) {
+      try {
+        jwks = createRemoteJWKSet(new URL(`${options.issuer}/api/jwks`));
+      } catch {
+        return null; // invalid issuer config → fall through to 401, never crash
+      }
+    }
 
     let identity: JWTPayload;
     let policy: JWTPayload;

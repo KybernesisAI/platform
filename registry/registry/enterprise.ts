@@ -11,7 +11,7 @@ import { kybernesisAuth } from "@kybernesis/enterprise";
 export default eveChannel({
   auth: [
     kybernesisAuth({
-      issuer: process.env.KYBERNESIS_ISSUER!,
+      issuer: process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
       agent: process.env.KYBERNESIS_AGENT!,
     }),
     localDev(),
