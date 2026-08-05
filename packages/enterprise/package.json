@@ -1,0 +1,51 @@
+{
+  "name": "@kybernesis/enterprise",
+  "version": "0.1.1",
+  "description": "Kybernesis enterprise governance for eve agents: control-plane token verification and per-agent grant enforcement (kybernesisAuth).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "homepage": "https://kybernesis.ai",
+  "keywords": [
+    "eve",
+    "kybernesis",
+    "enterprise",
+    "auth",
+    "governance",
+    "agent"
+  ],
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "eve": "0.29.5",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "eve": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/enterprise"
+  }
+}

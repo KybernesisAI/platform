@@ -1,0 +1,28 @@
+{
+  "name": "multiplayer",
+  "type": "registry:item",
+  "title": "Kybernesis Multiplayer",
+  "description": "Shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions.",
+  "dependencies": [
+    "@kybernesis/multiplayer",
+    "@vercel/connect"
+  ],
+  "envVars": {
+    "SLACK_CONNECTOR_UID": ""
+  },
+  "files": [
+    {
+      "path": "registry/multiplayer.ts",
+      "type": "registry:file",
+      "target": "agent/channels/slack.ts",
+      "content": "import { connectSlackCredentials } from \"@vercel/connect/eve\";\nimport { multiplayerSlackChannel } from \"@kybernesis/multiplayer/slack\";\n\n// Kybernesis multiplayer: shared Slack threads with per-speaker verified identity,\n// attributed context, no-re-mention continuation, and dual-surface (channel vs DM)\n// sessions. Set SLACK_CONNECTOR_UID to your Vercel Connect Slack connector\n// (create: `vercel connect create slack --triggers`, then re-attach the trigger\n// path to /eve/v1/slack).\nexport default multiplayerSlackChannel({\n  credentials: connectSlackCredentials(process.env.SLACK_CONNECTOR_UID!),\n});\n"
+    },
+    {
+      "path": "registry/multiplayer-instructions.md",
+      "type": "registry:file",
+      "target": "agent/instructions/multiplayer.md",
+      "content": "# Multiplayer conversations\n\nYou operate in shared, multi-party conversations as well as private DMs. The runtime\ntells you which surface each session is on, and every message carries its sender's\nverified identity.\n\n**In shared channels/threads:**\n\n- Multiple people talk to you in one conversation. Messages are attributed — track\n  who said what, and never attribute one person's request or opinion to another.\n- Address people distinctly when it matters (\"Alice asked X; Bob, you mentioned Y\").\n- Everything you post is visible to everyone present. Use only shared, team-safe\n  knowledge and tools on this surface.\n- If someone asks for something personal (their private files, calendar, personal\n  notes), do not attempt it here — tell them to DM you instead.\n- When a tool refuses with a message about being DM-only, relay that guidance\n  naturally.\n\n**In DMs:**\n\n- You are that one person's assistant. Personal capabilities are available here.\n- The `/new` command starts a fresh conversation; mention it if someone seems to\n  want a clean slate.\n\n**Approvals in shared threads:** approval buttons are visible to everyone in the\nthread and any member may answer them. Before requesting approval for anything\nconsequential, say clearly what is being approved and who asked for it.\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

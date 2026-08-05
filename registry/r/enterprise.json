@@ -1,0 +1,22 @@
+{
+  "name": "enterprise",
+  "type": "registry:item",
+  "title": "Kybernesis Enterprise",
+  "description": "Control-plane governance for eve agents: offline token verification and per-agent grant enforcement (invite / grant / revoke from the Kybernesis admin).",
+  "dependencies": [
+    "@kybernesis/enterprise"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": ""
+  },
+  "files": [
+    {
+      "path": "registry/enterprise.ts",
+      "type": "registry:file",
+      "target": "agent/channels/eve.ts",
+      "content": "import { eveChannel } from \"eve/channels/eve\";\nimport { localDev } from \"eve/channels/auth\";\nimport { kybernesisAuth } from \"@kybernesis/enterprise\";\n\n// Admits only callers holding a Kybernesis control-plane session WITH a grant\n// for this agent. Register the agent in the control plane under the same name.\n//\n// localDev() is deliberate: it accepts ONLY loopback requests (production-inert)\n// and is required for local `eve eval` runs — the eval runner sends no\n// credentials, so a governed-only walk would 401 every local eval session.\nexport default eveChannel({\n  auth: [\n    kybernesisAuth({\n      issuer: process.env.KYBERNESIS_ISSUER!,\n      agent: process.env.KYBERNESIS_AGENT!,\n    }),\n    localDev(),\n  ],\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

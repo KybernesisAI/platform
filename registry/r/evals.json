@@ -1,0 +1,24 @@
+{
+  "name": "evals",
+  "type": "registry:item",
+  "title": "Kybernesis Evals",
+  "description": "The baseline QA suite for Kybernesis agents: memory, routing, and smoke behaviors with every production hardening lesson as a default.",
+  "dependencies": [
+    "@kybernesis/evals"
+  ],
+  "files": [
+    {
+      "path": "registry/evals.ts",
+      "type": "registry:file",
+      "target": "evals/kybernesis.eval.ts",
+      "content": "import { kybernesisBaseline } from \"@kybernesis/evals\";\n\n// The Kybernesis baseline QA suite. Configure for this agent, then run with\n// `npm run eval` locally and `eve eval --strict --junit .eve/junit.xml` in CI.\n//\n// Add a hermetic-workspace script to package.json (never point evals at a real\n// brain — create a dedicated `<client>-eval` Arcana workspace + key):\n//   \"eval\": \"ARCANA_COMPANY_WORKSPACE=<client>-eval ARCANA_DM_WORKSPACE=<client>-eval eve eval\"\nexport default kybernesisBaseline({\n  // agentDisplayName: \"Atlas\",\n  // routing: [{ subagent: \"finance\" }, { subagent: \"marketing\" }, { subagent: \"engineering\" }],\n});\n"
+    },
+    {
+      "path": "registry/evals-config.ts",
+      "type": "registry:file",
+      "target": "evals/evals.config.ts",
+      "content": "import { defineEvalConfig } from \"eve/evals\";\n\nexport default defineEvalConfig({\n  // Judge model for soft LLM-graded assertions — never the agent under test.\n  judge: { model: \"anthropic/claude-haiku-4.5\" },\n  // Real model + real Arcana per turn: generous timeout, gentle concurrency.\n  timeoutMs: 180_000,\n  maxConcurrency: 2,\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

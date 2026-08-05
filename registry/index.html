@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kybernesis eve registry</title>
+<body style="font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.5rem;line-height:1.65;color:#111">
+  <h1 style="letter-spacing:-0.02em">Kybernesis eve registry</h1>
+  <p>An integration registry for <a href="https://eve.dev">eve</a> agents, in the standard <a href="https://ui.shadcn.com/docs/registry">shadcn registry format</a>.</p>
+  <h2 style="font-size:1.1rem;margin-top:2rem">Add the registry (once per project)</h2>
+  <pre style="background:#f5f5f5;padding:1rem;border-radius:8px;overflow-x:auto">eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json</pre>
+  <h2 style="font-size:1.1rem;margin-top:2rem">Items</h2>
+
+  <p style="margin-bottom:4px"><strong>arcana</strong> — durable long-term memory via <a href="https://kybernesis.ai/arcana">Kybernesis Arcana</a>: MCP connection, recall/remember/brain-note skills, and recall-first instructions. Apache-2.0.</p>
+  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/arcana</pre>
+
+  <p style="margin-bottom:4px"><strong>enterprise</strong> — control-plane governance for eve agents: offline token verification and per-agent grant enforcement (invite / grant / revoke from the Kybernesis admin). Apache-2.0.</p>
+  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/enterprise</pre>
+
+  <p style="margin-bottom:4px"><strong>multiplayer</strong> — shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions. Apache-2.0.</p>
+  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/multiplayer</pre>
+
+  <p style="margin-bottom:4px"><strong>evals</strong> — the baseline QA suite: memory, routing, and smoke behaviors with every production hardening lesson as a default. Apache-2.0.</p>
+  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/evals</pre>
+
+  <p style="margin-top:2rem;font-size:0.9rem;color:#555">
+    <a href="https://github.com/KybernesisAI/eve-registry">Registry source</a> ·
+    npm: <a href="https://www.npmjs.com/package/@kybernesis/arcana">arcana</a> ·
+    <a href="https://www.npmjs.com/package/@kybernesis/enterprise">enterprise</a> ·
+    <a href="https://www.npmjs.com/package/@kybernesis/multiplayer">multiplayer</a> ·
+    <a href="https://www.npmjs.com/package/@kybernesis/evals">evals</a>
+  </p>
+</body>
+</html>

@@ -1,0 +1,62 @@
+{
+  "name": "@kybernesis/arcana",
+  "version": "0.1.1",
+  "description": "Kybernesis Arcana long-term memory for eve agents: MCP connection, memory skills, and recall-first instructions. Mount once per brain.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "eve": {
+    "extension": {
+      "source": "./extension",
+      "dist": "./dist/extension"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json",
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "eve extension build",
+    "prepare": "eve extension build",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "eve": "0.29.5",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "eve": "*"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "homepage": "https://arcana.kybernesis.ai",
+  "keywords": [
+    "eve",
+    "eve-extension",
+    "arcana",
+    "kybernesis",
+    "memory",
+    "agent",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/arcana"
+  }
+}

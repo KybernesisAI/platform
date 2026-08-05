@@ -1,0 +1,93 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "kybernesis",
+  "homepage": "https://kybernesis.ai",
+  "items": [
+    {
+      "name": "arcana",
+      "type": "registry:item",
+      "title": "Kybernesis Arcana",
+      "description": "Durable long-term memory for eve agents: Arcana MCP connection, recall/remember/brain-note skills, and recall-first instructions.",
+      "dependencies": [
+        "@kybernesis/arcana"
+      ],
+      "envVars": {
+        "ARCANA_API_KEY": "",
+        "ARCANA_WORKSPACE": ""
+      },
+      "files": [
+        {
+          "path": "registry/arcana.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/arcana.ts"
+        }
+      ]
+    },
+    {
+      "name": "enterprise",
+      "type": "registry:item",
+      "title": "Kybernesis Enterprise",
+      "description": "Control-plane governance for eve agents: offline token verification and per-agent grant enforcement (invite / grant / revoke from the Kybernesis admin).",
+      "dependencies": [
+        "@kybernesis/enterprise"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": ""
+      },
+      "files": [
+        {
+          "path": "registry/enterprise.ts",
+          "type": "registry:file",
+          "target": "agent/channels/eve.ts"
+        }
+      ]
+    },
+    {
+      "name": "multiplayer",
+      "type": "registry:item",
+      "title": "Kybernesis Multiplayer",
+      "description": "Shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions.",
+      "dependencies": [
+        "@kybernesis/multiplayer",
+        "@vercel/connect"
+      ],
+      "envVars": {
+        "SLACK_CONNECTOR_UID": ""
+      },
+      "files": [
+        {
+          "path": "registry/multiplayer.ts",
+          "type": "registry:file",
+          "target": "agent/channels/slack.ts"
+        },
+        {
+          "path": "registry/multiplayer-instructions.md",
+          "type": "registry:file",
+          "target": "agent/instructions/multiplayer.md"
+        }
+      ]
+    },
+    {
+      "name": "evals",
+      "type": "registry:item",
+      "title": "Kybernesis Evals",
+      "description": "The baseline QA suite for Kybernesis agents: memory, routing, and smoke behaviors with every production hardening lesson as a default.",
+      "dependencies": [
+        "@kybernesis/evals"
+      ],
+      "files": [
+        {
+          "path": "registry/evals.ts",
+          "type": "registry:file",
+          "target": "evals/kybernesis.eval.ts"
+        },
+        {
+          "path": "registry/evals-config.ts",
+          "type": "registry:file",
+          "target": "evals/evals.config.ts"
+        }
+      ]
+    }
+  ]
+}
