@@ -14,9 +14,22 @@ buffer. The project you started yesterday is still there.
 2. **Check** — `npm run typecheck` (or the project's equivalent) and the test
    suite. A type error or failing test means the loop restarts; never proceed
    past red.
-3. **Run** — start the dev server as a long-lived process and probe it:
-   the server keeps running while you work; `curl -s http://localhost:3000`
-   confirms it responds before you look at it.
+3. **Run** — start the dev server DETACHED, never in the foreground. A
+   foreground server blocks the tool call forever and hangs your whole turn:
+
+   ```bash
+   # WRONG — hangs the turn:
+   npm run dev
+
+   # RIGHT — detach, log, verify:
+   nohup npm run dev > /tmp/dev.log 2>&1 &
+   sleep 5
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:3000
+   ```
+
+   Poll curl until it returns 200 before you look at anything. If the
+   server dies, read `/tmp/dev.log` for the crash reason FIRST — never
+   restart blind.
 4. **Look** — call the screenshot tool with `url: "http://localhost:3000/..."`
    and **examine the pixels**. Does it match the intent? Layout broken? Text
    overflowing? Wrong colors? If yes → back to step 1. Check the key
@@ -35,7 +48,8 @@ buffer. The project you started yesterday is still there.
 ## Sandbox habits
 
 - Long-running processes (dev servers, watchers) stay alive across your tool
-  calls within a turn; kill and restart them when config changes.
+  calls within a turn **only when started detached** (nohup + background +
+  output redirected to a file); kill and restart them when config changes.
 - Screenshots are saved under `/workspace/.screenshots/` — re-take rather than
   reference old ones (older image parts are dropped when history compacts).
 - Install project deps inside the project dir, not globally; the workshop
