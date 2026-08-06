@@ -25,7 +25,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | `packages/enterprise` | Control-plane governance (`kybernesisAuth`) | plain TS library (route auth can't ship in extensions) |
 | `packages/multiplayer` | Shared-thread Slack conversations (`multiplayerSlackChannel`) | plain TS library (channels can't ship in extensions) |
 | `packages/evals` | Baseline QA suites (array-export fan-out factories) | plain TS library |
-| `packages/create` | The `kyb` CLI (init/doctor/upgrade) — zero runtime deps, node builtins only | plain TS CLI (bin: `kyb`; pins eve@0.29.5 for scaffolds) |
+| `packages/create` | The `kyb` CLI (init/doctor/upgrade) — zero runtime deps, node builtins only | plain TS CLI (bin: `kyb`; pins the certified eve version for scaffolds (see EVE_VERSION in packages/create/src/util.ts)) |
 | `fixtures/governed-ref` | Minimal governed agent; enterprise E2E harness | private fixture, never published |
 | `registry/` | Source of https://registry.kybernesis.ai | static shadcn-format registry |
 
@@ -42,8 +42,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
   registry-written files instead.
 - Every package: Apache-2.0 `LICENSE` + `NOTICE`, `files: ["dist","NOTICE"]`,
   `eve` as wildcard **peerDependency** with the pinned dev version in
-  `devDependencies` (currently 0.29.5 — upgrades are deliberate, eval-gated;
-  eve 0.30.x exists).
+  `devDependencies` (currently 0.30.8, certified 2026-08-06 via the full kyber eval suite — upgrades are deliberate, eval-gated).
 - Tool-name matching is **by remote-name suffix**, never exact qualified names
   (mount namespace changes the prefix). See `packages/evals/src/tools.ts`.
 - Eval fixture rules (encoded in `packages/evals`, explained in its README):

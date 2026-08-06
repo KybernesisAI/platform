@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
-export const EVE_VERSION = "0.29.5";
+export const EVE_VERSION = "0.30.8";
 export const REGISTRY_URL = "https://registry.kybernesis.ai/r/{name}.json";
 export const DEFAULT_ISSUER = "https://agent.kybernesis.ai";
 
