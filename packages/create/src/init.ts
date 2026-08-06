@@ -26,8 +26,14 @@ import {
 } from "./templates.js";
 
 const ITEMS = ["enterprise", "arcana", "multiplayer", "evals"] as const;
+// Official eve-registry limbs installed alongside the engineer layer.
+const ENGINEER_OFFICIAL_ITEMS = ["extension/agent-browser", "extension/github-tools", "connection/vercel"] as const;
 
-export async function init(rawName: string | undefined): Promise<void> {
+export async function init(
+  rawName: string | undefined,
+  options?: { engineer?: boolean },
+): Promise<void> {
+  const engineer = options?.engineer === true;
   const name = slug(rawName ?? (await ask("Agent name (kebab-case)?", "acme-agent")));
   if (!name) {
     console.error("An agent name is required.");
@@ -58,6 +64,16 @@ export async function init(rawName: string | undefined): Promise<void> {
   run("npx", ["eve", "registry", "add", `@kybernesis=${REGISTRY_URL}`], { cwd: dir });
   for (const item of ITEMS) {
     run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir });
+  }
+  if (engineer) {
+    console.log(bold("\n2b   Engineer layer: workshop sandbox + vision dev loop …"));
+    run("npx", ["eve", "add", "@kybernesis/engineer", "--overwrite"], { cwd: dir });
+    for (const item of ENGINEER_OFFICIAL_ITEMS) {
+      // Official items may carry their own interactive setup; a failure here
+      // shouldn't kill the scaffold — the FDE can re-run `eve add <item>`.
+      const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
+      if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
+    }
   }
 
   console.log(bold("\n3/6  Writing agent identity, memory mount, and eval wiring …"));
@@ -101,7 +117,15 @@ export async function init(rawName: string | undefined): Promise<void> {
   console.log(tsOk && infoOk ? green("  ✓ typecheck + discovery clean") : yellow("  ! verify manually: npm run typecheck && npx eve info"));
 
   console.log(`
-${green("✓")} ${bold(name)} scaffolded: governed (enterprise) · remembering (arcana) · multiplayer (slack) · self-testing (evals)${depts.length ? ` · ${depts.length} dept subagent(s)` : ""}
+${green("✓")} ${bold(name)} scaffolded: governed (enterprise) · remembering (arcana) · multiplayer (slack) · self-testing (evals)${engineer ? " · engineer (workshop + vision loop)" : ""}${depts.length ? ` · ${depts.length} dept subagent(s)` : ""}${engineer ? `
+
+${bold("Engineer notes:")}
+  · The workshop sandbox (agent/sandbox/sandbox.ts) bakes Playwright into the
+    template on FIRST use — expect the first screenshot turn to take minutes,
+    warm turns ~seconds. Deployed sessions run under a domain allowlist; extend
+    it deliberately in that file when a project needs another host.
+  · agent-browser / github-tools / vercel connection may need their Connect
+    setup flows — run their printed setup commands if tools 401.` : ""}
 
 ${bold("Human steps (in order) — the FDE playbook covers each in detail:")}
   1. Arcana: create workspaces (${name}-company, ${name}-eval${depts.map((d) => `, ${name}-${d}`).join("")}) + scoped kb_ keys; fill .env.local from .env.example

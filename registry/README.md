@@ -61,6 +61,18 @@ eve add @kybernesis/evals
 
 Package: [`@kybernesis/evals`](https://www.npmjs.com/package/@kybernesis/evals)
 
+### engineer — the vision-verified dev loop
+
+Workshop sandbox (Playwright in the template), a screenshot tool the model can
+see, and build/ship skills. Writes `agent/extensions/engineer.ts` and
+`agent/sandbox/sandbox.ts`.
+
+```bash
+eve add @kybernesis/engineer
+```
+
+Package: [`@kybernesis/engineer`](https://www.npmjs.com/package/@kybernesis/engineer)
+
 ## The full install (a governed, remembering, multiplayer, self-testing agent)
 
 ```bash
@@ -69,6 +81,7 @@ eve add @kybernesis/enterprise
 eve add @kybernesis/arcana
 eve add @kybernesis/multiplayer
 eve add @kybernesis/evals
+eve add @kybernesis/engineer   # optional: the engineer layer
 ```
 
 All packages are Apache-2.0 on npm. Registry payloads live under `r/`; item

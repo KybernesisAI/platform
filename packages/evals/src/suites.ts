@@ -35,6 +35,8 @@ export interface BaselineConfig {
   routing?: Array<{ subagent: string; prompt?: string }>;
   /** How long to let Arcana index a fresh fact before cross-session recall (default 25s). */
   indexingWaitMs?: number;
+  /** Include the engineer suite (requires @kybernesis/engineer + the workshop sandbox). */
+  engineer?: boolean;
 }
 
 const DEFAULT_ROUTING_PROMPTS: Record<string, string> = {
@@ -196,11 +198,44 @@ export function routingSuite(entries: Array<{ subagent: string; prompt?: string 
   });
 }
 
-/** The full baseline: smoke + memory + routing, per config. */
+/**
+ * Engineer behaviors: the agent visually verifies rendered work through the
+ * screenshot tool (requires @kybernesis/engineer + the workshop sandbox; the
+ * FIRST run may build the sandbox template — hence the long budget).
+ */
+export function engineerSuite(): EveEval[] {
+  return [
+    defineEval({
+      description:
+        "Engineer: renders a page and VISUALLY verifies it via the screenshot tool before describing it.",
+      timeoutMs: 600_000,
+      async test(t) {
+        await t.send(
+          "Use your screenshot tool to render a test page: a large orange circle centered on a dark navy background with the caption 'WORKSHOP OK' in white below it. Then describe precisely what the screenshot shows.",
+        );
+        t.succeeded();
+        t.eventsSatisfy("screenshot tool completed", (events) =>
+          events.some((event) => {
+            const name = resultToolName(event);
+            return name !== null && name.endsWith("screenshot");
+          }),
+        );
+        t.judge.autoevals
+          .closedQA(
+            "describes an orange circle on a dark background and mentions the caption text 'WORKSHOP OK'",
+          )
+          .atLeast(0.6);
+      },
+    }),
+  ];
+}
+
+/** The full baseline: smoke + memory + routing (+ engineer when enabled), per config. */
 export function kybernesisBaseline(config?: BaselineConfig): EveEval[] {
   return [
     ...smokeSuite(config),
     ...(config?.memory === false ? [] : memorySuite(config)),
     ...routingSuite(config?.routing ?? []),
+    ...(config?.engineer === true ? engineerSuite() : []),
   ];
 }

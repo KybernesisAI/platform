@@ -17,7 +17,7 @@ const [, , command, ...rest] = process.argv;
 
 switch (command) {
   case "init":
-    await init(rest.find((a) => !a.startsWith("-")));
+    await init(rest.find((a) => !a.startsWith("-")), { engineer: rest.includes("--engineer") });
     break;
   case "doctor":
     await doctor();
@@ -26,20 +26,19 @@ switch (command) {
     await upgrade(rest.includes("--skip-eval"));
     break;
   case undefined:
-    // `npm create @kybernesis <name>` lands here with the name in rest? No —
-    // npm create passes extra args as argv; treat a bare arg as init's name.
-    await init(undefined);
+    await init(undefined, { engineer: false });
     break;
   default:
     if (!command.startsWith("-")) {
       // `npm create @kybernesis acme-agent` → argv[2] is the name.
-      await init(command);
+      await init(command, { engineer: rest.includes("--engineer") });
       break;
     }
     console.log(`
 ${bold("kyb")} — Kybernesis agent scaffolder & FDE toolkit
 
   ${bold("kyb init [name]")}     scaffold a full Kybernesis eve agent
+      --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb upgrade")}         bump @kybernesis/* packages, gated on evals
       --skip-eval       ${dim("skip the eval gate")}

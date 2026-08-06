@@ -25,6 +25,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | `packages/enterprise` | Control-plane governance (`kybernesisAuth`) | plain TS library (route auth can't ship in extensions) |
 | `packages/multiplayer` | Shared-thread Slack conversations (`multiplayerSlackChannel`) | plain TS library (channels can't ship in extensions) |
 | `packages/evals` | Baseline QA suites (array-export fan-out factories) | plain TS library |
+| `packages/engineer` | Vision-verified dev loop (screenshot tool + trade-school skills) | **eve extension**; workshop sandbox ships via registry item (sandboxes are consumer-authored) |
 | `packages/create` | The `kyb` CLI (init/doctor/upgrade) — zero runtime deps, node builtins only | plain TS CLI (bin: `kyb`; pins the certified eve version for scaffolds (see EVE_VERSION in packages/create/src/util.ts)) |
 | `fixtures/governed-ref` | Minimal governed agent; enterprise E2E harness | private fixture, never published |
 | `registry/` | Source of https://registry.kybernesis.ai | static shadcn-format registry |

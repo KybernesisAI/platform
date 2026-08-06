@@ -88,6 +88,27 @@
           "target": "evals/evals.config.ts"
         }
       ]
+    },
+    {
+      "name": "engineer",
+      "type": "registry:item",
+      "title": "Kybernesis Engineer",
+      "description": "A vision-verified dev loop for eve agents: workshop sandbox (Playwright baked into the template), a screenshot tool the model can SEE, and trade-school skills for building, verifying, and shipping software.",
+      "dependencies": [
+        "@kybernesis/engineer"
+      ],
+      "files": [
+        {
+          "path": "registry/engineer.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/engineer.ts"
+        },
+        {
+          "path": "registry/engineer-sandbox.ts",
+          "type": "registry:file",
+          "target": "agent/sandbox/sandbox.ts"
+        }
+      ]
     }
   ]
 }
