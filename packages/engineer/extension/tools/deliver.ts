@@ -69,7 +69,8 @@ export default defineTool({
       filename: name,
       byteSize: bytes.byteLength,
       note:
-        "Share this URL with the user — it opens in a browser (text renders inline) and can be downloaded and kept. It is public to anyone with the link.",
+        "Share this URL with the user — it opens in a browser (text renders inline) and can be downloaded and kept. It is public to anyone with the link. " +
+        "IMPORTANT: post the URL as PLAIN TEXT on its own line. Never wrap it in bold, italics, backticks, angle-bracket labels, or trailing punctuation — formatting characters get glued onto the URL in chat clients and BREAK the link.",
     };
   },
 });
