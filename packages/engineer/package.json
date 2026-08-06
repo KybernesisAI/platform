@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/engineer",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Engineer capabilities for eve agents: a vision-verified dev loop (in-sandbox screenshots the model can see), trade-school skills for building and shipping software, and disciplined git/deploy behavior.",
   "license": "Apache-2.0",
   "type": "module",
@@ -46,7 +46,8 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@vercel/blob": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "24.x",
