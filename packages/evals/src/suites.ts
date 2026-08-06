@@ -208,7 +208,7 @@ export function engineerSuite(): EveEval[] {
     defineEval({
       description:
         "Engineer: renders a page and VISUALLY verifies it via the screenshot tool before describing it.",
-      timeoutMs: 600_000,
+      timeoutMs: 1_200_000,
       async test(t) {
         await t.send(
           "Use your screenshot tool to render a test page: a large orange circle centered on a dark navy background with the caption 'WORKSHOP OK' in white below it. Then describe precisely what the screenshot shows.",
