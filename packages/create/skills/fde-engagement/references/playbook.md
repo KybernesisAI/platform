@@ -1009,6 +1009,36 @@ result to a configured Slack user. Note that DMing a user from a schedule needs 
 `im:write` scope on the Slack connector — add it during Phase 5 or the first run fails
 silently at the last step.
 
+### 4.6b Observability — evlog → PostHog (the Operate-phase deliverable)
+
+One hook file gives the agent per-turn structured telemetry — who talked,
+which tools/subagents fired, timings, token usage, outcome — with message
+text redacted and tool-failure turns always kept:
+
+```ts
+// agent/hooks/evlog.ts
+import { defineEvlogHook } from "evlog/eve";
+import { createPostHogDrain } from "evlog/posthog";
+
+export default defineEvlogHook({
+  init: { env: { service: "acme-atlas" } },
+  // mode "events" is REQUIRED for dashboards: the default "logs" mode
+  // ships OTLP to the separate PostHog Logs product — invisible to
+  // Activity/insights, and it looks exactly like "no events arriving".
+  drain: createPostHogDrain({ mode: "events" }),
+  redactMessage: true,
+});
+```
+
+Env: `POSTHOG_API_KEY` = the **project** key (`phc_…`, ingestion-only — a
+`phx_…` personal key is account-privileged and wrong here). The default host
+is `https://us.i.posthog.com`; EU-hosted projects need
+`POSTHOG_HOST=https://eu.i.posthog.com` or events silently vanish. To verify
+region + key in one shot, curl a test event at each region's `/batch/` and
+see which appears in Activity. Turns then land as `evlog_wide_event` — build
+the starter insights on its properties: turns/day by surface, tool failure
+rate, delegation mix, p50/p95 duration.
+
 ### 4.7 Environment variables
 
 Two places must agree: `.env.local` for local development, and the Vercel project's
