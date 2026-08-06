@@ -24,6 +24,7 @@ import {
   subagentArcanaTs,
   subagentInstructionsMd,
 } from "./templates.js";
+import { suiteDir } from "./skills.js";
 
 const ITEMS = ["enterprise", "arcana", "multiplayer", "evals"] as const;
 // Official eve-registry limbs installed alongside the engineer layer.
@@ -74,6 +75,13 @@ export async function init(
       const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
       if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
     }
+  }
+
+  console.log(bold("\n2c   Seeding the FDE Claude Code skill suite (.claude/skills) …"));
+  try {
+    cpSync(suiteDir(), join(dir, ".claude/skills"), { recursive: true });
+  } catch {
+    console.log(yellow("  ! skill suite not found — run kyb skills inside the repo later"));
   }
 
   console.log(bold("\n3/6  Writing agent identity, memory mount, and eval wiring …"));
