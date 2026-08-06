@@ -10,11 +10,17 @@ human owns it.
 ## The pipeline
 
 1. **Green first.** Full dev-loop definition of done (typecheck, tests,
-   visual QA at both viewports) before any deploy motion.
+   visual QA at both viewports) before any deploy motion. If that pass
+   already happened this session and the code has NOT changed since,
+   **do not re-verify** — and never restart a dev server just to re-check
+   before deploying; the platform builds from source anyway, and the
+   preview screenshot (step 3) is the verification that counts.
 2. **Push the branch** (git-discipline skill). If the project has Vercel's
    Git integration — the normal setup — the push itself builds a **preview
    deployment**; find its URL and status through the Vercel tools/connection
-   if the agent has them.
+   if the agent has them. With no git remote, a Vercel connection that
+   accepts a file tree works too: read the sources and deploy them
+   directly, target preview.
 3. **Verify the preview like you verified local**: screenshot the preview URL
    itself. Local-passes-preview-fails is a real failure class (env vars,
    build-time differences) — catch it here, not in production.
