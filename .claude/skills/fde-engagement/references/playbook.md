@@ -363,7 +363,11 @@ evals. Each step is testable on its own, and the order avoids the one real trap
 ### 4.0 Do the whole phase WITH Claude Code — this is the method, not a tip
 
 Open Claude Code in the agent repo and keep it open for all of Phase 4. The
-scaffold's `AGENTS.md` points it at the installed eve docs
+scaffold already carries the **FDE skill suite** in `.claude/skills/` (seeded
+by `kyb init`; refresh with `kyb skills`) — Claude loads the engagement flow,
+eve recipes, package gotchas, control-plane wiring, and eval discipline on
+demand, so it knows what Kybernesis is doing before you say a word. The
+scaffold's `AGENTS.md` additionally points it at the installed eve docs
 (`node_modules/eve/docs/` — the source of truth for the pinned version), so it
 authors against the real framework instead of guessing. The working rhythm:
 
