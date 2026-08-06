@@ -1,56 +1,58 @@
-import { defaultBackend, defineSandbox } from "eve/sandbox";
+import { defineSandbox } from "eve/sandbox";
+import { vercel } from "eve/sandbox/vercel";
 
 /**
  * The Kybernesis engineer workshop: a warm, safe cloud dev machine.
  *
  * - TEMPLATE bootstrap (runs once, inherited by every session): pnpm +
- *   Playwright + Chromium. First use takes minutes; warm sessions run the
- *   full render→screenshot→vision loop in seconds.
- * - Deployed (Vercel Sandbox) sessions run under a domain ALLOWLIST — an
- *   agent that installs arbitrary npm packages must not have open egress.
- *   Local dev (Docker backend) runs allow-all (Docker only supports
- *   allow-all/deny-all).
+ *   Playwright + Chromium. Prewarm runs at deploy time, so a broken
+ *   bootstrap fails the build loudly; warm sessions run the full
+ *   render→screenshot→vision loop in seconds.
+ * - Backend is PINNED to Vercel Sandbox — hosted sandboxes even from local
+ *   dev (uses the linked project's Vercel credentials; run `vercel link` +
+ *   `vercel env pull` first). No Docker anywhere: local evals exercise the
+ *   exact production backend and reuse the deploy-prewarmed template.
+ * - All sessions run under a domain ALLOWLIST — an agent that installs
+ *   arbitrary npm packages must not have open egress.
  * - A blocked domain fails loudly; extend the allowlist deliberately for
  *   what the client's projects genuinely need. Treat every addition as a
  *   security decision.
  */
 export default defineSandbox({
-  backend: defaultBackend({
-    vercel: {
-      resources: { vcpus: 4 },
-      networkPolicy: {
-        allow: [
-          // package installs
-          "registry.npmjs.org",
-          "*.npmjs.org",
-          // git + repo tarballs (credentials are brokered at the firewall)
-          "github.com",
-          "api.github.com",
-          "codeload.github.com",
-          "*.githubusercontent.com",
-          // playwright browser downloads (template bootstrap)
-          "cdn.playwright.dev",
-          "playwright.azureedge.net",
-          "playwright.download.prss.microsoft.com",
-          "storage.googleapis.com",
-          // apt for browser system deps (template bootstrap) — the Vercel
-          // Sandbox base image is Ubuntu; keep Debian mirrors for other bases
-          "archive.ubuntu.com",
-          "security.ubuntu.com",
-          "ports.ubuntu.com",
-          "*.ubuntu.com",
-          "deb.debian.org",
-          "security.debian.org",
-          "*.debian.org",
-          // model + deploy platform
-          "ai-gateway.vercel.sh",
-          "vercel.com",
-          "*.vercel.app",
-          // common webfont fetches during rendering
-          "fonts.googleapis.com",
-          "fonts.gstatic.com",
-        ],
-      },
+  backend: vercel({
+    resources: { vcpus: 4 },
+    networkPolicy: {
+      allow: [
+        // package installs
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        // git + repo tarballs (credentials are brokered at the firewall)
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "*.githubusercontent.com",
+        // playwright browser downloads (template bootstrap)
+        "cdn.playwright.dev",
+        "playwright.azureedge.net",
+        "playwright.download.prss.microsoft.com",
+        "storage.googleapis.com",
+        // apt for browser system deps (template bootstrap) — the Vercel
+        // Sandbox base image is Ubuntu; keep Debian mirrors for other bases
+        "archive.ubuntu.com",
+        "security.ubuntu.com",
+        "ports.ubuntu.com",
+        "*.ubuntu.com",
+        "deb.debian.org",
+        "security.debian.org",
+        "*.debian.org",
+        // model + deploy platform
+        "ai-gateway.vercel.sh",
+        "vercel.com",
+        "*.vercel.app",
+        // common webfont fetches during rendering
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+      ],
     },
   }),
   revalidationKey: () => "kybernesis-workshop-v5",

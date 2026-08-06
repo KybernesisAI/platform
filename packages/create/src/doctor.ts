@@ -94,6 +94,27 @@ export async function doctor(): Promise<void> {
   if (env.SLACK_CONNECTOR_UID) add("pass", `Slack connector uid: ${env.SLACK_CONNECTOR_UID}`, "verify trigger path /eve/v1/slack (vercel connect list)");
   else add("warn", "SLACK_CONNECTOR_UID not set", "vercel connect create slack --triggers");
 
+  // ── engineer layer (optional — checked only when installed) ────────────
+  const hasEngineer = Boolean(deps["@kybernesis/engineer"]) || existsSync(join(cwd, "agent/extensions/engineer.ts"));
+  if (hasEngineer) {
+    add("pass", `@kybernesis/engineer ${deps["@kybernesis/engineer"] ?? "(extension file present)"}`);
+    if (existsSync(join(cwd, "agent/sandbox/sandbox.ts"))) add("pass", "workshop sandbox file present");
+    else add("fail", "agent/sandbox/sandbox.ts missing", "eve add @kybernesis/engineer --overwrite writes it");
+    if (env.BLOB_READ_WRITE_TOKEN) add("pass", "file delivery configured (BLOB_READ_WRITE_TOKEN)");
+    else add("warn", "BLOB_READ_WRITE_TOKEN not set — deliver tool will fail", "vercel blob create-store <name>-deliverables --access public --yes");
+    const vercelConn = join(cwd, "agent/connections/vercel.ts");
+    if (existsSync(vercelConn)) {
+      const src = readFileSync(vercelConn, "utf8");
+      const uid = /connect\(\s*"([^"]+)"/.exec(src)?.[1];
+      if (uid && uid.includes("/")) add("pass", `vercel connection uses connector UID (${uid})`, "verify attached: vercel connect list");
+      else add("fail", `vercel connection uses "${uid ?? "?"}" — must be the connector UID`, 'e.g. connect("mcp.vercel.com/vercel")');
+    } else {
+      add("warn", "agent/connections/vercel.ts missing — no preview deploys/link-back", "eve add connection/vercel, then vercel connect create + attach");
+    }
+    if (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN) add("pass", "Vercel credentials for local hosted sandboxes");
+    else add("warn", "no VERCEL_OIDC_TOKEN — local sandbox/eval runs cannot reach Vercel Sandbox", "vercel link && vercel env pull");
+  }
+
   // ── eve discovery + local port ─────────────────────────────────────────
   const info = capture("npx", ["eve", "info"], cwd);
   if (info === null) add("fail", "eve info failed", "run npx eve info for details");
