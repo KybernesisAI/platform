@@ -32,7 +32,13 @@ export default defineSandbox({
           "cdn.playwright.dev",
           "playwright.azureedge.net",
           "playwright.download.prss.microsoft.com",
-          // apt for browser system deps (template bootstrap)
+          "storage.googleapis.com",
+          // apt for browser system deps (template bootstrap) — the Vercel
+          // Sandbox base image is Ubuntu; keep Debian mirrors for other bases
+          "archive.ubuntu.com",
+          "security.ubuntu.com",
+          "ports.ubuntu.com",
+          "*.ubuntu.com",
           "deb.debian.org",
           "security.debian.org",
           "*.debian.org",
@@ -47,9 +53,15 @@ export default defineSandbox({
       },
     },
   }),
-  revalidationKey: () => "kybernesis-workshop-v2",
+  revalidationKey: () => "kybernesis-workshop-v5",
   async bootstrap({ use }) {
     const sandbox = await use();
+    // The sandbox egress proxy carries HTTPS only; apt defaults to http://
+    // mirrors, so every index fetch silently fails. Rewrite to https first.
+    await sandbox.run({
+      command:
+        "find /etc/apt -type f \\( -name '*.list' -o -name '*.sources' \\) -exec sed -i 's|http://|https://|g' {} + && apt-get update",
+    });
     await sandbox.run({ command: "npm install -g pnpm" });
     // Explicit package.json: `npm init -y` derives the name from the directory
     // and npm rejects names starting with a dot (".shot").
