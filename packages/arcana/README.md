@@ -100,9 +100,11 @@ export default arcana({
 });
 ```
 
-> **Scoped-key caveat:** `resolveWorkspace` can only target workspaces the
-> configured `apiKey` can reach. With workspace-scoped keys, keep one mount
-> per workspace instead.
+> **Scoped-key caveat:** `resolveWorkspace` may only select workspaces the
+> configured `apiKey` can reach — with workspace-scoped keys, keep one mount
+> per workspace instead. And it must derive **only from verified session
+> context** (`ctx.session.auth` attributes stamped by route/channel auth),
+> never from model output or message text.
 
 ## Environment variables
 
@@ -137,10 +139,26 @@ Two rules that save hours:
 
 ## Subagents (departments / multiple brains)
 
-eve does **not** support extension mounts inside declared subagents
-(`agent/subagents/<id>/extensions/` is ignored with a discovery warning).
-Give a subagent its own brain with a plain connection file that mirrors this
-package's connection — one per subagent, each with its own workspace + key:
+Declared subagents mount extensions locally (eve ≥0.30): drop a mount file
+under `agent/subagents/<id>/extensions/` and only that subagent receives the
+connection, skills, and instructions — one brain per department, each with its
+own workspace-scoped key:
+
+```ts
+// agent/subagents/finance/extensions/arcana.ts
+import arcana from "@kybernesis/arcana";
+
+export default arcana({
+  apiKey: process.env.ARCANA_FINANCE_API_KEY ?? "",
+  workspace: "my-company-finance",
+});
+```
+
+The root agent receives nothing from a subagent mount (and vice versa) —
+subagents inherit nothing, so each department declares its own.
+
+Alternatively, a plain connection file works when you want per-subagent auth
+without the extension's skills/instructions:
 
 ```ts
 // agent/subagents/finance/connections/arcana.ts
@@ -161,16 +179,17 @@ export default defineMcpClientConnection({
 });
 ```
 
-Copy the three skills from `extension/skills/` into the subagent's `skills/`
-directory if the subagent should carry the playbooks too (subagents inherit
-nothing).
+With the plain-connection form, copy the three skills from `extension/skills/`
+into the subagent's `skills/` directory if the subagent should carry the
+playbooks too — the extension-mount form ships them automatically.
 
 ## Tool naming
 
 Qualified tool names compose **mount namespace → connection name → remote
-tool name**. Mounted as `agent/extensions/arcana.ts`, the connection is
-`arcana__memory` and tools surface as e.g. `arcana__memory__arcana_remember`.
-A plain subagent connection named `arcana` surfaces `arcana__arcana_remember`.
+tool name**. Mounted as an extension (`extensions/arcana.ts`, root or
+subagent), the connection is `arcana__memory` and tools surface as e.g.
+`arcana__memory__arcana_remember`. A plain connection named `arcana`
+surfaces `arcana__arcana_remember`.
 
 Therefore: in approval policies, hooks, and evals, **match by remote-name
 suffix** (`toolName.endsWith("arcana_remember")`), never by exact prefix —
