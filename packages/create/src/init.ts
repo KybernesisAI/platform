@@ -121,11 +121,21 @@ ${green("✓")} ${bold(name)} scaffolded: governed (enterprise) · remembering (
 
 ${bold("Engineer notes:")}
   · The workshop sandbox (agent/sandbox/sandbox.ts) bakes Playwright into the
-    template on FIRST use — expect the first screenshot turn to take minutes,
-    warm turns ~seconds. Deployed sessions run under a domain allowlist; extend
-    it deliberately in that file when a project needs another host.
-  · agent-browser / github-tools / vercel connection may need their Connect
-    setup flows — run their printed setup commands if tools 401.` : ""}
+    template at DEPLOY time — a broken bootstrap fails the Vercel build loudly.
+    Deployed sessions run under a domain allowlist; extend it deliberately in
+    that file when a project needs another host.
+  · Vercel connection (preview deploys + link-back), after \`vercel link\`:
+      vercel connect create mcp.vercel.com --name vercel
+      vercel connect attach mcp.vercel.com/vercel --yes
+    then set connect("mcp.vercel.com/vercel") — the UID, not the short name —
+    in agent/connections/vercel.ts. First tool use posts an OAuth link in the
+    thread (user-scoped); grant "All projects" so the agent can create new ones,
+    then narrow the grant in the dashboard once the project exists.
+  · File delivery (the deliver tool needs it):
+      vercel blob create-store ${name}-deliverables --access public --yes
+    links the store and injects BLOB_READ_WRITE_TOKEN automatically.
+  · agent-browser / github-tools may need their Connect setup flows — run
+    their printed setup commands if tools 401.` : ""}
 
 ${bold("Human steps (in order) — the FDE playbook covers each in detail:")}
   1. Arcana: create workspaces (${name}-company, ${name}-eval${depts.map((d) => `, ${name}-${d}`).join("")}) + scoped kb_ keys; fill .env.local from .env.example
