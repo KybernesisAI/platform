@@ -1039,6 +1039,14 @@ see which appears in Activity. Turns then land as `evlog_wide_event` — build
 the starter insights on its properties: turns/day by surface, tool failure
 rate, delegation mix, p50/p95 duration.
 
+**Person attribution (optional — a DISCLOSURE item, §2.5):** wide events carry no
+userId by default, so PostHog sees one anonymous actor named after the service. To
+attribute turns to the verified speaker, add a sibling hook that stamps the
+per-message-authenticated principal via evlog's `useLogger` — on `step.started`, not
+`turn.started`, so evlog's turn state exists regardless of hook ordering (crib
+`~/kyber/agent/hooks/attribution.ts`). Then a one-time $identify per person maps ids
+to names. Per-employee telemetry must be a deliberate, disclosed choice at a client.
+
 ### 4.7 Environment variables
 
 Two places must agree: `.env.local` for local development, and the Vercel project's
