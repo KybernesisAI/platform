@@ -56,9 +56,13 @@ export async function doctor(): Promise<void> {
   if (env.ARCANA_API_KEY && env.ARCANA_COMPANY_WORKSPACE)
     arcanaPairs.push({ key: env.ARCANA_API_KEY, ws: env.ARCANA_COMPANY_WORKSPACE, label: "company brain" });
   if (env.ARCANA_EVAL_API_KEY) {
-    const evalWs = /ARCANA_COMPANY_WORKSPACE=([a-z0-9-]+)-eval|([a-z0-9-]+)-eval/.exec(pkg.scripts?.eval ?? "");
-    const ws = evalWs?.[1] ? `${evalWs[1]}-eval` : evalWs?.[2] ? `${evalWs[2]}-eval` : null;
-    if (ws) arcanaPairs.push({ key: env.ARCANA_EVAL_API_KEY, ws, label: "eval workspace" });
+    // Match both `WORKSPACE=name-eval` and the shell-default form
+    // `WORKSPACE=${ARCANA_EVAL_WORKSPACE:-name-eval}`.
+    const script = pkg.scripts?.eval ?? "";
+    const evalWs =
+      /=\$\{[A-Z0-9_]+:-([a-z0-9][a-z0-9-]*-eval)\}/.exec(script) ??
+      /=([a-z0-9][a-z0-9-]*-eval)\b/.exec(script);
+    if (evalWs?.[1]) arcanaPairs.push({ key: env.ARCANA_EVAL_API_KEY, ws: evalWs[1], label: "eval workspace" });
   }
   for (const [k, v] of Object.entries(env)) {
     const m = /^ARCANA_([A-Z0-9_]+)_API_KEY$/.exec(k);
