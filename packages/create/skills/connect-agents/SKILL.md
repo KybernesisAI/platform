@@ -18,7 +18,11 @@ able to *initiate*.
 2. **Vercel identities** of both projects: team slug + project name as shown in
    `npx vercel ls <project>` (slugs, not `team_…`/`prj_…` IDs).
 3. **Stable production URL** of the callee: `npx vercel inspect <latest-prod-url>`
-   → Aliases → prefer the `<project>-<team>.vercel.app` form (survives redeploys).
+   → Aliases — then **verify the alias is OPEN before wiring it**:
+   `curl -s -o /dev/null -w "%{http_code}" <url>/eve/v1/health` must return
+   **200**. The `<project>-<team>.vercel.app` aliases commonly sit behind
+   Vercel SSO deployment protection (302 → vercel.com/sso-api) and CANNOT
+   receive dispatches; the shorter production alias is usually the open one.
 4. Both repos need `@kybernesis/dispatch` installed (`npm i @kybernesis/dispatch`).
 
 ## Caller side — one file
