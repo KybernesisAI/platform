@@ -904,6 +904,21 @@ Client-conversation rules of thumb:
   product conversation — purpose-scoped grants, §2.5 disclosures. Don't wire
   one as if it were internal.
 
+**Governed mode (dispatch ≥0.2.1 + enterprise ≥0.2.0 + the client's control
+plane) — the preferred form.** Edges become GRANTS in the admin instead of
+code: register both agents (/agents, OPEN production alias, health 200), grant
+the edge on the CALLEE's panel (caller + purpose + optional expiry), mint each
+agent's credential (shown once) into KYBERNESIS_AGENT_CREDENTIAL on its
+deployment. Code shrinks to remotePeer({ callee: "<EXACT registered name —
+case-sensitive>", governed: { issuer }, envVar, fallbackUrl }) and
+dispatchChannel({ governed: { issuer, agent } }). Outbound auth is a 300 s A2A
+token minted per edge; the callee URL comes from the registry (discovery), env
+var still wins. THE DEMO: revoke the edge in the admin → the caller is refused
+(edge_not_granted) within 5 minutes, no redeploy; re-grant → restored. Run it
+for the client — it's the whole governance story in one minute. Full lifecycle
+proven live 2026-08-07 (kyber ↔ eve-gtm). Budget note: the deployed agent and
+local eval runs share the project's AI Gateway budget — size it for both.
+
 ### 4.4 Author the agent's identity and instructions
 
 How instructions work in eve (30 seconds of mechanics): a flat
