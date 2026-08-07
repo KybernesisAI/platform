@@ -866,6 +866,43 @@ diff before running the agent**, same as any dependency. For client work,
 prefer authoring the client's own procedures; pull from skills.sh for generic
 craft (framework best practices, review checklists) after review.
 
+### 4.3f Install `@kybernesis/dispatch` (optional — when the client runs MORE THAN ONE agent)
+
+When the client has (or grows into) a second deployed agent — an ops agent
+next to the company assistant, a specialist per business unit — they will ask
+for the agents to talk to each other. Dispatch is the governed way: one
+declared **edge** per direction, human identity carried across the hop.
+
+The concept in one breath: the caller mounts the peer as a remote subagent
+(`remotePeer` under `agent/subagents/` — eve's `defineRemoteAgent` underneath,
+durable park→callback dispatch, so a reply comes back on the SAME edge); the
+receiver authors `agent/channels/eve.ts` with `dispatchChannel({ trustedPeers })`,
+which feeds one peer list into BOTH the OIDC subjects allowlist and
+`trustedForwarders`. Forwarding is on by default: the receiving agent runs as
+the human who asked, so Arcana scoping, per-user connections, and PostHog
+attribution compose across the hop unchanged (`eve:forwarded-by` records the
+edge for audit).
+
+**Don't hand-wire it — use the `connect-agents` Claude Code skill** (in the
+seeded `.claude/skills/`): tell Claude "connect <agent A> to <agent B>" and it
+reads both repos, writes the edge with a routing description derived from the
+callee's REAL capabilities, sets the URL env var, and walks the deploy+verify
+steps. `kyb doctor` then checks the edges (env var set, no `() => true`
+trust, forwardPrincipal present).
+
+Client-conversation rules of thumb:
+
+- One edge = ask-and-answer in one direction. Mirror-image edge only if the
+  other agent should also INITIATE. Quote them separately.
+- **Both ends must run compatible eve versions** — an old receiver silently
+  drops principal forwarding and runs the session as the calling app's
+  service identity. Upgrade edges as a unit (`kyb upgrade` both repos).
+- Peers are pinned to production deployments of named Vercel projects.
+  Previews never get trust implicitly. The client's Vercel team is still the
+  outer boundary, same as §4.3b.
+- Cross-ORG edges (client agent ↔ another company's agent) are a different
+  product conversation — purpose-scoped grants, §2.5 disclosures. Don't wire
+  one as if it were internal.
 
 ### 4.4 Author the agent's identity and instructions
 

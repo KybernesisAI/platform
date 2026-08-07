@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
@@ -113,6 +113,46 @@ export async function doctor(): Promise<void> {
     }
     if (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN) add("pass", "Vercel credentials for local hosted sandboxes");
     else add("warn", "no VERCEL_OIDC_TOKEN — local sandbox/eval runs cannot reach Vercel Sandbox", "vercel link && vercel env pull");
+  }
+
+  // ── dispatch edges (agent-to-agent — checked only when present) ────────
+  const subagentsDir = join(cwd, "agent/subagents");
+  const edgeFiles: string[] = [];
+  if (existsSync(subagentsDir)) {
+    for (const entry of readdirSync(subagentsDir)) {
+      const flat = join(subagentsDir, entry);
+      const nested = join(subagentsDir, entry, "agent.ts");
+      const path = entry.endsWith(".ts") ? flat : existsSync(nested) ? nested : null;
+      if (!path) continue;
+      const src = readFileSync(path, "utf8");
+      if (src.includes("remotePeer") || src.includes("defineRemoteAgent")) edgeFiles.push(path);
+    }
+  }
+  const eveChannelPath = join(cwd, "agent/channels/eve.ts");
+  const eveChannelSrc = existsSync(eveChannelPath) ? readFileSync(eveChannelPath, "utf8") : null;
+  const hasDispatch = Boolean(deps["@kybernesis/dispatch"]) || edgeFiles.length > 0 ||
+    Boolean(eveChannelSrc && (eveChannelSrc.includes("dispatchChannel") || eveChannelSrc.includes("trustedForwarders")));
+  if (hasDispatch) {
+    for (const path of edgeFiles) {
+      const src = readFileSync(path, "utf8");
+      const name = path.split("/agent/subagents/")[1];
+      const envVar = /envVar:\s*"([A-Z0-9_]+)"/.exec(src)?.[1] ?? /process\.env\.([A-Z0-9_]+)/.exec(src)?.[1];
+      if (!envVar) add("warn", `dispatch edge ${name}: no env-var URL found`, "use remotePeer({ envVar }) so the target is repointable");
+      else if (env[envVar]) add("pass", `dispatch edge ${name} → $${envVar} set locally`, "confirm it's also set on the Vercel project");
+      else add("warn", `dispatch edge ${name}: $${envVar} unset locally`, `printf "<peer-url>" | vercel env add ${envVar} production (and vercel env pull)`);
+      if (src.includes("defineRemoteAgent") && !src.includes("forwardPrincipal"))
+        add("warn", `dispatch edge ${name}: forwardPrincipal not set`, "peer will see this app's service identity, not the human — use remotePeer() for the safe defaults");
+    }
+    if (edgeFiles.length > 0)
+      add("warn", "dispatch: verify BOTH ends run compatible eve versions", "an old receiver silently drops forwardPrincipal (runs as service identity)");
+    if (eveChannelSrc) {
+      if (/trustedForwarders:\s*(\(\s*\)|\([^)]*\))\s*=>\s*true/.test(eveChannelSrc))
+        add("fail", "eve channel: trustedForwarders is () => true", "any authenticated caller can assert any identity — enumerate peers (dispatchChannel)");
+      else if (eveChannelSrc.includes("dispatchChannel") || eveChannelSrc.includes("trustedForwarders"))
+        add("pass", "eve channel accepts forwarded principals from enumerated peers only");
+    } else if (Boolean(deps["@kybernesis/dispatch"]) && edgeFiles.length === 0) {
+      add("warn", "@kybernesis/dispatch installed but no edges or dispatch channel found", "see the connect-agents skill");
+    }
   }
 
   // ── eve discovery + local port ─────────────────────────────────────────

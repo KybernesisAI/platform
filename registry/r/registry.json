@@ -90,6 +90,22 @@
       ]
     },
     {
+      "name": "dispatch",
+      "type": "registry:item",
+      "title": "Kybernesis Dispatch",
+      "description": "Agent-to-agent dispatch: declared remote-peer edges with principal forwarding on by default, and a receiver channel that only trusts enumerated peer deployments.",
+      "dependencies": [
+        "@kybernesis/dispatch"
+      ],
+      "files": [
+        {
+          "path": "registry/dispatch-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/eve.ts"
+        }
+      ]
+    },
+    {
       "name": "engineer",
       "type": "registry:item",
       "title": "Kybernesis Engineer",

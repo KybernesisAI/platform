@@ -7,6 +7,8 @@ const PACKAGES = [
   "@kybernesis/arcana",
   "@kybernesis/enterprise",
   "@kybernesis/multiplayer",
+  "@kybernesis/engineer",
+  "@kybernesis/dispatch",
   "@kybernesis/evals",
 ];
 
