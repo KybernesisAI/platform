@@ -36,8 +36,7 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
 
   return async (request) => {
     const token = extractBearerToken(request.headers.get("authorization"));
-    const bundle = request.headers.get("x-kybernesis-bundle");
-    if (!token || !bundle) return null;
+    if (!token) return null;
 
     if (!jwks) {
       try {
@@ -45,6 +44,40 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
       } catch {
         return null; // invalid issuer config → fall through to 401, never crash
       }
+    }
+
+    const bundle = request.headers.get("x-kybernesis-bundle");
+    if (!bundle) {
+      // AGENT branch: an A2A session token arrives ALONE (no bundle). Minted by
+      // POST /api/agent/session only for an active caller→callee edge, so a
+      // verified token that names THIS agent as callee IS the authorization —
+      // grant/status checks happened at the mint, ≤300s ago (the revocation SLA).
+      let a2a: JWTPayload;
+      try {
+        a2a = (await jwtVerify(token, jwks, { issuer: options.issuer })).payload;
+      } catch {
+        return null;
+      }
+      if (a2a.kind !== "a2a" || typeof a2a.caller !== "string") return null;
+      if (a2a.callee !== options.agent) {
+        throw new ForbiddenError({
+          code: "wrong_callee",
+          message: `This A2A token was minted for "${String(a2a.callee)}", not "${options.agent}".`,
+        });
+      }
+      return {
+        authenticator: "kybernesis",
+        issuer: options.issuer,
+        principalId: String(a2a.sub),
+        principalType: "agent",
+        subject: `agent:${String(a2a.org)}/${a2a.caller}`,
+        attributes: {
+          org: String(a2a.org),
+          callerAgent: a2a.caller,
+          kind: "a2a",
+          ...(typeof a2a.purpose === "string" ? { purpose: a2a.purpose } : {}),
+        },
+      };
     }
 
     let identity: JWTPayload;
