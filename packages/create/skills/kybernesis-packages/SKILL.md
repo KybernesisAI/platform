@@ -49,6 +49,17 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   versions (old receivers silently drop forwarding → service identity).
   Composes with enterprise via `extraAuth: [kybernesisAuth(...)]`. See the
   `connect-agents` skill for the end-to-end wiring flow.
+  **GOVERNED mode (≥0.2.1, proven live 2026-08-07):** `remotePeer({ callee:
+  "<registered-name>", governed: { issuer } })` + `dispatchChannel({ governed:
+  { issuer, agent } })` — edges granted in the control plane, outbound auth =
+  a 300s A2A token minted from POST /api/agent/session with the deployment's
+  `KYBERNESIS_AGENT_CREDENTIAL`, callee URL from the registry (envVar
+  overrides). Revoke in the admin → refused within the token TTL, no
+  redeploy. Names match EXACTLY (case-sensitive: "Kyber" ≠ "kyber").
+  Requires @kybernesis/enterprise ≥0.2.0 installed (optional peer, lazy).
+  0.2.1 lesson: eve resolves remote URLs at BOOT — url() must degrade
+  (env → discovery-if-credentialed → fallbackUrl), never throw on a missing
+  credential, or the whole agent (and its evals) fails to boot.
 - **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing,
   engineer? })` = smoke + 5 memory + routing per dept + optional vision-loop
   eval. Judge model ≠ model under test. Hermetic runs force all workspaces to

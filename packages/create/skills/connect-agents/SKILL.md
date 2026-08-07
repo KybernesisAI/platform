@@ -90,3 +90,30 @@ the peer by hand to BOTH the `vercelOidc({ subjects })` list and the
 - **Works locally, 401 in production** → caller's OIDC not accepted: the
   receiver's `trustedPeers` names the wrong environment (default is
   production-only) or wrong project.
+
+## Governed mode (control-plane edges — preferred when the client runs the admin)
+
+Instead of hand-enumerated peers, edges are GRANTED in the Kybernesis control
+plane and enforced with 300s A2A tokens. Full lifecycle proven live 2026-08-07
+(grant → dispatch → revoke → refused ≤5 min → re-grant → restored, no deploys).
+
+Setup, per agent (admin UI /agents):
+1. Register both agents as eve deployments — URL must be the OPEN production
+   alias (health 200; forms sanitize pasted punctuation as of this writing).
+2. Grant the edge on the CALLEE's panel ("Agent-to-agent edges" → allow calls
+   from <caller> + purpose; expiry optional — self-destructing edge).
+3. Mint each agent's credential (shown ONCE) → set as Sensitive env
+   `KYBERNESIS_AGENT_CREDENTIAL` on that agent's Vercel project.
+
+Then in code (dispatch ≥0.2.1 + enterprise ≥0.2.0 both installed):
+- caller: `remotePeer({ callee: "<EXACT registered name>", governed: { issuer },
+  envVar, fallbackUrl, description })` — envVar/fallbackUrl kept as overrides;
+  registry supplies the URL when the credential is present.
+- receiver: `dispatchChannel({ governed: { issuer, agent: "<own name>" } })`.
+
+Gotchas: names are case-sensitive ("Kyber" ≠ "kyber" — copy from the admin);
+credentials are one JWS line ~3 segments, an ES256 signature is 86 base64url
+chars — a truncated paste fails verification silently, so length-check it;
+scheduled/cron turns still forward no human (service identity at the peer);
+the deployed agent's model spend shares the project's AI Gateway budget with
+local eval runs — size the budget for BOTH or production goes model-dead.
