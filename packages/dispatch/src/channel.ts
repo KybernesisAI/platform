@@ -43,14 +43,23 @@ export function peerSubject(peer: PeerRef): string {
 export interface DispatchChannelOptions {
   /**
    * The deployments allowed to call this agent AND assert a forwarded
-   * end-user principal. Must be non-empty — an agent with no peers should
-   * simply not author a dispatch channel. There is deliberately no predicate
-   * form: enumerating concrete peers is the whole point.
+   * end-user principal. There is deliberately no predicate form: enumerating
+   * concrete peers is the whole point. Optional only when `governed` is set;
+   * an agent with neither should simply not author a dispatch channel.
    */
-  trustedPeers: readonly PeerRef[];
+  trustedPeers?: readonly PeerRef[];
+  /**
+   * GOVERNED mode: verify A2A session tokens minted by the Kybernesis control
+   * plane for granted caller→callee edges (requires @kybernesis/enterprise
+   * ≥0.2.0 installed). `agent` is THIS agent's registered name; a verified
+   * a2a caller may call and assert forwarded principals — no peer enumeration
+   * needed, and revoking the edge in the admin locks it out within the token
+   * TTL (default 300 s). Composes with `trustedPeers` (union).
+   */
+  governed?: { issuer: string; agent: string };
   /**
    * Extra `AuthFn`s appended to the walk (e.g. your web app's auth for a
-   * browser frontend). The Vercel OIDC verifier for peers always runs first.
+   * browser frontend). The peer verifiers always run first.
    */
   extraAuth?: Parameters<typeof eveChannel>[0] extends { auth?: infer A }
     ? A
@@ -82,20 +91,46 @@ export interface DispatchChannelOptions {
  *   via `placeholderAuth()` unless you pass real auth in `extraAuth`.
  */
 export function dispatchChannel(options: DispatchChannelOptions) {
-  const peers = options.trustedPeers;
-  if (!Array.isArray(peers) || peers.length === 0) {
+  const peers = options.trustedPeers ?? [];
+  const governed = options.governed;
+  if (peers.length === 0 && !governed) {
     throw new Error(
-      "dispatchChannel: trustedPeers must name at least one peer deployment — an agent with no peers should not author a dispatch channel.",
+      "dispatchChannel: name at least one trustedPeers entry or set governed — an agent with no peers should not author a dispatch channel.",
     );
   }
   const subjects = peers.map(peerSubject);
   const subjectSet = new Set(subjects);
   const extra = (options.extraAuth ?? []) as never[];
+
+  // Governed verifier, lazily imported so @kybernesis/enterprise stays an
+  // optional peer: ungoverned users never load it, and a missing install
+  // degrades to "governed callers get 401" at runtime with a clear log.
+  type LooseAuthFn = (request: Request) => Promise<unknown>;
+  let governedAuth: LooseAuthFn | null | undefined;
+  const governedAuthFn: LooseAuthFn = async (request) => {
+    if (governedAuth === undefined) {
+      try {
+        const mod = (await import("@kybernesis/enterprise")) as {
+          kybernesisAuth: (o: { issuer: string; agent: string }) => LooseAuthFn;
+        };
+        governedAuth = mod.kybernesisAuth({ issuer: governed!.issuer, agent: governed!.agent });
+      } catch {
+        console.error(
+          "[dispatch] governed mode requires @kybernesis/enterprise >=0.2.0 — install it or remove `governed`.",
+        );
+        governedAuth = null;
+      }
+    }
+    return governedAuth ? governedAuth(request) : null;
+  };
+
   return eveChannel({
     auth: [
       // Verifies which deployment is calling: this project's own tokens are
       // always accepted; other projects only when enumerated as peers.
-      vercelOidc({ subjects }),
+      ...(peers.length > 0 ? [vercelOidc({ subjects })] : []),
+      // Governed callers present a control-plane A2A session token instead.
+      ...(governed ? [governedAuthFn as never] : []),
       // Open on localhost for `eve dev` and the REPL; ignored in production.
       localDev(),
       ...extra,
@@ -103,9 +138,13 @@ export function dispatchChannel(options: DispatchChannelOptions) {
       // caller passed real auth above.
       placeholderAuth(),
     ],
-    // Only enumerated peers may assert a forwarded end-user principal.
+    // Enumerated peers OR a verified a2a agent principal (whose edge grant was
+    // checked at mint, ≤TTL ago) may assert a forwarded end-user principal.
     trustedForwarders: (forwarder) =>
-      typeof forwarder.subject === "string" &&
-      subjectSet.has(forwarder.subject),
+      (typeof forwarder.subject === "string" && subjectSet.has(forwarder.subject)) ||
+      (Boolean(governed) &&
+        forwarder.principalType === "agent" &&
+        forwarder.authenticator === "kybernesis" &&
+        (forwarder.attributes as Record<string, unknown> | undefined)?.kind === "a2a"),
   });
 }

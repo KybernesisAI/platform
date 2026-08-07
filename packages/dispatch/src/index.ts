@@ -23,6 +23,7 @@
  */
 
 export { remotePeer, type RemotePeerOptions } from "./remote-peer.js";
+export { type GovernedOptions } from "./governed.js";
 export {
   dispatchChannel,
   peerSubject,
