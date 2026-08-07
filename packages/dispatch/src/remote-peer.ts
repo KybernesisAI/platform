@@ -91,18 +91,28 @@ export function remotePeer(options: RemotePeerOptions) {
 
   const session = governed && callee ? createA2ASessionSource(governed.issuer, callee) : null;
 
+  // eve resolves this at agent-graph build (boot), not per dispatch — so URL
+  // resolution must DEGRADE, never throw for a merely-missing credential:
+  // a misconfigured edge should fail when dispatched, not prevent the whole
+  // agent (and its evals) from booting.
   const url = async (): Promise<string> => {
     const override = envVar ? process.env[envVar] : undefined;
     if (override) return override;
-    if (session) {
-      const s = await session();
-      if (s.callee.deploymentUrl) return s.callee.deploymentUrl;
+    if (session && process.env.KYBERNESIS_AGENT_CREDENTIAL) {
+      try {
+        const s = await session();
+        if (s.callee.deploymentUrl) return s.callee.deploymentUrl;
+      } catch {
+        // Mint failed (control plane down, edge revoked): fall through to the
+        // static fallback so boot survives; the dispatch itself will fail
+        // loudly in auth() with the precise mint error.
+      }
     }
     if (fallbackUrl) return fallbackUrl;
     throw new Error(
       `remotePeer: no URL for this edge — ${
         session
-          ? "the registry has no deploymentUrl for the callee and no envVar/fallbackUrl override is set."
+          ? "registry discovery unavailable (no credential or no registered deploymentUrl) and no envVar/fallbackUrl override is set."
           : `${envVar ?? "envVar"} is not set and no fallbackUrl was provided.`
       }`,
     );
