@@ -6,11 +6,15 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 
 ## Orient yourself first
 
-1. **The master handoff doc** (read once per session if you lack context):
+0. **`docs/HANDOFF.md` — read FIRST on any machine that isn't Ian's main computer**:
+   repo map (all sister repos + deploy targets), current versions, live-state
+   snapshot, fresh-machine setup. The portable version of everything below.
+1. **The master handoff doc** (Ian's main machine only — iCloud path):
    `/Users/ianborders/Library/Mobile Documents/iCloud~md~obsidian/Documents/kybernesis-system-overview.md`
    — business, full architecture, auth contract, shipped-vs-specced-vs-parked.
-2. **The FDE runbook** (how these packages are used in a client engagement):
-   `.../kybernesis-engagement-playbook.md` in the same Obsidian folder.
+2. **The FDE runbook**: CANONICAL at
+   `packages/create/skills/fde-engagement/references/playbook.md` (in this repo;
+   the Obsidian copy is a mirror). Also browsable at company.kybernesis.ai/fde.
 3. **Eve docs ship in this repo's node_modules**: `node_modules/eve/docs/` —
    read the relevant guide BEFORE authoring any eve capability
    (`extensions.md`, `tools/`, `channels/`, `evals/`, `connections/`,

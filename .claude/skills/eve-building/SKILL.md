@@ -85,6 +85,18 @@ Inherit NOTHING. Own tools/skills/connections/instructions/sandbox; on eve
 into that subagent). No channels/schedules; no user principal; whole job must
 fit one delegation call. Docs: `docs/subagents.mdx`.
 
+**Sandbox layout trap:** a FLAT `agent/sandbox.ts` is discovered but scopes to
+the ROOT agent only — subagents silently fall back to the default backend
+chain (Docker → microsandbox → just-bash), which surfaces as
+`opening sandbox session "subagents/<id>" on backend "docker"` in eval logs.
+Use the directory form `agent/sandbox/sandbox.ts` — that one is app-level and
+subagents get it free. (Cost a debugging session on eve-gtm, 2026-08-07.)
+
+**Parallel same-subagent delegation collides** (`Session … lost
+continuationToken … to session …`, failed subagent-result actions): two
+delegations to the SAME subagent fired in one step race on child sessions.
+Instruct serial delegation ("one draft at a time, wait for each result").
+
 ## Test in eve dev
 
 `npx eve dev` boots the local runtime + chat TUI. Walk: identity → skill

@@ -1,10 +1,10 @@
 ---
-description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), engineer (build+ship), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
+description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), engineer (build+ship), dispatch (agent-to-agent), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
 ---
 
 # The Kybernesis packages
 
-Six packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
+Seven packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
 `KybernesisAI/platform`. Registry: `https://registry.kybernesis.ai`
 (`eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json`,
 then `eve add @kybernesis/<item>`). Each covers one axis:
@@ -38,6 +38,28 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   domain allowlist = the client's security posture. Ship loop: preview deploys
   via the Vercel MCP connection (inline file tree, no git needed, no token in
   the VM); production promotion is ALWAYS human-approved.
+- **dispatch** — agent-to-agent. `remotePeer({ envVar, description })` under
+  `agent/subagents/` = a separately DEPLOYED eve agent as a callable peer
+  (eve's `defineRemoteAgent` underneath: durable park→callback dispatch);
+  `dispatchChannel({ trustedPeers, extraAuth? })` as `agent/channels/eve.ts` =
+  the receiver, one declaration feeding BOTH the OIDC subjects allowlist and
+  `trustedForwarders`. Principal forwarding ON by default — the peer runs as
+  the human who asked. `() => true` trust is not expressible. Peers are
+  production-environment by default. BOTH ends must run compatible eve
+  versions (old receivers silently drop forwarding → service identity).
+  Composes with enterprise via `extraAuth: [kybernesisAuth(...)]`. See the
+  `connect-agents` skill for the end-to-end wiring flow.
+  **GOVERNED mode (≥0.2.1, proven live 2026-08-07):** `remotePeer({ callee:
+  "<registered-name>", governed: { issuer } })` + `dispatchChannel({ governed:
+  { issuer, agent } })` — edges granted in the control plane, outbound auth =
+  a 300s A2A token minted from POST /api/agent/session with the deployment's
+  `KYBERNESIS_AGENT_CREDENTIAL`, callee URL from the registry (envVar
+  overrides). Revoke in the admin → refused within the token TTL, no
+  redeploy. Names match EXACTLY (case-sensitive: "Kyber" ≠ "kyber").
+  Requires @kybernesis/enterprise ≥0.2.0 installed (optional peer, lazy).
+  0.2.1 lesson: eve resolves remote URLs at BOOT — url() must degrade
+  (env → discovery-if-credentialed → fallbackUrl), never throw on a missing
+  credential, or the whole agent (and its evals) fails to boot.
 - **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing,
   engineer? })` = smoke + 5 memory + routing per dept + optional vision-loop
   eval. Judge model ≠ model under test. Hermetic runs force all workspaces to

@@ -33,7 +33,23 @@ model under test.
 - Stale sandbox state (migration errors, re-baking templates):
   `rm -rf .eve/sandbox-cache .eve/dev-runtime` and rerun.
 - Don't pipe the eval command through `tail` in scripts — it masks the exit
-  code.
+  code (and `| tail -N` on a backgrounded run destroys the per-eval detail —
+  `tee` to a file instead).
+- **Heavy-model suites: `maxConcurrency: 1` locally.** At 2, long opus turns
+  overload the local world-queue transport (`Queue delivery failed … fetch
+  failed`); crashed deliveries REPLAY subagent steps, surfacing as
+  `lost continuationToken` races and phantom failures that move between runs.
+  The deployed runtime uses real queue infra — this is a local-harness limit.
+- **AI Gateway budget is a silent eval killer**: Vercel applies a default
+  per-project budget (e.g. $10/daily); a suite of real opus turns can exhaust
+  it MID-RUN → `MODEL_CALL_FAILED` on whatever ran last. Check/raise:
+  `vercel ai-gateway budgets list` / `budgets set project <name> --limit 30
+  --refresh-period monthly`.
+- **"run parked on N unanswered input request(s)"** = the agent called a
+  human-in-the-loop tool (`approval: status=pending tool=ask_question` in the
+  turn log) — no one answers in an eval. Usually a behavior finding: the
+  fixture was self-contained and the agent asked instead of acting. Fix the
+  agent's bias-to-act instructions, not the fixture.
 
 ## eve version certification
 
