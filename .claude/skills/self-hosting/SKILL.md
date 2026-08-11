@@ -94,3 +94,53 @@ Nothing here can be borrowed from another agent or another account.
 
 `kyb doctor` green (or every warning consciously accepted), the eval suite green
 against the client's `-eval` workspace, and a live turn on the real surface.
+
+## Third-party APIs: version pinning and spec-derived calls
+
+Two failures here cost most of a day on the first deployment. Both look like
+outages or permission problems and are neither.
+
+**Pin the API version the SPEC describes, not the one in a doc example.**
+Notion's OpenAPI spec describes their current API (`/v1/data_sources/…`), but
+eve's docs example pins `Notion-Version: 2022-06-28`, where that endpoint does
+not exist. The mismatch returns `invalid_request_url`, `service_unavailable`
+(503) on search, and "not shared with the integration" — three different lies,
+none of them about the actual problem. Verify by making the SAME call the agent
+makes, headers included.
+
+**When the agent and your manual test disagree, the difference between the two
+requests IS the bug.** Diff them at the first contradiction. Repeatedly proving
+"the token works" with a hand-written curl while the agent fails proves nothing
+if your curl sends a different version header.
+
+**An agent's error message is a hypothesis, not evidence.** It will confidently
+report an outage or a permissions problem it has not verified. Read the actual
+request and response before acting — and never change a client's permissions on
+an agent's say-so.
+
+**Large specs with ambiguous ID schemes need a purpose-built tool, not a raw
+connection.** Notion's spec is ~1.2MB and splits `database_id` from
+`data_source_id` for the same board; a model deriving calls from it picks the
+wrong one. Pin the endpoint and the IDs in a small tool
+(`agent/tools/<domain>.ts`), keep the generic connection for the long tail, and
+point the instructions at the tool.
+
+**Credential brokering (exe http-proxy) is the right default off-Vercel:**
+
+```
+integrations add http-proxy --name <svc> --target https://api.example.com \
+  --header 'Authorization:Bearer <token>' --header '<Version-Header>:<value>' \
+  --attach vm:<vm>
+```
+
+Use `--header` for the token, not `--bearer=-`: the stdin form mangles it and
+the API answers 401 "token is invalid".
+
+## Restarts must be proven, not assumed
+
+A restart that silently fails leaves the agent serving a stale build — new
+connections, tools, and instructions never appear, and every later test measures
+yesterday's agent. Assert the process started AFTER the build it should serve
+(`scripts/eve-server.sh` and the restart pattern in `@kybernesis/exe` do this).
+Related: a long-lived channel session caches the compiled agent, so start a
+fresh conversation after changing capabilities.
