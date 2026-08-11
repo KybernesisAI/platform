@@ -40,6 +40,10 @@ npm create @kybernesis acme-atlas -- --engineer
 #    Prompts: display name · department subagents · control-plane issuer.
 #    (Non-interactive/CI: defaults apply when stdin is not a terminal.)
 
+# …or, when the client will NOT use Vercel — their own VM, or their own
+# ChatGPT/LLM subscription paying for inference. See section 11:
+npm create @kybernesis acme-atlas -- --host=exe --engineer
+
 # 3. (Optional, for repeated use) put `kyb` on the PATH for the whole engagement:
 npm install -g @kybernesis/create
 ```
@@ -1714,9 +1718,279 @@ the control-plane repo's seed scripts.)
 it is far faster than booting the dev server. `npx eve logs` reads the last `eve dev`
 diagnostic log if you need stderr, tool failures, and rebuild lines.
 
+### Self-hosted hosts (exe.dev / client infrastructure)
+
+**I deployed a change and the agent still does the old thing.**
+The restart did not take. Check that the running process started *after* the build
+(`scripts/eve-server.sh` asserts this and fails loudly). A silently-failed restart is the
+single most expensive failure mode off Vercel, because every test you run afterwards
+measures the previous build. If the process is current, start a **fresh conversation** —
+a long-lived channel session caches the compiled agent.
+
+**Every sandbox tool fails with `SandboxTemplateNotProvisionedError`.**
+Either Docker is installed but disabled (`sudo systemctl enable --now docker` — exeuntu
+ships it disabled), or the server was started as `node .output/server/index.mjs`, which
+skips the CLI's template prewarm. Start with `npx eve start`.
+
+**The subagent's screenshots fail with `Cannot find module 'playwright'` but the root
+agent is fine.**
+Subagents own their sandbox; they do not inherit the root's. Give the subagent its own
+`sandbox/sandbox.ts`.
+
+**My env vars are missing under `eve start`.**
+`eve start` does not read `.env.local` the way `eve dev` does. Use
+`scripts/eve-server.sh`, which exports it into the process.
+
+**I killed the agent and my own SSH session at the same time.**
+`pkill -f <pattern>` matches the SSH command line that contains the pattern. Keep kill
+patterns inside a script on the host; never pass them on an `ssh` command line.
+
+**A sandbox VM boots and shows `running`, but every command answers "command not found".**
+SSH is landing on exe.dev's lobby REPL rather than the VM. exe.dev reuses VM names, so a
+name deleted and recreated within a few minutes can keep resolving to the lobby, and a
+stale `known_hosts` entry does the same thing. Use a fresh name, and never reuse the
+caller's `known_hosts` for sandbox VMs.
+
+**A command works when I SSH in by hand but not from the agent.**
+A non-interactive SSH command does not source the login profile, so toolchains installed
+onto the profile PATH (nvm, pyenv, cargo) are invisible. Run through `bash -lc` — but not
+for file I/O, whose stdout must stay byte-clean.
+
+**exe.dev refuses to run commands with my API token.**
+It cannot. A key registered through an API token inherits that token's command scope, and
+shell exec is not a scoped command. Running commands needs a full-permission account key;
+see 11.6 for the isolation this demands.
+
+### Third-party APIs and connections
+
+**The agent reports that a service is down or that a resource "isn't shared" with it.**
+Verify before you believe it, and never change the client's permissions on an agent's
+say-so. An agent's error message is a hypothesis, not evidence — one real case reported an
+outage, then a permissions problem, while the data was reachable the entire time and the
+actual cause was a version header. Read the request and response yourself.
+
+**My manual `curl` works but the agent's identical call fails.**
+It is not identical — and the difference between the two requests *is* the bug. Diff them
+at the first contradiction rather than proving again that the token works. A version
+header, a content type, or a base URL differing by one path segment will do it.
+
+**Calls derived from a large OpenAPI spec fail in ways that make no sense.**
+Specs with ambiguous ID schemes (Notion's `database_id` vs `data_source_id` for the same
+object) make the model pick wrong, and the API's errors describe a different problem.
+Write a small purpose-built tool with the endpoint and IDs pinned; keep the generic
+connection for the long tail.
+
 ---
 
-## 11. Known gaps — state these plainly, do not sell around them
+
+## 11. Self-hosted deployments (when the client will not use Vercel)
+
+Vercel is the default path and the proven one. Take this track when the client
+**cannot or will not** put the agent on Vercel — procurement, data residency, an
+existing VM estate — or when they want inference billed to a subscription they
+already pay for rather than to a gateway.
+
+Everything else in this playbook still applies. This section covers only what
+changes.
+
+**The governing rule: every credential comes from the CLIENT's accounts.** If a
+step works only because you happen to hold a token, that step is a bug in the
+deployment, not a shortcut — it will fail on the real engagement, in front of
+the client. Assume you have no Vercel connection, no blob store, and no API
+keys of your own.
+
+### 11.1 Scaffold
+
+```bash
+kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer
+cd <name> && kyb doctor
+```
+
+`--host=exe` swaps the host bindings; everything else is the same product —
+same memory, same evals, same control-plane wiring, same engineer layer.
+`kyb doctor` knows every failure mode below and fails loudly on each.
+
+### 11.2 What Vercel gives you that a client host does not
+
+| Capability | On Vercel | Self-hosted replacement |
+| --- | --- | --- |
+| Model access | AI Gateway | exe.dev LLM integration (`exeModel`) — managed, BYO key, or a **ChatGPT subscription** |
+| Slack / Photon / Linear credentials | Vercel Connect | **static credentials the client issues** |
+| Sandbox | `vercel()` | `docker()` on the host, or `exeSandbox()` per-task VMs |
+| File delivery | Vercel Blob | Blob **or** `DELIVER_DIR` + `DELIVER_BASE_URL` |
+| Public URLs | deployments | a deploy target, or an account-gated preview |
+| Secrets | Vercel env | host env + the platform's own secret injection |
+
+**Vercel Connect does not work off-Vercel — at all.** It authenticates via
+Vercel OIDC, which does not exist on another host. That applies to Slack, the
+Vercel MCP connection, Linear, everything. Each becomes a static credential
+someone must issue and rotate, and `kyb doctor` fails if a `@vercel/connect`
+import survives into a self-hosted agent.
+
+### 11.3 Host setup (exe.dev)
+
+```bash
+ssh exe.dev new --name <agent>
+ssh exe.dev share port <agent> 8000 && ssh exe.dev share set-public <agent>
+```
+
+Make the host public **before** registering any webhook — webhooks need
+anonymous access, and a provider that fails verification at registration time
+usually will not tell you why.
+
+Then, on the VM: Node 24, `npm ci`, `npx eve build`, and start through
+`scripts/eve-server.sh` from `@kybernesis/exe`.
+
+Three things that will cost you an afternoon if you skip them:
+
+- **`eve start` does not read `.env.local`** the way `eve dev` does. The
+  supervision script exports it into the process for you.
+- **Start via `npx eve start`, not `node .output/server/index.mjs`.** Sandbox
+  template prewarm lives in the CLI, not the built server. Starting the server
+  directly gives you cleaner logs and no prewarm, so every sandbox tool then
+  fails with `SandboxTemplateNotProvisionedError`.
+- **Docker ships disabled on some images**, exeuntu among them. `docker
+  --version` answers happily while nothing can actually run. Fix with `sudo
+  systemctl enable --now docker`.
+
+### 11.4 Model: billing inference to the client's subscription
+
+exe.dev brokers the model, so no provider key sits on the host:
+
+```bash
+ssh exe.dev integrations setup chatgpt --name work    # once, device-code flow
+ssh exe.dev integrations edit llm --openai=chatgpt --openai-account=work
+```
+
+Then `exeModel()` from `@kybernesis/exe` points the agent at it. A Codex-backed
+subscription requires `store: false` on every request; `exeModel` forces it.
+
+This is the single biggest commercial difference in the self-hosted track: a
+client with an existing ChatGPT or Claude subscription pays no incremental
+inference cost for the pilot. Say the number out loud in the discovery
+conversation — it changes the shape of the deal.
+
+### 11.5 Third-party APIs: broker the credential, pin the version
+
+Do not put a client's API token on the agent host. Put it in an exe.dev
+http-proxy integration, which injects headers server-side:
+
+```bash
+ssh exe.dev "integrations add http-proxy --name notion \
+  --target https://api.notion.com \
+  --header 'Authorization:Bearer <token>' \
+  --header 'Notion-Version:2025-09-03' \
+  --attach vm:<agent>"
+```
+
+The agent then calls `https://notion.int.exe.xyz` with no credential at all, and
+rotation happens in one place the client controls.
+
+Two rules here, both learned expensively:
+
+**Pin the API version the SPEC describes, not the one in a doc example.** A
+version header copied from documentation while the agent's OpenAPI spec
+describes a newer API produces errors that describe the wrong problem entirely.
+One real case cost most of a day: `Notion-Version: 2022-06-28` against a spec
+using `/v1/data_sources/...` returned `invalid_request_url`, intermittent 503s
+from search, and "not shared with the integration" — three different messages,
+none of them about the version mismatch, two of which look like a permissions
+or availability problem you can waste hours "fixing" on the client's side.
+
+**Use `--header` for the token, never `--bearer=-`.** The stdin form mangles the
+value and the API answers 401 "token is invalid".
+
+**Large specs with ambiguous ID schemes need a purpose-built tool, not a raw
+connection.** Notion's spec is ~1.2MB and splits `database_id` from
+`data_source_id` for the same object; a model deriving calls from it picks
+wrong. Pin the endpoint and the IDs in a small tool under `agent/tools/`, keep
+the generic connection for the long tail, and point the instructions at the
+tool. Reads went from unreliable to deterministic with about sixty lines.
+
+### 11.6 The engineer layer, self-hosted
+
+`--engineer` scaffolds a **builder subagent** that owns the build capability, so
+the root agent never gets a shell. It comes with the full production loop —
+workshop sandbox, Playwright, screenshots, visual verification, delivery — not a
+reduced version of the Vercel one.
+
+- **Subagents own their sandbox; they do NOT inherit the root's.** A builder
+  without its own `sandbox/sandbox.ts` gets a bare template and every screenshot
+  fails with `Cannot find module 'playwright'` while the root's template is
+  fine. `kyb doctor` checks for this.
+- Conversely, if the root agent runs no code, it needs **no** root sandbox.
+  Leaving one there costs a full template prewarm on every deploy for nothing.
+
+**Choosing a sandbox backend:**
+
+`docker()` on the agent's own VM is the default and the safer choice. Reach for
+`exeSandbox()` — a whole exe.dev VM per session, with Docker available *inside*
+it and its own public URL — only when the work needs real isolation or
+per-session compute.
+
+`exeSandbox()` carries one hard constraint you must raise with the client before
+choosing it: **it needs a full-permission account SSH key.** exe.dev keys
+registered through an API token inherit that token's command scope and cannot
+open a shell at all, so there is no scoped credential that can run commands. The
+key it does need grants shell to **every VM on that exe.dev account**. The
+backend therefore refuses to start unless the account is dedicated to this agent
+(its own VM plus its sandboxes), naming any foreign VMs it finds. Overriding
+that with `allowSharedAccount: true` is a decision for the client to make in
+writing, not for you to make on their behalf. VM lifecycle stays on a separately
+scoped token that cannot exec, so neither credential is sufficient alone.
+
+### 11.7 Showing the client what the agent built
+
+- **Vercel Blob refuses to serve HTML inline** — it forces a download. Use it
+  for documents and exports, never to show a web page.
+- **exe.dev forwards ports 3000–9999** to `https://<vm>.exe.xyz:<port>/`, but a
+  VM has exactly **one public port** and the agent's webhook already owns it.
+  Alternate ports are account-gated: fine for the client reviewing work, not for
+  the public.
+- **Anything genuinely public needs a deploy target** — the client's own Vercel
+  token, or their hosting. Treat "public" as a deploy step, not a toggle, and
+  price it into the scope.
+- A sandbox is a container: its ports are not reachable from the host, so a dev
+  server inside it cannot be previewed directly. Copy the artifact out (the
+  `preview` tool in `@kybernesis/exe`) or deploy it.
+
+### 11.8 Prove the restart, every time
+
+There is no deployment pipeline here to tell you a release landed. A restart
+that silently fails leaves the agent serving a stale build — new connections,
+tools, and instructions never appear — and **every test you run afterwards
+measures yesterday's agent.** One session lost an hour to exactly this.
+
+`scripts/eve-server.sh` asserts the running process started *after* the build it
+should be serving, and fails loudly when it did not. Use it rather than
+`pkill` + `npx eve start` by hand. Related: `pkill -f <pattern>` over SSH kills
+your own session when the pattern appears in the SSH command line — and can take
+the agent down with it. Use the pidfile.
+
+Also: a long-lived channel session caches the compiled agent. After changing
+capabilities, start a **fresh conversation** before deciding the change did not
+work.
+
+### 11.9 Credential checklist — collect ALL of these from the client
+
+Nothing here can be borrowed from another agent or another account.
+
+1. **Host** — VM/server, plus the platform token if the agent provisions anything
+2. **Model source** — their LLM API key, gateway allocation, or connected subscription
+3. **Channel app** — their Slack app (bot + app token) / Photon project / bot token
+4. **Arcana** — workspaces + scoped `kb_` keys (one per brain, plus `-eval`)
+5. **Storage for deliverables** — their blob store, or a served host directory
+6. **Deploy target** — their Vercel token or hosting, if the agent ships sites
+7. **Sandbox credentials** — only if using `exeSandbox()` (see 11.6)
+8. **Control plane** — agent registered and the pilot cohort granted
+
+### 11.10 Before calling it done
+
+`kyb doctor` green (or every warning consciously accepted), the eval suite green
+against the client's `-eval` workspace, and a live turn on the real surface —
+sent from the client's own device, not yours.
+
+## 12. Known gaps — state these plainly, do not sell around them
 
 Being straight about these is a feature. Clients have met vendors who were not.
 
