@@ -18,8 +18,29 @@ import { z } from "zod";
  */
 const PREVIEW_DIR = process.env.PREVIEW_DIR ?? "/home/exedev/preview";
 const PREVIEW_PORT = process.env.PREVIEW_PORT ?? "3456";
-const PREVIEW_BASE =
-  process.env.PREVIEW_BASE_URL ?? `https://${process.env.EXE_VM_NAME ?? "sid-agent"}.exe.xyz:${PREVIEW_PORT}`;
+
+/**
+ * Resolve the base URL previews are served from.
+ *
+ * Deliberately has NO default host. An earlier revision fell back to the VM
+ * this tool was first written on, which meant a client agent missing
+ * EXE_VM_NAME would hand its user a link into somebody else's machine — a
+ * wrong answer that looks like a working one. Fail loudly instead, at the
+ * point of use, naming both ways to fix it.
+ */
+function previewBase(): string {
+  const explicit = process.env.PREVIEW_BASE_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+  const vm = process.env.EXE_VM_NAME;
+  if (!vm) {
+    throw new Error(
+      "preview: cannot build a preview URL — set PREVIEW_BASE_URL to the host that serves " +
+        `${PREVIEW_DIR}, or EXE_VM_NAME to this agent's exe.dev VM name (previews are then ` +
+        `served from https://<vm>.exe.xyz:${PREVIEW_PORT}).`,
+    );
+  }
+  return `https://${vm}.exe.xyz:${PREVIEW_PORT}`;
+}
 
 export const previewTool = defineTool({
   description:
@@ -42,7 +63,7 @@ export const previewTool = defineTool({
     mkdirSync(PREVIEW_DIR, { recursive: true });
     writeFileSync(join(PREVIEW_DIR, safe), Buffer.from(bytes));
 
-    const url = `${PREVIEW_BASE}/${safe}`;
+    const url = `${previewBase()}/${safe}`;
     return {
       url,
       note:
