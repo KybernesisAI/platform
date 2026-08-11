@@ -27,7 +27,11 @@
       "types": "./dist/slack.d.ts",
       "default": "./dist/slack.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./photon": {
+      "types": "./dist/photon.d.ts",
+      "default": "./dist/photon.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

@@ -134,7 +134,7 @@ ${depts.length ? `  routing: [\n${routing}\n  ],\n` : ""}});
 `;
 }
 
-export function envExample(name: string, depts: string[], issuer: string): string {
+export function envExample(name: string, depts: string[], issuer: string, channelEnv: string[] = []): string {
   const deptVars = depts
     .map((d) => {
       const upper = d.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
@@ -149,10 +149,7 @@ export function envExample(name: string, depts: string[], issuer: string): strin
 KYBERNESIS_ISSUER="${issuer}"
 KYBERNESIS_AGENT="${name}"
 
-# Slack (@kybernesis/multiplayer) — Vercel Connect connector UID
-# SLACK_CONNECTOR_UID="slack/${name}"
-
-# Arcana memory (@kybernesis/arcana) — one workspace + scoped kb_ key per brain
+${channelEnv.length ? `# Channel\n${channelEnv.join("\n")}\n\n` : ""}# Arcana memory (@kybernesis/arcana) — one workspace + scoped kb_ key per brain
 # ARCANA_API_KEY="kb_..."
 # ARCANA_COMPANY_WORKSPACE="${name}-company"
 # ARCANA_DM_WORKSPACE="${name}-company"
@@ -170,4 +167,217 @@ export function evalScript(name: string, depts: string[]): string {
     ),
   ];
   return `${overrides.join(" ")} eve eval`;
+}
+
+// ── Channels ────────────────────────────────────────────────────────────
+// Nothing is implied: a scaffold gets the channel(s) you ask for and no more.
+// Each entry knows its file, the packages it needs, and the env it introduces.
+
+export type ChannelKind = "none" | "slack" | "imessage" | "telegram" | "discord" | "web";
+
+export const CHANNEL_KINDS: ChannelKind[] = [
+  "none",
+  "slack",
+  "imessage",
+  "telegram",
+  "discord",
+  "web",
+];
+
+export interface ChannelPlan {
+  /** File written under agent/channels/, or null for `none`. */
+  file: string | null;
+  content: string;
+  /** npm deps this channel needs beyond eve. */
+  deps: string[];
+  /** Registry items to `eve add` (interactive setup flows live there). */
+  registryItems: string[];
+  /** Env lines appended to .env.example. */
+  env: string[];
+  /** Human setup steps printed after scaffolding. */
+  steps: string[];
+}
+
+export function channelPlan(kind: ChannelKind, name: string, host: HostKind): ChannelPlan {
+  const onExe = host === "exe";
+  switch (kind) {
+    case "slack":
+      return {
+        file: "slack.ts",
+        content: onExe
+          ? `import { multiplayerSlackChannel } from "@kybernesis/multiplayer/slack";
+import { forwardedSocketVerifier } from "@kybernesis/exe/slack";
+
+// Slack on a self-hosted (exe.dev) host.
+// Inbound: a forwarder holds the exe-brokered Socket Mode connection and POSTs
+// events here; the verifier authenticates them on SLACK_SOCKET_FORWARDING_SECRET.
+// Outbound: SLACK_BOT_TOKEN must be on the host — eve's SlackChannelCredentials
+// has no apiUrl, so calls can't route through the exe integration yet.
+export default multiplayerSlackChannel({
+  credentials: {
+    botToken: process.env.SLACK_BOT_TOKEN!,
+    webhookVerifier: forwardedSocketVerifier(),
+  },
+});
+`
+          : `import { connectSlackCredentials } from "@vercel/connect/eve";
+import { multiplayerSlackChannel } from "@kybernesis/multiplayer/slack";
+
+// Shared threads with per-speaker verified identity, attributed context, and
+// dual surface (channel vs DM). Credentials are brokered by Vercel Connect.
+export default multiplayerSlackChannel({
+  credentials: connectSlackCredentials(process.env.SLACK_CONNECTOR_UID!),
+});
+`,
+        deps: ["@kybernesis/multiplayer", ...(onExe ? ["@kybernesis/exe"] : ["@vercel/connect"])],
+        registryItems: [],
+        env: onExe
+          ? [
+              `SLACK_BOT_TOKEN="xoxb-..."   # outbound; from Slack OAuth & Permissions`,
+              `SLACK_SOCKET_FORWARDING_SECRET="$(openssl rand -hex 24)"`,
+            ]
+          : [`SLACK_CONNECTOR_UID="slack/${name}"`],
+        steps: onExe
+          ? [
+              `Create a Slack app (Socket Mode on; scopes: app_mentions:read, chat:write, channels:history, groups:history, im:history, users:read)`,
+              `Hold its tokens off-host: ssh exe.dev integrations add slack --name ${name} --bot-token=- --app-token=-`,
+              `Run the forwarder (scripts/slack-forwarder.py in @kybernesis/exe) with EXE_SLACK_GW set`,
+              `After ANY scope change, reinstall the app — a stale token silently stops receiving events`,
+            ]
+          : [
+              `vercel connect create slack --triggers --name ${name}`,
+              `vercel connect detach <uid> --yes && vercel connect attach <uid> --triggers --trigger-path /eve/v1/slack --yes`,
+            ],
+      };
+    case "imessage":
+      return {
+        file: "photon.ts",
+        content: `import { photonIMessageChannel } from "eve/channels/photon";
+${onExe ? `import { photonEnvCredentials } from "@kybernesis/exe/photon";\n` : ""}
+// iMessage via Photon. Inbound is a plain webhook at /eve/v1/photon; the Photon
+// signing secret takes precedence over the default Vercel-OIDC verifier, so this
+// works on any host with a public HTTPS URL.
+export default photonIMessageChannel({
+${
+  onExe
+    ? `  credentials: photonEnvCredentials(),`
+    : `  async credentials() {
+    const projectId = process.env.IMESSAGE_PROJECT_ID;
+    const projectSecret = process.env.IMESSAGE_PROJECT_SECRET;
+    if (!projectId || !projectSecret) throw new Error("Photon project credentials are required.");
+    return { projectId, projectSecret };
+  },`
+}
+  webhookSecret: process.env.IMESSAGE_WEBHOOK_SECRET,
+});
+`,
+        deps: onExe ? ["@kybernesis/exe"] : [],
+        registryItems: [],
+        env: [
+          `IMESSAGE_PROJECT_ID="..."`,
+          `IMESSAGE_PROJECT_SECRET="..."`,
+          `IMESSAGE_WEBHOOK_SECRET="..."   # Photon webhook signing secret`,
+        ],
+        steps: [
+          `Create a Photon project and register the phone number (npx eve add channel/photon-imessage walks it)`,
+          onExe
+            ? `Make the host public FIRST — webhooks need anonymous access:\n       ssh exe.dev share port <vm> 8000 && ssh exe.dev share set-public <vm>`
+            : `Deploy so the public URL exists`,
+          `Register a Photon webhook for https://<your-host>/eve/v1/photon and copy its signing secret to IMESSAGE_WEBHOOK_SECRET`,
+        ],
+      };
+    case "telegram":
+      return {
+        file: "telegram.ts",
+        content: `import { telegramChannel } from "eve/channels/telegram";
+
+// Telegram. Register the webhook against your public URL after deploying.
+export default telegramChannel({ botToken: process.env.TELEGRAM_BOT_TOKEN! });
+`,
+        deps: [],
+        registryItems: [],
+        env: [`TELEGRAM_BOT_TOKEN="..."   # from @BotFather`],
+        steps: [
+          `Create a bot with @BotFather and copy its token`,
+          `After deploy: curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=https://<host>/eve/v1/telegram"`,
+        ],
+      };
+    case "discord":
+      return {
+        file: "discord.ts",
+        content: `import { discordChannel } from "eve/channels/discord";
+
+export default discordChannel({ botToken: process.env.DISCORD_BOT_TOKEN! });
+`,
+        deps: [],
+        registryItems: [],
+        env: [`DISCORD_BOT_TOKEN="..."`],
+        steps: [`Create a Discord application + bot, invite it, set DISCORD_BOT_TOKEN`],
+      };
+    case "web":
+      return {
+        file: null,
+        content: "",
+        deps: [],
+        registryItems: [],
+        env: [],
+        steps: [
+          `The eve channel (agent/channels/eve.ts) already serves HTTP; build a frontend with useEveAgent`,
+        ],
+      };
+    case "none":
+    default:
+      return {
+        file: null,
+        content: "",
+        deps: [],
+        registryItems: [],
+        env: [],
+        steps: [`No chat surface yet — add one later with: kyb add channel <slack|imessage|telegram|discord|web>`],
+      };
+  }
+}
+
+// ── Host ────────────────────────────────────────────────────────────────
+
+export type HostKind = "vercel" | "exe";
+
+export function hostAgentTs(host: HostKind, model: string): string {
+  if (host === "exe") {
+    return `import { defineAgent } from "eve";
+import { createOpenAI } from "@ai-sdk/openai";
+import { exeModel } from "@kybernesis/exe";
+
+// Model served by the exe.dev LLM integration — no provider key on the host.
+// exe injects the credential (managed gateway, your API key, or a connected
+// ChatGPT subscription) server-side.
+export default defineAgent({
+  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
+  modelContextWindowTokens: 200_000,
+});
+`;
+  }
+  return `import { defineAgent } from "eve";
+
+export default defineAgent({
+  model: ${JSON.stringify(model)},
+});
+`;
+}
+
+export function hostSteps(host: HostKind, name: string): string[] {
+  if (host === "exe") {
+    return [
+      `Create the VM:  ssh exe.dev new --name ${name}`,
+      `Attach an LLM integration (ChatGPT subscription, your API key, or exe's gateway):`,
+      `    ssh exe.dev integrations setup chatgpt --name work   # once, device-code`,
+      `    ssh exe.dev integrations edit llm --openai=chatgpt --openai-account=work`,
+      `Install Node 24 + deps on the VM, then: npx eve build && bash scripts/eve-server.sh start`,
+      `\`eve start\` does NOT read .env.local — scripts/eve-server.sh loads it for you`,
+    ];
+  }
+  return [
+    `vercel link  (the client's team), then set envs (prod/preview Sensitive)`,
+    `npx eve deploy`,
+  ];
 }
