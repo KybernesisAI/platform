@@ -226,6 +226,38 @@ export async function doctor(): Promise<void> {
       "self-hosted: start via `npx eve start`, not `node .output/server/index.mjs`",
       "sandbox templates are prewarmed by the CLI; starting the server directly skips prewarm and every sandbox tool fails with SandboxTemplateNotProvisionedError",
     );
+
+    // The exe VM sandbox backend needs a credential that cannot be scoped.
+    // Surface the blast radius here, where it is still cheap to change course.
+    const sandboxFile = join(cwd, "agent/sandbox/sandbox.ts");
+    const usesExeSandbox =
+      existsSync(sandboxFile) && readFileSync(sandboxFile, "utf8").includes("exeSandbox(");
+    if (usesExeSandbox) {
+      const src = readFileSync(sandboxFile, "utf8");
+      if (src.includes("allowSharedAccount: true")) {
+        add(
+          "warn",
+          "exeSandbox runs with allowSharedAccount: true",
+          "the sandbox SSH key grants shell to EVERY VM on the exe.dev account — only keep this if the client has explicitly accepted that blast radius; otherwise give the agent its own account",
+        );
+      } else {
+        add("pass", "exeSandbox enforces a dedicated exe.dev account");
+      }
+      if (!process.env.EXE_SANDBOX_SSH_KEY && !process.env.EXE_SANDBOX_SSH_KEY_PATH) {
+        add(
+          "fail",
+          "exeSandbox has no SSH key (EXE_SANDBOX_SSH_KEY / EXE_SANDBOX_SSH_KEY_PATH)",
+          "it must be a FULL-PERMISSION account key: a key registered through an API token inherits that token's command scope and cannot open a shell at all",
+        );
+      }
+      if (!process.env.EXE_API_TOKEN) {
+        add(
+          "fail",
+          "exeSandbox has no EXE_API_TOKEN for VM lifecycle",
+          "mint a narrow one: ssh exe.dev \"ssh-key generate-api-key --label=<agent>-sandbox --cmds='ls,new,rm,cp' --exp=7d\"",
+        );
+      }
+    }
   }
 
   // ── engineer subagent (build capability scoped to a subagent) ──────────

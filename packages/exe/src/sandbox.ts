@@ -1,19 +1,28 @@
 /**
- * NOT USABLE AS WRITTEN — kept as a documented dead end and a measurement log.
+ * ## Read this before deploying: the credential this backend requires
  *
- * exe.dev deliberately separates programmatic VM lifecycle from interactive
- * shell. An SSH key registered THROUGH an API token inherits that token's
- * command scope, and arbitrary shell exec is not a scoped command, so such a
- * key is refused with 'command not allowed by SSH key permissions'. Adding
- * 'ssh' to the token scope only permits the REPL's own ssh command, and the
- * HTTPS API refuses exec outright ('ssh command requires an SSH session').
+ * exe.dev separates programmatic VM lifecycle from interactive shell, and an
+ * SSH key registered THROUGH an API token inherits that token's command scope.
+ * Such a key cannot open a shell — the registration response attaches
+ * `permissions.cmds` to the key itself, and exec is refused with
+ * `Permission denied (publickey)`. Verified directly, twice.
  *
- * The only working path is a FULL-PERMISSION account SSH key on the agent host
- * — a long-lived credential granting shell to every VM on the account. That is
- * the opposite of what this backend was for, and not something to hand a
- * client. Use eve's docker() backend on the agent's own VM instead.
+ * Running commands therefore requires a **full-permission account SSH key** on
+ * the agent host, which grants shell to EVERY VM on that exe.dev account.
  *
- * Measured while proving this out (all still true and useful):
+ * That is acceptable under exactly one deployment shape, which this backend
+ * enforces at prewarm: the exe.dev account is **dedicated to this agent** and
+ * holds nothing but the agent's own VM and its sandboxes. Then "shell to every
+ * VM on the account" means the agent's own compute — which it already has. If
+ * the account holds anything else, the guard refuses to start and names the
+ * foreign VMs. Override with `allowSharedAccount: true` only when the client
+ * has explicitly accepted that blast radius in writing.
+ *
+ * If the client will not provision a separate exe.dev account, use eve's
+ * `docker()` backend on the agent's own VM instead. It is the safer default and
+ * what `kyb init --host=exe --engineer` scaffolds.
+ *
+ * Measured while proving this out:
  * - VM create ~4s; clone of a prepared template ~2s; prewarm+bootstrap ~7s.
  * - Clones DO carry disk state, but only after `sync` — writes sitting in the
  *   page cache are absent from the snapshot, silently.
@@ -23,9 +32,6 @@
  * - Sandbox VM names get REUSED, so host keys change. Never use the caller's
  *   known_hosts: a stale entry silently reroutes SSH into exe.dev's REPL,
  *   where every command returns 'command not found' and looks like a dead VM.
- *
- * Revisit only if exe.dev adds a scoped exec path (a token running commands on
- * a VM it owns) — that is the missing primitive.
  */
 /**
  * exe.dev VM-backed sandbox for eve agents — OPTIONAL.
@@ -45,25 +51,25 @@
  *
  * ## How it authenticates
  *
- * Two credentials, deliberately separated:
+ * Two credentials, deliberately separated so neither alone is enough:
  *
  * 1. `EXE_API_TOKEN` — a **scoped** exe.dev API token used only for VM
- *    lifecycle. Mint it narrow and short-lived:
+ *    lifecycle. It cannot open a shell. Mint it narrow and short-lived:
  *    ```bash
  *    ssh exe.dev "ssh-key generate-api-key --label=<agent>-sandbox \
- *      --cmds='new,rm,ls,cp,ssh-key add,ssh-key remove' --exp=7d"
+ *      --cmds='ls,new,rm,cp' --exp=7d"
  *    ```
- * 2. An **ephemeral SSH keypair** this backend generates at prewarm, registers
- *    with the account, and removes on shutdown. It is what actually executes
- *    commands inside sandbox VMs. Nothing long-lived is placed on a sandbox.
+ * 2. `EXE_SANDBOX_SSH_KEY` — a full-permission account SSH key that executes
+ *    commands inside sandbox VMs. It cannot be scoped (see the note above), so
+ *    the account it belongs to must be dedicated to this agent.
  *
- * The agent host therefore never holds account-wide credentials, and a leaked
- * sandbox key expires with the token's scope rather than granting shell
- * anywhere forever.
+ * The token cannot run code and the key cannot create VMs, so a leak of either
+ * one is recoverable: rotate the token via `ssh-key remove`, or remove the key
+ * from the account.
  */
 import { spawn as spawnProcess } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Options for {@link exeSandbox}. */
@@ -84,6 +90,28 @@ export interface ExeSandboxOptions {
   bootTimeoutSeconds?: number;
   /** Working directory inside the sandbox. Default `/workspace`. */
   workdir?: string;
+  /**
+   * PEM contents of the account SSH key that executes sandbox commands.
+   * Defaults to `EXE_SANDBOX_SSH_KEY`. Written to a 0600 temp file at use.
+   */
+  sshKey?: string;
+  /**
+   * Path to that key instead of its contents. Defaults to
+   * `EXE_SANDBOX_SSH_KEY_PATH`. Takes precedence over `sshKey`.
+   */
+  sshKeyPath?: string;
+  /**
+   * The agent's own VM name, excluded from the dedicated-account check.
+   * Defaults to `EXE_VM_NAME`, then the host's own hostname.
+   */
+  agentVmName?: string;
+  /**
+   * Skip the dedicated-account guard. The sandbox key grants shell to every VM
+   * on the account, so only set this when the client has explicitly accepted
+   * that blast radius. The guard exists because the alternative — discovering
+   * the exposure after an incident — is not recoverable.
+   */
+  allowSharedAccount?: boolean;
 }
 
 interface ExeVm {
@@ -121,12 +149,31 @@ async function exeExec(
   }
 }
 
-/** Run a command over SSH against a sandbox VM, collecting stdout/stderr. */
+/** Wrap a command line for `bash -lc`, quoting it as a single POSIX argument. */
+function loginShell(commandLine: string): string {
+  return `bash -lc '${commandLine.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Run a command over SSH against a sandbox VM, collecting stdout/stderr.
+ *
+ * `login: true` runs through `bash -lc` so toolchains that install onto the
+ * profile PATH (nvm, pyenv, cargo, anything bootstrap adds to ~/.profile) are
+ * found. A non-interactive SSH command does NOT source the profile, so without
+ * this an agent gets `node: command not found` on a VM where node plainly
+ * works interactively. It is off for internal file I/O, whose stdout must stay
+ * byte-clean — a profile that prints anything would corrupt the payload.
+ */
 function sshRun(
   host: string,
   keyPath: string,
   command: string,
-  options: { cwd?: string; env?: Record<string, string>; abortSignal?: AbortSignal } = {},
+  options: {
+    cwd?: string;
+    env?: Record<string, string>;
+    abortSignal?: AbortSignal;
+    login?: boolean;
+  } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const envPrefix = options.env
     ? `${Object.entries(options.env)
@@ -134,7 +181,8 @@ function sshRun(
         .join(" ")} `
     : "";
   const cd = `cd ${JSON.stringify(options.cwd ?? DEFAULT_WORKDIR)} && `;
-  const remote = `${cd}${envPrefix}${command}`;
+  const inner = `${cd}${envPrefix}${command}`;
+  const remote = options.login ? loginShell(inner) : inner;
   return new Promise((resolve, reject) => {
     const child = spawnProcess(
       "ssh",
@@ -215,30 +263,69 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
     return t;
   };
 
-  // One ephemeral keypair per process, registered on first use.
+  // The account SSH key that actually executes commands. Materialized to a
+  // 0600 temp file once per process when supplied as contents.
   let keyDir: string | null = null;
   let keyPath: string | null = null;
-  let keyRegistered = false;
 
   const ensureKey = async (): Promise<string> => {
-    if (keyPath && keyRegistered) return keyPath;
+    if (keyPath) return keyPath;
+
+    const explicitPath = options.sshKeyPath ?? process.env.EXE_SANDBOX_SSH_KEY_PATH;
+    if (explicitPath) {
+      keyPath = explicitPath;
+      return keyPath;
+    }
+
+    const contents = options.sshKey ?? process.env.EXE_SANDBOX_SSH_KEY;
+    if (!contents) {
+      throw new Error(
+        "exeSandbox: no sandbox SSH key. Set EXE_SANDBOX_SSH_KEY (PEM contents) or " +
+          "EXE_SANDBOX_SSH_KEY_PATH. It must be a FULL-PERMISSION account key: a key " +
+          "registered through an API token inherits that token's command scope and cannot " +
+          "open a shell. Register it from an already-authenticated session with " +
+          "`ssh exe.dev \"ssh-key add '<public key>'\"`, on an account dedicated to this agent.",
+      );
+    }
     keyDir ??= mkdtempSync(join(tmpdir(), "exe-sbx-"));
     const priv = join(keyDir, "id_ed25519");
-    if (!keyPath) {
-      await new Promise<void>((resolve, reject) => {
-        const kg = spawnProcess("ssh-keygen", ["-t", "ed25519", "-N", "", "-q", "-f", priv], {
-          stdio: "ignore",
-        });
-        kg.on("error", reject);
-        kg.on("close", (c) => (c === 0 ? resolve() : reject(new Error("ssh-keygen failed"))));
-      });
-      chmodSync(priv, 0o600);
-      keyPath = priv;
+    // The trailing newline is mandatory; OpenSSH rejects a key file without one.
+    writeFileSync(priv, contents.endsWith("\n") ? contents : `${contents}\n`, { mode: 0o600 });
+    chmodSync(priv, 0o600);
+    keyPath = priv;
+    return keyPath;
+  };
+
+  /**
+   * Refuse to run when the account holds VMs this agent does not own.
+   *
+   * The sandbox key grants shell to every VM on the account, so a shared
+   * account silently hands the agent — and anything that compromises it —
+   * shell on unrelated machines. Prewarm is the last point where that is still
+   * cheap to fix, so fail loudly here rather than discovering it in an incident.
+   */
+  let accountChecked = false;
+  const assertDedicatedAccount = async (log?: (m: string) => void): Promise<void> => {
+    if (accountChecked || options.allowSharedAccount) return;
+    const out = (await exeExec("ls --json", { apiToken: token(), apiBase })) as {
+      vms?: { name?: string; vm_name?: string }[];
+    };
+    const own = (options.agentVmName ?? process.env.EXE_VM_NAME ?? hostname()).split(".")[0];
+    const foreign = (out.vms ?? [])
+      .map((v) => v.name ?? v.vm_name ?? "")
+      .filter((n) => n && !n.startsWith(`${namePrefix}-`) && n.split(".")[0] !== own);
+    if (foreign.length > 0) {
+      throw new Error(
+        `exeSandbox: refusing to start — the exe.dev account holds ${foreign.length} VM(s) ` +
+          `this agent does not own: ${foreign.join(", ")}. The sandbox SSH key grants shell to ` +
+          `EVERY VM on the account, so the account must be dedicated to this agent (its own VM ` +
+          `"${own}" plus sandboxes prefixed "${namePrefix}-"). Move the agent to its own ` +
+          `exe.dev account, or set allowSharedAccount: true if the client has accepted that ` +
+          `blast radius.`,
+      );
     }
-    const pub = readFileSync(`${priv}.pub`, "utf8").trim();
-    await exeExec(`ssh-key add ${JSON.stringify(pub)}`, { apiToken: token(), apiBase });
-    keyRegistered = true;
-    return priv;
+    accountChecked = true;
+    log?.(`exe: account check passed (own VM "${own}", sandbox prefix "${namePrefix}-")`);
   };
 
   const vmName = (suffix: string): string =>
@@ -268,19 +355,49 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
     };
   };
 
+  /**
+   * Wait until SSH reaches the VM ITSELF, not exe.dev's lobby REPL.
+   *
+   * When a VM name's route is stale — most often right after a delete and
+   * recreate of the same name — `<name>.exe.xyz` resolves to the exe.dev REPL
+   * instead. The REPL accepts the connection and answers every command with
+   * `command not found`, so a naive readiness probe either passes against the
+   * wrong host or fails with an empty error while the VM shows `running`. Both
+   * are miserable to debug, so require a sentinel echoed back by a real shell.
+   */
+  const READY_SENTINEL = "__exe_sbx_ready__";
   const waitForSsh = async (vm: ExeVm, key: string): Promise<void> => {
     const deadline = Date.now() + bootTimeout;
     let lastError = "";
+    let sawRepl = false;
     while (Date.now() < deadline) {
-      const probe = await sshRun(vm.host, key, "true", { cwd: "/" }).catch((e: Error) => {
-        lastError = e.message;
-        return null;
-      });
-      if (probe && probe.exitCode === 0) return;
-      if (probe) lastError = probe.stderr.slice(0, 200);
+      const probe = await sshRun(vm.host, key, `echo ${READY_SENTINEL}`, { cwd: "/" }).catch(
+        (e: Error) => {
+          lastError = e.message;
+          return null;
+        },
+      );
+      if (probe?.stdout.includes(READY_SENTINEL)) return;
+      if (probe) {
+        const combined = `${probe.stdout}${probe.stderr}`;
+        if (/exe\.dev repl/i.test(combined)) {
+          sawRepl = true;
+          lastError = "SSH is landing on the exe.dev lobby REPL, not the VM (stale route).";
+        } else {
+          lastError = (probe.stderr || probe.stdout).slice(0, 200);
+        }
+      }
       await new Promise((r) => setTimeout(r, 3000));
     }
-    throw new Error(`exeSandbox: VM ${vm.name} did not accept SSH within ${bootTimeout}ms. ${lastError}`);
+    throw new Error(
+      `exeSandbox: VM ${vm.name} did not accept SSH within ${bootTimeout}ms. ${lastError}` +
+        (sawRepl
+          ? ` This VM name's route is stale — exe.dev reuses names, and a name deleted and` +
+            ` recreated within a few minutes can keep resolving to the lobby. Session VMs use a` +
+            ` unique suffix to avoid this; a template VM hitting it needs a new templateKey or a` +
+            ` few minutes for the route to settle.`
+          : ""),
+    );
   };
 
   /** Build the SandboxSession surface eve expects, over SSH to one VM. */
@@ -302,6 +419,7 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
         cwd: opts.cwd ? resolvePath(opts.cwd) : workdir,
         env: opts.env,
         abortSignal: opts.abortSignal,
+        login: true,
       });
       return { ...r, command: cmd };
     };
@@ -377,7 +495,7 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
         "-o",
         "IdentitiesOnly=yes",
             vm.host,
-            `cd ${JSON.stringify(opts.cwd ? resolvePath(opts.cwd) : workdir)} && ${cmd}`,
+            loginShell(`cd ${JSON.stringify(opts.cwd ? resolvePath(opts.cwd) : workdir)} && ${cmd}`),
           ],
           { stdio: ["pipe", "pipe", "pipe"] },
         );
@@ -388,6 +506,43 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
           kill: () => child.kill("SIGKILL"),
           exited: new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? 0))),
         };
+      },
+      removePath: async (opts: { path: string; force?: boolean; recursive?: boolean }) => {
+        const flags = `${opts.recursive ? "r" : ""}${opts.force ? "f" : ""}`;
+        const r = await sshRun(vm.host, key, `rm ${flags ? `-${flags}` : ""} ${quote(opts.path)}`, {
+          cwd: "/",
+        });
+        if (r.exitCode !== 0 && !opts.force) {
+          throw new Error(`removePath ${opts.path}: ${r.stderr.trim()}`);
+        }
+      },
+      /**
+       * A sandbox VM has no host-level firewall this backend can drive, so the
+       * only policies it can honor honestly are the two it can enforce with
+       * local rules. Anything finer (per-domain allow-lists, header injection)
+       * would be a silent no-op, and a network policy that silently does
+       * nothing is worse than one that refuses.
+       */
+      setNetworkPolicy: async (policy: unknown) => {
+        const mode = typeof policy === "string" ? policy : (policy as { mode?: string })?.mode;
+        if (mode === "allow-all") return;
+        if (mode === "deny-all") {
+          const r = await sshRun(
+            vm.host,
+            key,
+            "sudo -n iptables -P OUTPUT DROP && sudo -n iptables -A OUTPUT -o lo -j ACCEPT",
+            { cwd: "/" },
+          );
+          if (r.exitCode !== 0) {
+            throw new Error(`setNetworkPolicy deny-all failed: ${r.stderr.trim()}`);
+          }
+          return;
+        }
+        throw new Error(
+          `exeSandbox: unsupported network policy ${JSON.stringify(mode)}. This backend ` +
+            `honors only "allow-all" and "deny-all"; per-domain policies need a firewall ` +
+            `it does not control, and pretending to apply one would be worse than refusing.`,
+        );
       },
       /** exe-specific: the sandbox's own public URL, for shareable previews. */
       publicUrl: vm.httpsUrl,
@@ -407,6 +562,7 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
       seedFiles: ReadonlyArray<{ path: string; content: string | Buffer }>;
     }): Promise<{ reused: boolean }> {
       if (templates.has(input.templateKey)) return { reused: true };
+      await assertDedicatedAccount(input.log);
       const key = await ensureKey();
       const name = vmName(`tpl-${input.templateKey.slice(0, 12)}`);
       // Template VMs outlive the process. If one is already on the account for
@@ -463,7 +619,13 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
         vm = { name: existing, host: `${existing}.exe.xyz`, httpsUrl: `https://${existing}.exe.xyz` };
       } else {
         const template = input.templateKey ? templates.get(input.templateKey) : undefined;
-        vm = await createVm(vmName(input.sessionKey.slice(0, 20)), template?.name);
+        // Never reuse a session VM name. exe.dev recycles names, and a name
+        // recreated soon after deletion can keep routing to the lobby REPL —
+        // which looks exactly like a VM that boots but refuses every command.
+        // A unique suffix sidesteps the whole class of problem; reconnect does
+        // not depend on the name being derivable, since captureState stores it.
+        const unique = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`;
+        vm = await createVm(vmName(`${input.sessionKey.slice(0, 12)}-${unique}`), template?.name);
         await waitForSsh(vm, key);
       }
       const session = buildSession(vm, key, input.sessionKey);
@@ -487,15 +649,11 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
         await exeExec(`rm ${vm.name}`, { apiToken: token(), apiBase }).catch(() => undefined);
       }
       templates.clear();
-      if (keyPath && keyRegistered) {
-        const pub = readFileSync(`${keyPath}.pub`, "utf8").trim();
-        await exeExec(`ssh-key remove ${JSON.stringify(pub)}`, {
-          apiToken: token(),
-          apiBase,
-        }).catch(() => undefined);
-        keyRegistered = false;
-      }
+      // The sandbox key belongs to the operator's account — never deregister
+      // it. Only the temp copy of it is ours to clean up.
       if (keyDir) rmSync(keyDir, { recursive: true, force: true });
+      keyDir = null;
+      keyPath = null;
     },
   };
 }
