@@ -19,6 +19,7 @@ import {
   type ChannelKind,
   type HostKind,
   channelPlan,
+  engineerPlan,
   envExample,
   evalFileTs,
   evalScript,
@@ -127,9 +128,10 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
   }
 
-  if (engineer) {
-    console.log(bold("\n2c   Engineer layer: workshop sandbox + vision dev loop …"));
-    run("npx", ["eve", "add", "@kybernesis/engineer", "--overwrite"], { cwd: dir });
+  const engPlan = engineer ? engineerPlan(host, DEFAULT_MODEL) : null;
+  if (engPlan) {
+    console.log(bold("\n2c   Engineer subagent: workshop sandbox + vision dev loop …"));
+    run("npm", ["install", ...engPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
     for (const item of ENGINEER_OFFICIAL_ITEMS) {
       const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
       if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
@@ -178,6 +180,14 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
   }
 
+  if (engPlan) {
+    for (const file of engPlan.files) {
+      const full = join(dir, file.path);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, file.content);
+    }
+  }
+
   console.log(bold("\n5/6  Env template + hermetic eval script …"));
   writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env));
   const pkgPath = join(dir, "package.json");
@@ -200,7 +210,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     "self-testing (evals)",
     channel === "none" ? null : `${channel} channel`,
     host === "exe" ? "exe.dev host" : null,
-    engineer ? "engineer (workshop + vision loop)" : null,
+    engineer ? "engineer subagent (workshop + vision loop)" : null,
     depts.length ? `${depts.length} dept subagent(s)` : null,
   ].filter(Boolean);
 
@@ -208,6 +218,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     `Arcana: create workspaces (${name}-company, ${name}-eval${depts.map((d) => `, ${name}-${d}`).join("")}) + scoped kb_ keys; fill .env.local from .env.example`,
     ...hostSteps(host, name),
     ...plan.steps,
+    ...(engPlan?.steps ?? []),
     `Control plane: register agent "${name}" at ${issuer}/agents + grant the pilot cohort`,
     `npm run eval → green → deploy → live smoke + the revoke demo`,
   ];

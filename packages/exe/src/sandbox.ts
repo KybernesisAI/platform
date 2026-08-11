@@ -1,4 +1,33 @@
 /**
+ * NOT USABLE AS WRITTEN — kept as a documented dead end and a measurement log.
+ *
+ * exe.dev deliberately separates programmatic VM lifecycle from interactive
+ * shell. An SSH key registered THROUGH an API token inherits that token's
+ * command scope, and arbitrary shell exec is not a scoped command, so such a
+ * key is refused with 'command not allowed by SSH key permissions'. Adding
+ * 'ssh' to the token scope only permits the REPL's own ssh command, and the
+ * HTTPS API refuses exec outright ('ssh command requires an SSH session').
+ *
+ * The only working path is a FULL-PERMISSION account SSH key on the agent host
+ * — a long-lived credential granting shell to every VM on the account. That is
+ * the opposite of what this backend was for, and not something to hand a
+ * client. Use eve's docker() backend on the agent's own VM instead.
+ *
+ * Measured while proving this out (all still true and useful):
+ * - VM create ~4s; clone of a prepared template ~2s; prewarm+bootstrap ~7s.
+ * - Clones DO carry disk state, but only after `sync` — writes sitting in the
+ *   page cache are absent from the snapshot, silently.
+ * - /workspace is root-owned on the base image; create it with sudo + chown.
+ * - Template VMs outlive the process: adopt an existing one rather than
+ *   recreating it, or creation fails on a name collision.
+ * - Sandbox VM names get REUSED, so host keys change. Never use the caller's
+ *   known_hosts: a stale entry silently reroutes SSH into exe.dev's REPL,
+ *   where every command returns 'command not found' and looks like a dead VM.
+ *
+ * Revisit only if exe.dev adds a scoped exec path (a token running commands on
+ * a VM it owns) — that is the missing primitive.
+ */
+/**
  * exe.dev VM-backed sandbox for eve agents — OPTIONAL.
  * Import from `@kybernesis/exe/sandbox` only when an agent runs code.
  *
@@ -115,7 +144,13 @@ function sshRun(
         "-o",
         "BatchMode=yes",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "IdentitiesOnly=yes",
         "-o",
         "ConnectTimeout=20",
         host,
@@ -208,6 +243,20 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
 
   const vmName = (suffix: string): string =>
     `${namePrefix}-${suffix}`.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 52);
+
+  const vmFromName = (name: string): ExeVm => ({
+    name,
+    host: `${name}.exe.xyz`,
+    httpsUrl: `https://${name}.exe.xyz`,
+  });
+
+  /** Does a VM with this name already exist on the account? */
+  const vmExists = async (name: string): Promise<boolean> => {
+    const out = (await exeExec("ls", { apiToken: token(), apiBase })) as {
+      vms?: { name?: string; vm_name?: string }[];
+    };
+    return (out.vms ?? []).some((v) => (v.name ?? v.vm_name) === name);
+  };
 
   const createVm = async (name: string, from?: string): Promise<ExeVm> => {
     const cmd = from ? `cp ${from} ${name} --json` : `new --name ${name} --json`;
@@ -320,7 +369,13 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
             "-o",
             "BatchMode=yes",
             "-o",
-            "StrictHostKeyChecking=accept-new",
+            "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "IdentitiesOnly=yes",
             vm.host,
             `cd ${JSON.stringify(opts.cwd ? resolvePath(opts.cwd) : workdir)} && ${cmd}`,
           ],
@@ -354,11 +409,25 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
       if (templates.has(input.templateKey)) return { reused: true };
       const key = await ensureKey();
       const name = vmName(`tpl-${input.templateKey.slice(0, 12)}`);
+      // Template VMs outlive the process. If one is already on the account for
+      // this templateKey, adopt it instead of rebuilding — that is the whole
+      // point of a template, and it makes prewarm idempotent across restarts.
+      if (await vmExists(name)) {
+        const existing = vmFromName(name);
+        templates.set(input.templateKey, existing);
+        input.log?.(`exe: reusing existing template VM ${name}`);
+        return { reused: true };
+      }
       input.log?.(`exe: creating template VM ${name}`);
       const vm = await createVm(name);
       await waitForSsh(vm, key);
       const session = buildSession(vm, key, input.templateKey);
-      await session.run({ command: `mkdir -p ${JSON.stringify(workdir)}`, cwd: "/" });
+      // /workspace is root-owned on the base image; create it once and hand it
+      // to the login user so every later file op works without sudo.
+      await session.run({
+        command: `sudo -n mkdir -p ${JSON.stringify(workdir)} && sudo -n chown -R $(id -u):$(id -g) ${JSON.stringify(workdir)}`,
+        cwd: "/",
+      });
       for (const file of input.seedFiles) {
         await session.writeBinaryFile({
           path: file.path,
@@ -372,6 +441,11 @@ export function exeSandbox(options: ExeSandboxOptions = {}) {
         input.log?.("exe: running bootstrap in the template VM");
         await input.bootstrap({ use: async () => session });
       }
+      // Flush before the template can be cloned: exe clones from a disk
+      // snapshot, and writes still sitting in the page cache do NOT appear in
+      // the clone. Without this, a session VM comes up missing everything
+      // bootstrap just installed — silently, since the clone itself succeeds.
+      await session.run({ command: "sync", cwd: "/" });
       templates.set(input.templateKey, vm);
       input.log?.(`exe: template ${name} ready (clones take ~4s)`);
       return { reused: false };

@@ -41,10 +41,17 @@ export default defineTool({
       .describe("Public filename shown in the URL; defaults to the file's basename"),
   }),
   async execute({ path, filename }, ctx) {
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    // Storage is pluggable: a self-hosted client may have no Vercel account at
+    // all. Vercel Blob when a token is present; otherwise a directory on the
+    // host that something already serves (DELIVER_DIR + DELIVER_BASE_URL).
+    const hasBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+    const hostDir = process.env.DELIVER_DIR;
+    const hostBase = process.env.DELIVER_BASE_URL;
+    if (!hasBlob && !(hostDir && hostBase)) {
       throw new Error(
-        "File delivery is not configured: BLOB_READ_WRITE_TOKEN is missing. " +
-          "Create and link a Blob store: vercel blob create-store <name> --access public --yes",
+        "File delivery is not configured. Either set BLOB_READ_WRITE_TOKEN " +
+          "(vercel blob create-store <name> --access public --yes), or set " +
+          "DELIVER_DIR and DELIVER_BASE_URL to a directory this host serves.",
       );
     }
     const sandbox = await ctx.getSandbox();
@@ -59,17 +66,33 @@ export default defineTool({
       ? "text/plain; charset=utf-8"
       : (NATIVE[ext] ?? "application/octet-stream");
     const day = new Date().toISOString().slice(0, 10);
-    const blob = await put(`deliveries/${day}/${Date.now().toString(36)}/${name}`, Buffer.from(bytes), {
-      access: "public",
-      addRandomSuffix: false,
-      contentType,
-    });
+    const key = `deliveries/${day}/${Date.now().toString(36)}/${name}`;
+
+    let url: string;
+    if (hasBlob) {
+      const blob = await put(key, Buffer.from(bytes), {
+        access: "public",
+        addRandomSuffix: false,
+        contentType,
+      });
+      url = blob.url;
+    } else {
+      // Host-served delivery: write under DELIVER_DIR and hand back the URL the
+      // host serves it at. Whatever serves that directory owns access control.
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      const { join, dirname } = await import("node:path");
+      const target = join(hostDir!, key);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, Buffer.from(bytes));
+      url = `${hostBase!.replace(/\/$/, "")}/${key}`;
+    }
+
     return {
-      url: blob.url,
+      url,
       filename: name,
       byteSize: bytes.byteLength,
       note:
-        "Share this URL with the user — it opens in a browser (text renders inline) and can be downloaded and kept. It is public to anyone with the link. " +
+        "Share this URL with the user. Text formats render inline; HTML is served as a DOWNLOAD by Vercel Blob (it will not render in a browser) — to show someone a web page, deploy it or use a preview host instead. It is public to anyone with the link. " +
         "IMPORTANT: post the URL as PLAIN TEXT on its own line. Never wrap it in bold, italics, backticks, angle-bracket labels, or trailing punctuation — formatting characters get glued onto the URL in chat clients and BREAK the link.",
     };
   },

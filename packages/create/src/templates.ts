@@ -381,3 +381,193 @@ export function hostSteps(host: HostKind, name: string): string[] {
     `npx eve deploy`,
   ];
 }
+
+// ── Engineer subagent ───────────────────────────────────────────────────
+// `--engineer` scaffolds a DECLARED SUBAGENT that owns the build capability,
+// rather than granting it to the root agent. The root stays whatever it is to
+// the client (assistant, chief of staff); only the builder gets shell, a
+// browser, and a sandbox. Subagents own their own sandbox — they do NOT
+// inherit the root's — so the workshop is written into the subagent.
+
+export interface EngineerPlan {
+  files: Array<{ path: string; content: string }>;
+  deps: string[];
+  steps: string[];
+}
+
+/** The workshop sandbox, per host. Same recipe; different backend. */
+function workshopSandbox(host: HostKind): string {
+  if (host === "exe") {
+    return `import { defineSandbox } from "eve/sandbox";
+import { docker } from "eve/sandbox/docker";
+
+/**
+ * The engineer workshop, self-hosted: pnpm + Playwright + Chromium baked into
+ * the TEMPLATE so warm sessions run render→screenshot→vision in seconds.
+ *
+ * Docker rather than vercel(): the hosted backend needs Vercel OIDC, which does
+ * not exist off-Vercel.
+ *
+ * HOST PREREQUISITE: some images ship Docker disabled (exe.dev's exeuntu runs
+ * \`systemctl disable docker.service\`). Run \`sudo systemctl enable --now docker\`
+ * or every build fails with SandboxTemplateNotProvisionedError.
+ *
+ * NOTE: Docker sessions do not enforce a domain allowlist the way the hosted
+ * backend does. Egress control is the HOST's responsibility here — a deliberate
+ * difference from the Vercel deployment, not an oversight.
+ */
+export default defineSandbox({
+  backend: docker(),
+  revalidationKey: () => "kybernesis-workshop-v5-docker",
+  async bootstrap({ use }) {
+    const sandbox = await use();
+    await sandbox.run({ command: "apt-get update" });
+    await sandbox.run({ command: "npm install -g pnpm" });
+    await sandbox.run({
+      command:
+        "mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\"name\\":\\"kyb-shot\\",\\"private\\":true}' > package.json && npm install playwright",
+    });
+    await sandbox.run({
+      command: "cd /workspace/.shot && npx playwright install --with-deps chromium",
+    });
+  },
+});
+`;
+  }
+  return `import { defineSandbox } from "eve/sandbox";
+import { vercel } from "eve/sandbox/vercel";
+
+/**
+ * The engineer workshop: a warm, safe cloud dev machine.
+ *
+ * TEMPLATE bootstrap (once, inherited by every session): pnpm + Playwright +
+ * Chromium. Prewarm runs at deploy time, so a broken bootstrap fails the build
+ * loudly and warm sessions run the full render→screenshot→vision loop in
+ * seconds. Backend PINNED to Vercel Sandbox — hosted sandboxes even from local
+ * dev (run \`vercel link\` + \`vercel env pull\` first), so evals exercise the
+ * exact production backend. No Docker anywhere.
+ *
+ * All sessions run under a domain ALLOWLIST: an agent that installs arbitrary
+ * npm packages must not have open egress. A blocked domain fails loudly;
+ * treat every addition as a security decision.
+ */
+export default defineSandbox({
+  backend: vercel({
+    resources: { vcpus: 4 },
+    networkPolicy: {
+      allow: [
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "*.githubusercontent.com",
+        "cdn.playwright.dev",
+        "playwright.azureedge.net",
+        "playwright.download.prss.microsoft.com",
+        "storage.googleapis.com",
+        "archive.ubuntu.com",
+        "security.ubuntu.com",
+        "ports.ubuntu.com",
+        "*.ubuntu.com",
+        "deb.debian.org",
+        "security.debian.org",
+        "*.debian.org",
+        "ai-gateway.vercel.sh",
+        "vercel.com",
+        "*.vercel.app",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+      ],
+    },
+  }),
+  revalidationKey: () => "kybernesis-workshop-v5",
+  async bootstrap({ use }) {
+    const sandbox = await use();
+    // The egress proxy carries HTTPS only; apt defaults to http:// mirrors, so
+    // every index fetch silently fails. Rewrite to https first.
+    await sandbox.run({
+      command:
+        "find /etc/apt -type f \\\\( -name '*.list' -o -name '*.sources' \\\\) -exec sed -i 's|http://|https://|g' {} + && apt-get update",
+    });
+    await sandbox.run({ command: "npm install -g pnpm" });
+    await sandbox.run({
+      command:
+        "mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\"name\\":\\"kyb-shot\\",\\"private\\":true}' > package.json && npm install playwright",
+    });
+    await sandbox.run({
+      command: "cd /workspace/.shot && npx playwright install --with-deps chromium",
+    });
+  },
+});
+`;
+}
+
+export function engineerPlan(host: HostKind, model: string): EngineerPlan {
+  const onExe = host === "exe";
+  const files: EngineerPlan["files"] = [
+    {
+      path: "agent/subagents/builder/agent.ts",
+      content: onExe
+        ? `import { defineAgent } from "eve";
+import { createOpenAI } from "@ai-sdk/openai";
+import { exeModel } from "@kybernesis/exe";
+
+// The specialist the root agent delegates BUILDING to. \`description\` is what
+// the root routes on — keep it about building, not answering.
+export default defineAgent({
+  description:
+    "Builds and runs software: scaffolds projects, writes code, installs dependencies, runs builds and dev servers, and visually verifies rendered pages. Use when the user asks for something to be BUILT, prototyped, deployed, or fixed in code — not for questions, planning, or scheduling.",
+  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
+  modelContextWindowTokens: 200_000,
+});
+`
+        : `import { defineAgent } from "eve";
+
+// The specialist the root agent delegates BUILDING to. \`description\` is what
+// the root routes on — keep it about building, not answering.
+export default defineAgent({
+  description:
+    "Builds and runs software: scaffolds projects, writes code, installs dependencies, runs builds and dev servers, and visually verifies rendered pages. Use when the user asks for something to be BUILT, prototyped, deployed, or fixed in code — not for questions, planning, or scheduling.",
+  model: ${JSON.stringify(model)},
+});
+`,
+    },
+    {
+      path: "agent/subagents/builder/extensions/engineer.ts",
+      content: `// Engineer layer mounted LOCALLY on this subagent (eve >=0.30): screenshot,
+// deliver, and the trade-school skills belong to \`builder\` alone. The root
+// agent never gets shell or a browser.
+export { default } from "@kybernesis/engineer";
+`,
+    },
+    {
+      path: "agent/subagents/builder/sandbox/sandbox.ts",
+      content: workshopSandbox(host),
+    },
+  ];
+
+  if (onExe) {
+    files.push({
+      path: "agent/subagents/builder/tools/preview.ts",
+      content: `export { previewTool as default } from "@kybernesis/exe/preview";
+`,
+    });
+  }
+
+  return {
+    files,
+    deps: onExe ? ["@kybernesis/engineer", "@kybernesis/exe"] : ["@kybernesis/engineer"],
+    steps: onExe
+      ? [
+          "Enable Docker on the host (some images ship it disabled): sudo systemctl enable --now docker",
+          "Preview server (so the agent can show you what it built):\n       mkdir -p ~/preview && setsid python3 -m http.server 3456 --directory ~/preview &\n       then open https://<vm>.exe.xyz:3456/<file> (account-gated, not public)",
+          "File delivery needs object storage: set BLOB_READ_WRITE_TOKEN (Vercel Blob) or DELIVER_DIR + DELIVER_BASE_URL to serve from this host",
+          "Public deploys need the client's own Vercel token — Vercel Connect does NOT work off-Vercel",
+        ]
+      : [
+          "File delivery: vercel blob create-store <name>-deliverables --access public --yes",
+          "Preview deploys: eve add connection/vercel, then vercel connect create mcp.vercel.com --name vercel && vercel connect attach mcp.vercel.com/vercel --yes",
+        ],
+  };
+}
