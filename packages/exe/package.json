@@ -31,6 +31,10 @@
     "./photon": {
       "types": "./dist/photon.d.ts",
       "default": "./dist/photon.js"
+    },
+    "./sandbox": {
+      "types": "./dist/sandbox.d.ts",
+      "default": "./dist/sandbox.js"
     }
   },
   "scripts": {
