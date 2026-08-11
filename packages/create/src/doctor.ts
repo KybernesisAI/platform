@@ -95,19 +95,40 @@ export async function doctor(): Promise<void> {
   }
 
   // ── slack ──────────────────────────────────────────────────────────────
-  if (env.SLACK_CONNECTOR_UID) add("pass", `Slack connector uid: ${env.SLACK_CONNECTOR_UID}`, "verify trigger path /eve/v1/slack (vercel connect list)");
-  else add("warn", "SLACK_CONNECTOR_UID not set", "vercel connect create slack --triggers");
+  // Only relevant when the agent actually has a Slack channel — a client on
+  // iMessage or Telegram should never be told to create a Slack connector.
+  const hasSlackChannel = existsSync(join(cwd, "agent/channels/slack.ts"));
+  if (hasSlackChannel) {
+    if (env.SLACK_CONNECTOR_UID) add("pass", `Slack connector uid: ${env.SLACK_CONNECTOR_UID}`, "verify trigger path /eve/v1/slack (vercel connect list)");
+    else if (env.SLACK_BOT_TOKEN) add("pass", "Slack via portable credentials (SLACK_BOT_TOKEN)");
+    else add("warn", "Slack channel present but no credentials", "SLACK_CONNECTOR_UID (Vercel) or SLACK_BOT_TOKEN (portable)");
+  }
 
   // ── engineer layer (optional — checked only when installed) ────────────
   const hasEngineer = Boolean(deps["@kybernesis/engineer"]) || existsSync(join(cwd, "agent/extensions/engineer.ts"));
   if (hasEngineer) {
     add("pass", `@kybernesis/engineer ${deps["@kybernesis/engineer"] ?? "(extension file present)"}`);
-    if (existsSync(join(cwd, "agent/sandbox/sandbox.ts"))) add("pass", "workshop sandbox file present");
-    else add("fail", "agent/sandbox/sandbox.ts missing", "eve add @kybernesis/engineer --overwrite writes it");
-    if (env.BLOB_READ_WRITE_TOKEN) add("pass", "file delivery configured (BLOB_READ_WRITE_TOKEN)");
-    else add("warn", "BLOB_READ_WRITE_TOKEN not set — deliver tool will fail", "vercel blob create-store <name>-deliverables --access public --yes");
+    // The workshop may sit on the root OR on the engineer subagent (the
+    // scoped pattern). Either is valid; neither is not.
+    const rootSandbox = existsSync(join(cwd, "agent/sandbox/sandbox.ts"));
+    const builderSandbox = existsSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts"));
+    if (rootSandbox || builderSandbox) {
+      add("pass", `workshop sandbox present (${builderSandbox ? "engineer subagent" : "root agent"})`);
+    } else {
+      add("fail", "no workshop sandbox", "the engineer layer needs one — on the root or on agent/subagents/builder/");
+    }
     const vercelConn = join(cwd, "agent/connections/vercel.ts");
-    if (existsSync(vercelConn)) {
+    const selfHostedAgent =
+      Boolean(deps["@kybernesis/exe"]) ||
+      (existsSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts")) &&
+        readFileSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts"), "utf8").includes("docker("));
+    if (selfHostedAgent && !existsSync(vercelConn)) {
+      add(
+        "pass",
+        "no Vercel MCP connection (self-hosted)",
+        "public deploys need the CLIENT's own Vercel token — Vercel Connect does not work off-Vercel",
+      );
+    } else if (existsSync(vercelConn)) {
       const src = readFileSync(vercelConn, "utf8");
       const uid = /connect\(\s*"([^"]+)"/.exec(src)?.[1];
       if (uid && uid.includes("/")) add("pass", `vercel connection uses connector UID (${uid})`, "verify attached: vercel connect list");
@@ -115,8 +136,10 @@ export async function doctor(): Promise<void> {
     } else {
       add("warn", "agent/connections/vercel.ts missing — no preview deploys/link-back", "eve add connection/vercel, then vercel connect create + attach");
     }
-    if (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN) add("pass", "Vercel credentials for local hosted sandboxes");
-    else add("warn", "no VERCEL_OIDC_TOKEN — local sandbox/eval runs cannot reach Vercel Sandbox", "vercel link && vercel env pull");
+    if (!selfHostedAgent) {
+      if (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN) add("pass", "Vercel credentials for local hosted sandboxes");
+      else add("warn", "no VERCEL_OIDC_TOKEN — local sandbox/eval runs cannot reach Vercel Sandbox", "vercel link && vercel env pull");
+    }
   }
 
   // ── dispatch edges (agent-to-agent — checked only when present) ────────
@@ -156,6 +179,86 @@ export async function doctor(): Promise<void> {
         add("pass", "eve channel accepts forwarded principals from enumerated peers only");
     } else if (Boolean(deps["@kybernesis/dispatch"]) && edgeFiles.length === 0) {
       add("warn", "@kybernesis/dispatch installed but no edges or dispatch channel found", "see the connect-agents skill");
+    }
+  }
+
+  // ── self-hosted agents (host !== Vercel) ───────────────────────────────
+  // Every check here cost a real debugging session on the first exe.dev
+  // deployment. None of them are theoretical.
+  const selfHosted =
+    Boolean(deps["@kybernesis/exe"]) ||
+    existsSync(join(cwd, "agent/sandbox/sandbox.ts")) &&
+      readFileSync(join(cwd, "agent/sandbox/sandbox.ts"), "utf8").includes("docker(");
+  if (selfHosted) {
+    // Vercel Connect needs Vercel OIDC — it CANNOT work off-Vercel, for Slack,
+    // the Vercel MCP connection, or anything else. Every such connection has to
+    // become a static credential the client issues.
+    const connectUsers: string[] = [];
+    for (const dir of ["agent/channels", "agent/connections"]) {
+      const full = join(cwd, dir);
+      if (!existsSync(full)) continue;
+      for (const f of readdirSync(full)) {
+        const file = join(full, f);
+        if (!f.endsWith(".ts")) continue;
+        if (readFileSync(file, "utf8").includes("@vercel/connect")) connectUsers.push(`${dir}/${f}`);
+      }
+    }
+    if (connectUsers.length) {
+      add(
+        "fail",
+        `Vercel Connect used off-Vercel: ${connectUsers.join(", ")}`,
+        "Connect authenticates via Vercel OIDC, which does not exist on this host — the agent will fail to boot. Switch to portable/static credentials",
+      );
+    } else {
+      add("pass", "no Vercel Connect dependencies (correct for a self-hosted agent)");
+    }
+
+    // eve start does not read .env.local the way eve dev does.
+    add(
+      "warn",
+      "self-hosted: export .env.local into the server process",
+      "eve start does NOT read it; use the supervision script from @kybernesis/exe (scripts/eve-server.sh)",
+    );
+
+    // Prewarm runs in the eve CLI, not the built server.
+    add(
+      "warn",
+      "self-hosted: start via `npx eve start`, not `node .output/server/index.mjs`",
+      "sandbox templates are prewarmed by the CLI; starting the server directly skips prewarm and every sandbox tool fails with SandboxTemplateNotProvisionedError",
+    );
+  }
+
+  // ── engineer subagent (build capability scoped to a subagent) ──────────
+  const builderDir = join(cwd, "agent/subagents/builder");
+  if (existsSync(builderDir)) {
+    // Subagents own their sandbox — they do NOT inherit the root's. Without one
+    // the builder gets a bare template and every screenshot fails with
+    // "Cannot find module 'playwright'" while the root's template is fine.
+    if (existsSync(join(builderDir, "sandbox/sandbox.ts"))) {
+      add("pass", "engineer subagent has its own workshop sandbox");
+    } else {
+      add(
+        "fail",
+        "engineer subagent has NO sandbox of its own",
+        "subagents do not inherit the root sandbox — add agent/subagents/builder/sandbox/sandbox.ts or the vision loop cannot run",
+      );
+    }
+    if (existsSync(join(builderDir, "extensions/engineer.ts"))) {
+      add("pass", "engineer mounted locally on the subagent (root keeps no shell)");
+    } else {
+      add("warn", "engineer extension not mounted on the subagent", "agent/subagents/builder/extensions/engineer.ts");
+    }
+    // Delivery: either storage works, or the agent cannot hand over artifacts.
+    if (env.BLOB_READ_WRITE_TOKEN) {
+      add("pass", "file delivery via Vercel Blob");
+    } else if (env.DELIVER_DIR && env.DELIVER_BASE_URL) {
+      add("pass", `file delivery via host directory (${env.DELIVER_DIR})`);
+    } else {
+      add(
+        "warn",
+        "file delivery not configured — the agent cannot hand over artifacts",
+        "set BLOB_READ_WRITE_TOKEN (the CLIENT's blob store) or DELIVER_DIR + DELIVER_BASE_URL",
+      );
     }
   }
 

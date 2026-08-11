@@ -39,11 +39,11 @@ import { suiteDir } from "./skills.js";
  * AND undoes real setup work (an Arcana workspace + scoped key per subagent).
  */
 const CORE_ITEMS = ["enterprise", "arcana", "evals"] as const;
-const ENGINEER_OFFICIAL_ITEMS = [
-  "extension/agent-browser",
-  "extension/github-tools",
-  "connection/vercel",
-] as const;
+// Official eve-registry limbs installed with the engineer subagent.
+// connection/vercel is Vercel-Connect-backed, so it is VERCEL-HOST ONLY: on a
+// self-hosted agent it cannot get an OIDC token and the agent fails to boot.
+const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
+const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
 const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
@@ -132,7 +132,8 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   if (engPlan) {
     console.log(bold("\n2c   Engineer subagent: workshop sandbox + vision dev loop …"));
     run("npm", ["install", ...engPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
-    for (const item of ENGINEER_OFFICIAL_ITEMS) {
+    const engItems = [...ENGINEER_ITEMS_ALL, ...(host === "vercel" ? ENGINEER_ITEMS_VERCEL : [])];
+    for (const item of engItems) {
       const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
       if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
     }
