@@ -8,7 +8,7 @@
  */
 
 /** Options for {@link exeModel}. */
-export interface ExeModelOptions {
+export interface ExeModelOptions<TModel> {
   /**
    * Model id served by the integration (e.g. `"gpt-5.6-sol"`). Must be a model
    * the integration's OpenAI provider actually exposes — check with
@@ -27,7 +27,7 @@ export interface ExeModelOptions {
    * agent already depends on.
    */
   createOpenAI: (config: { baseURL: string; apiKey: string }) => {
-    responses: (model: string) => unknown;
+    responses: (model: string) => TModel;
   };
 }
 
@@ -60,7 +60,7 @@ type CallOptions = {
  * It is harmless when the integration is gateway- or API-key-backed, so the
  * same agent file works against any provider source.
  */
-export function exeModel(options: ExeModelOptions): unknown {
+export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
   const baseURL =
     options.baseURL ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1";
 
@@ -79,7 +79,7 @@ export function exeModel(options: ExeModelOptions): unknown {
     },
   });
 
-  return {
+  const wrapped = {
     specificationVersion: base.specificationVersion,
     provider: base.provider,
     modelId: base.modelId,
@@ -89,4 +89,7 @@ export function exeModel(options: ExeModelOptions): unknown {
     doGenerate: (o: CallOptions) => base.doGenerate(forceStoreFalse(o)),
     doStream: (o: CallOptions) => base.doStream(forceStoreFalse(o)),
   };
+  // The wrapper is call-compatible with the provider's model; hand back the
+  // provider's own type so callers need no cast at the defineAgent() call site.
+  return wrapped as TModel;
 }

@@ -18,6 +18,8 @@ export interface HostPreflightResult {
 }
 
 export interface HostPreflightOptions {
+  /** Agent directory, for reading durable workflow state. Defaults to cwd. */
+  appDir?: string;
   /** LLM integration base URL. Defaults to EXE_LLM_URL or the default personal integration. */
   llmBaseUrl?: string;
   /** Local eve server base URL. Defaults to EVE_URL or http://127.0.0.1:8000. */
@@ -81,6 +83,27 @@ export async function hostPreflight(
           ? `${ids.length} models, but EXE_MODEL="${wanted}" is NOT among them`
           : `${ids.length} models available`
         : "integration returned no models",
+    });
+  }
+
+  // Durable truth about work done. A log file can look frozen while the agent
+  // is serving happily (`eve start` forwards only its startup banner to a
+  // redirected log), so never diagnose "nothing is happening" from logs alone.
+  try {
+    const { readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const runsDir = join(options.appDir ?? process.cwd(), ".eve/.workflow-data/runs");
+    const runs = readdirSync(runsDir).filter((f) => f.endsWith(".json")).length;
+    checks.push({
+      name: "workflow runs on disk",
+      ok: true,
+      detail: `${runs} run(s) recorded — the authoritative record of turns handled`,
+    });
+  } catch {
+    checks.push({
+      name: "workflow runs on disk",
+      ok: true,
+      detail: "no runs recorded yet (this agent has handled no turns)",
     });
   }
 
