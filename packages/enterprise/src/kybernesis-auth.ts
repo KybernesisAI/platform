@@ -13,7 +13,18 @@
  * session simply lacks the grant, and a suspended user cannot mint at all.
  */
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
-import { ForbiddenError, extractBearerToken, type AuthFn } from "eve/channels/auth";
+import {
+  ForbiddenError,
+  UnauthenticatedError,
+  extractBearerToken,
+  type AuthFn,
+} from "eve/channels/auth";
+import {
+  VERIFICATION_UNAVAILABLE,
+  VERIFICATION_UNAVAILABLE_CODE,
+  classifyVerifyFailure,
+  worthRetrying,
+} from "./jwks-failure.js";
 
 interface AgentGrant {
   agent: string;
@@ -25,6 +36,48 @@ export interface KybernesisAuthOptions {
   issuer: string;
   /** This agent's registered name in the control plane (agent_ref.name). */
   agent: string;
+}
+
+/**
+ * Verify every credential the caller presented, retrying once when the signing
+ * keys could not be fetched.
+ *
+ * Returns null when a credential was judged and rejected — the auth walk turns
+ * that into its own 401, unchanged and fail-closed. Throws when the keys stayed
+ * out of reach, because that is the agent's outage to report and not a claim
+ * about the caller: a client that is told "invalid session" logs the user out,
+ * while one told "cannot verify right now" simply tries again.
+ */
+async function verifyAll(
+  tokens: readonly string[],
+  jwks: ReturnType<typeof createRemoteJWKSet>,
+  issuer: string,
+): Promise<JWTPayload[] | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const payloads: JWTPayload[] = [];
+      for (const token of tokens) {
+        payloads.push((await jwtVerify(token, jwks, { issuer })).payload);
+      }
+      return payloads;
+    } catch (error) {
+      if (attempt === 0 && worthRetrying(error)) {
+        // jose re-fetches the key set when it has none cached, which is exactly
+        // the case after a failed fetch. A short pause covers an agent that is
+        // still booting and a control plane that blinked.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      if (classifyVerifyFailure(error, attempt > 0) === "unavailable") {
+        throw new UnauthenticatedError({
+          code: VERIFICATION_UNAVAILABLE_CODE,
+          message: VERIFICATION_UNAVAILABLE,
+        });
+      }
+      return null;
+    }
+  }
+  return null;
 }
 
 export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> {
@@ -52,12 +105,9 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
       // POST /api/agent/session only for an active caller→callee edge, so a
       // verified token that names THIS agent as callee IS the authorization —
       // grant/status checks happened at the mint, ≤300s ago (the revocation SLA).
-      let a2a: JWTPayload;
-      try {
-        a2a = (await jwtVerify(token, jwks, { issuer: options.issuer })).payload;
-      } catch {
-        return null;
-      }
+      const verified = await verifyAll([token], jwks, options.issuer);
+      if (!verified) return null;
+      const a2a = verified[0]!;
       if (a2a.kind !== "a2a" || typeof a2a.caller !== "string") return null;
       if (a2a.callee !== options.agent) {
         throw new ForbiddenError({
@@ -80,14 +130,12 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
       };
     }
 
-    let identity: JWTPayload;
-    let policy: JWTPayload;
-    try {
-      identity = (await jwtVerify(token, jwks, { issuer: options.issuer })).payload;
-      policy = (await jwtVerify(bundle, jwks, { issuer: options.issuer })).payload;
-    } catch {
-      return null; // bad signature, wrong issuer, or expired — fall through to 401
-    }
+    // bad signature, wrong issuer, or expired → null, and the walk 401s. Keys
+    // unreachable → verifyAll throws, so the caller is told the agent could not
+    // check rather than that their sign-in is bad.
+    const verified = await verifyAll([token, bundle], jwks, options.issuer);
+    if (!verified) return null;
+    const [identity, policy] = verified as [JWTPayload, JWTPayload];
 
     // The bundle must belong to the same user+org the identity token names.
     if (policy.user !== identity.sub || policy.org !== identity.org) return null;

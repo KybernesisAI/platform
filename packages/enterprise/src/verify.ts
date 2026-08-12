@@ -1,4 +1,9 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+import {
+  VERIFICATION_UNAVAILABLE,
+  classifyVerifyFailure,
+  worthRetrying,
+} from "./jwks-failure.js";
 
 /**
  * Verify a control-plane identity the same way `kybernesisAuth` does, for code
@@ -28,7 +33,12 @@ export interface VerifiedPrincipal {
 
 export type VerifyResult =
   | { ok: true; principal: VerifiedPrincipal }
-  | { ok: false; status: 401 | 403; error: string };
+  /**
+   * 503 is not a rejection of the caller: it means the signing keys could not be
+   * fetched, so nothing was judged. Callers should retry it rather than report a
+   * bad session, which is what a 401 would have them do.
+   */
+  | { ok: false; status: 401 | 403 | 503; error: string };
 
 interface AgentGrant {
   agent: string;
@@ -79,11 +89,24 @@ export async function verifyKybernesisRequest(
 
   let identity: JWTPayload;
   let policy: JWTPayload;
-  try {
-    identity = (await jwtVerify(token, jwks, { issuer: options.issuer })).payload;
-    policy = (await jwtVerify(bundle, jwks, { issuer: options.issuer })).payload;
-  } catch {
-    return { ok: false, status: 401, error: "Your session is not valid for this agent." };
+  for (let attempt = 0; ; attempt++) {
+    try {
+      identity = (await jwtVerify(token, jwks, { issuer: options.issuer })).payload;
+      policy = (await jwtVerify(bundle, jwks, { issuer: options.issuer })).payload;
+      break;
+    } catch (error) {
+      if (attempt === 0 && worthRetrying(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      // A credential that was judged and rejected is a 401. Keys we could not
+      // fetch are an outage on this side, and saying "your session is not valid"
+      // there points the user at their own sign-in for our network failure.
+      if (classifyVerifyFailure(error, attempt > 0) === "unavailable") {
+        return { ok: false, status: 503, error: VERIFICATION_UNAVAILABLE };
+      }
+      return { ok: false, status: 401, error: "Your session is not valid for this agent." };
+    }
   }
 
   if (policy.user !== identity.sub || policy.org !== identity.org) {
