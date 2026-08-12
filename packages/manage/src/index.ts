@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
 
 /**
@@ -28,25 +29,28 @@ import { defineChannel, GET, POST } from "eve/channels";
 const PREFIX = "/eve/v1/kyb";
 
 /**
- * Custom channels do NOT inherit the eve channel authenticator. These routes
- * install packages and write files, so an unguarded mount is remote code
- * execution on whatever port the agent serves — which for a webhook-driven
- * agent is a public one. Every route checks this first, and a missing secret
- * denies rather than defaults open.
+ * Custom channels do NOT run the eve channel's authenticator, so these routes
+ * must verify identity themselves. They verify the SAME control-plane identity
+ * the user already signed in with — not a separate key.
+ *
+ * An earlier version invented a shared secret for this. It was wrong: the user
+ * would have had to read it out of the agent's env file and paste it into a
+ * client, which is a workaround with a password box rather than authentication,
+ * and it bypassed the grants that govern every other door into this agent.
  */
-function authorized(req: Request, secret?: string): boolean {
-  const expected = secret ?? process.env.KYB_MANAGE_SECRET;
-  if (!expected) return false;
-  const header = req.headers.get("authorization") ?? "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  return presented.length > 0 && presented === expected;
+async function authorize(req: Request, options: ManageOptions): Promise<Response | null> {
+  const issuer = options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
+  const agent = options.agent ?? process.env.KYBERNESIS_AGENT;
+  if (!agent) {
+    return Response.json(
+      { ok: false, error: "This agent has no KYBERNESIS_AGENT set, so it cannot check grants." },
+      { status: 500 },
+    );
+  }
+  const result = await verifyKybernesisRequest(req, { issuer, agent });
+  if (result.ok) return null;
+  return Response.json({ ok: false, error: result.error }, { status: result.status });
 }
-
-const DENIED = () =>
-  Response.json(
-    { ok: false, error: "Management routes require a valid KYB_MANAGE_SECRET bearer token." },
-    { status: 401 },
-  );
 
 export interface ManageOptions {
   /** Repo root. Defaults to the process working directory. */
@@ -60,8 +64,10 @@ export interface ManageOptions {
   restartCommand?: string;
   /** Registry to install from. Defaults to the Kybernesis registry. */
   registry?: string;
-  /** Shared secret required on every route. Defaults to KYB_MANAGE_SECRET. */
-  secret?: string;
+  /** Control-plane issuer. Defaults to KYBERNESIS_ISSUER. */
+  issuer?: string;
+  /** This agent's registered name. Defaults to KYBERNESIS_AGENT. */
+  agent?: string;
 }
 
 interface RunResult {
@@ -136,7 +142,8 @@ export function manageChannel(options: ManageOptions = {}) {
     routes: [
       // What can be installed, and what already is.
       GET(PREFIX + "/catalog", async (req) => {
-        if (!authorized(req, options.secret)) return DENIED();
+        const denied = await authorize(req, options);
+        if (denied) return denied;
         const res = await fetch(registry, { signal: AbortSignal.timeout(20_000) }).catch(
           () => null,
         );
@@ -163,7 +170,8 @@ export function manageChannel(options: ManageOptions = {}) {
 
       // Install a registry item: files, dependencies, and env template.
       POST(PREFIX + "/install", async (req) => {
-        if (!authorized(req, options.secret)) return DENIED();
+        const denied = await authorize(req, options);
+        if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { item?: string };
         if (!body.item) return Response.json({ ok: false, error: "item is required" }, { status: 400 });
 
@@ -219,7 +227,8 @@ export function manageChannel(options: ManageOptions = {}) {
 
       // Write a schedule into the repo. eve discovers agent/schedules/*.ts.
       POST(PREFIX + "/schedule", async (req) => {
-        if (!authorized(req, options.secret)) return DENIED();
+        const denied = await authorize(req, options);
+        if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as {
           name?: string;
           cron?: string;
@@ -284,7 +293,8 @@ export default defineSchedule({
 
       // Remove a schedule this agent owns.
       POST(PREFIX + "/schedule/delete", async (req) => {
-        if (!authorized(req, options.secret)) return DENIED();
+        const denied = await authorize(req, options);
+        if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { name?: string };
         if (!body.name) return Response.json({ ok: false, error: "name is required" }, { status: 400 });
 
