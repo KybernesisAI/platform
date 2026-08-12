@@ -179,6 +179,73 @@ export function manageChannel(options: ManageOptions = {}) {
       }),
 
       // Install a registry item: files, dependencies, and env template.
+      /**
+       * Install a control-plane credential this agent needs to identify itself.
+       *
+       * The alternative is a person copying a secret out of an admin UI and
+       * pasting it into a deployment's env file, and nobody should be asked to
+       * do that — not a client, not an operator, not us. KYBER Studio is signed
+       * in as the owner, mints the credential from the control plane, and
+       * installs it here over the same authenticated channel. No human sees the
+       * value at any point.
+       *
+       * Deliberately NOT a general env-write route. That would be a way to set a
+       * model provider key, a webhook secret, anything at all — one
+       * authenticated bug away from being the most dangerous route in the agent.
+       * Only keys that identify the agent to the control plane are accepted, and
+       * no value is ever read back out.
+       */
+      POST(PREFIX + "/credential", async (req) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+
+        const body = (await req.json().catch(() => ({}))) as { key?: string; value?: string };
+        const ALLOWED = new Set(["KYBERNESIS_AGENT_CREDENTIAL"]);
+        if (!body.key || !ALLOWED.has(body.key)) {
+          return Response.json(
+            { ok: false, error: `Only ${[...ALLOWED].join(", ")} may be set here.` },
+            { status: 400 },
+          );
+        }
+        if (!body.value || body.value.length < 20) {
+          return Response.json({ ok: false, error: "value is required" }, { status: 400 });
+        }
+
+        const writable = writableRoot(appRoot);
+        if (!writable.ok) return Response.json({ ok: false, error: writable.reason }, { status: 409 });
+
+        const envPath = join(appRoot, ".env.local");
+        const current = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+        const line = `${body.key}=${JSON.stringify(body.value)}`;
+        const existing = new RegExp(String.raw`^${body.key}=.*`, "m");
+        const next = existing.test(current)
+          ? current.replace(existing, line)
+          : `${current.trimEnd()}\n${line}\n`;
+        writeFileSync(envPath, next, { mode: 0o600 });
+
+        // A credential is read from the environment at boot, so it does nothing
+        // until the process restarts. Reporting success without that would be
+        // reporting a change the agent is not yet using.
+        if (options.restartCommand) {
+          setTimeout(() => {
+            spawn(process.env.SHELL ?? "/bin/bash", ["-lc", options.restartCommand!], {
+              cwd: appRoot,
+              detached: true,
+              stdio: "ignore",
+            }).unref();
+          }, RESTART_DELAY_MS);
+        }
+
+        return Response.json({
+          ok: true,
+          key: body.key,
+          restarted: Boolean(options.restartCommand),
+          note: options.restartCommand
+            ? "Stored. The agent is restarting to pick it up."
+            : "Stored. It takes effect at the next restart.",
+        });
+      }),
+
       POST(PREFIX + "/install", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
