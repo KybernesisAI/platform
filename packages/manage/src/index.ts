@@ -358,18 +358,25 @@ export default manageChannel;
 export function routineTools(options: ManageOptions = {}) {
   const appRoot = options.appRoot ?? process.cwd();
 
-  const rebuild = async (): Promise<{ ok: boolean; output: string }> => {
-    const build = await run("npx eve build", appRoot);
-    if (build.ok && options.restartCommand) {
-      setTimeout(() => {
-        spawn(process.env.SHELL ?? "/bin/bash", ["-lc", options.restartCommand!], {
-          cwd: appRoot,
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-      }, 250);
-    }
-    return { ok: build.ok, output: build.output };
+  /**
+   * Apply a change WITHOUT holding the turn open.
+   *
+   * Rebuilding takes the better part of a minute, and awaiting it inside a tool
+   * call means the user watches "Reading create_routine result" for that whole
+   * time with nothing to show for it. The file is already written when this
+   * runs, so the answer is knowable immediately — the build, and the restart
+   * that makes it live, belong behind the conversation rather than inside it.
+   */
+  const applyInBackground = (): void => {
+    const restart = options.restartCommand;
+    const script = restart
+      ? `sleep 8 && npx eve build && sleep ${Math.round(RESTART_DELAY_MS / 1000)} && ${restart}`
+      : "sleep 8 && npx eve build";
+    spawn(process.env.SHELL ?? "/bin/bash", ["-lc", script], {
+      cwd: appRoot,
+      detached: true,
+      stdio: "ignore",
+    }).unref();
   };
 
   return {
@@ -404,23 +411,15 @@ export function routineTools(options: ManageOptions = {}) {
           "utf8",
         );
 
-        const built = await rebuild();
-        if (!built.ok) {
-          return {
-            created: false,
-            file: `agent/schedules/${slug}.ts`,
-            error: "Written, but the rebuild failed, so it is not live yet.",
-            output: built.output.slice(-600),
-          };
-        }
+        applyInBackground();
         return {
           created: true,
           name: slug,
           cron: input.cron,
           file: `agent/schedules/${slug}.ts`,
           note: options.restartCommand
-            ? "Live after a brief restart."
-            : "Written and built; needs a restart to take effect.",
+            ? "Written. It goes live in about a minute, when I reload — tell the user it is set and finish your reply now."
+            : "Written. It needs a rebuild and restart to take effect.",
         };
       },
     },
@@ -466,8 +465,8 @@ export function routineTools(options: ManageOptions = {}) {
         mkdirSync(trash, { recursive: true });
         writeFileSync(join(trash, `${slug}.ts`), readFileSync(file, "utf8"), "utf8");
         await run(`rm -f ${JSON.stringify(file)}`, appRoot);
-        const built = await rebuild();
-        return { deleted: built.ok, name: slug, kept: `.kyb-trash/schedules/${slug}.ts` };
+        applyInBackground();
+        return { deleted: true, name: slug, kept: `.kyb-trash/schedules/${slug}.ts` };
       },
     },
   };
