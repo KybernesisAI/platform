@@ -29,6 +29,16 @@ import { defineChannel, GET, POST } from "eve/channels";
 const PREFIX = "/eve/v1/kyb";
 
 /**
+ * How long to wait before restarting after a change.
+ *
+ * The restart is what makes a new routine or capability live, and it also kills
+ * whatever turn is in flight — including the turn that asked for it. Long enough
+ * for the agent to finish telling the user what it did; short enough that the
+ * change is live before they act on it.
+ */
+const RESTART_DELAY_MS = 20_000;
+
+/**
  * Custom channels do NOT run the eve channel's authenticator, so these routes
  * must verify identity themselves. They verify the SAME control-plane identity
  * the user already signed in with — not a separate key.
@@ -215,7 +225,7 @@ export function manageChannel(options: ManageOptions = {}) {
             detached: true,
             stdio: "ignore",
           }).unref();
-        }, 250);
+        }, RESTART_DELAY_MS);
 
         return Response.json({
           ok: true,
@@ -281,7 +291,7 @@ export default defineSchedule({
               detached: true,
               stdio: "ignore",
             }).unref();
-          }, 250);
+          }, RESTART_DELAY_MS);
         }
 
         return Response.json({
@@ -322,7 +332,7 @@ export default defineSchedule({
               detached: true,
               stdio: "ignore",
             }).unref();
-          }, 250);
+          }, RESTART_DELAY_MS);
         }
         return Response.json({ ok: build.ok, kept: `.kyb-trash/schedules/${slug}.ts` });
       }),
