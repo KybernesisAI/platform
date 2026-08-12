@@ -1,0 +1,23 @@
+{
+  "name": "manage",
+  "type": "registry:item",
+  "title": "Kybernesis Manage",
+  "description": "Let KYBER Studio change this agent: install capabilities and write schedules, authorized by the caller's control-plane grant.",
+  "dependencies": [
+    "@kybernesis/manage",
+    "@kybernesis/enterprise"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": ""
+  },
+  "files": [
+    {
+      "path": "registry/manage-channel.ts",
+      "type": "registry:file",
+      "target": "agent/channels/kyb.ts",
+      "content": "import { manageChannel } from \"@kybernesis/manage\";\n\n// Management routes for KYBER Studio: install a registry item, write a\n// schedule, rebuild, restart. Authorized by the caller's control-plane identity\n// and their grant on THIS agent — the same decision that lets them talk to it.\n//\n// The agent edits its own repository, so this only works where the repo is\n// present and writable (a VM, a container with the working copy). On a\n// read-only serverless bundle the routes refuse with that reason rather than\n// reporting a success that vanishes on the next deploy.\n//\n// restartCommand is what makes an install take effect. Without it the response\n// says a restart is still required instead of claiming the change is live.\nexport default manageChannel({\n  // appRoot: \"/home/exedev/my-agent\",\n  // restartCommand: \"bash ~/restart.sh\",\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

@@ -1,0 +1,51 @@
+{
+  "name": "local",
+  "type": "registry:item",
+  "title": "Kybernesis Local",
+  "description": "Work on the user's own computer through KYBER Studio: search, read, edit, write, and run commands, with per-effect consent on the desktop.",
+  "dependencies": [
+    "@kybernesis/local"
+  ],
+  "envVars": {
+    "LOCAL_EXEC_AGENT_SECRET": ""
+  },
+  "files": [
+    {
+      "path": "registry/local-tools.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_shell.ts",
+      "content": "import { localShellTool } from \"@kybernesis/local\";\n\n// The user's OWN machine, reached through KYBER Studio. Studio holds an\n// outbound connection to the control plane; these tools queue work on it and\n// wait for the answer, so nothing here connects to anything and no port opens.\n//\n// Consent lives on the desktop, per EFFECT rather than per tool: run-command,\n// read-file, write-file, list-directory. local_edit declares write-file and\n// local_search declares read-file for exactly that reason — two tools reaching\n// the same effect must not need two approvals, and must not be able to dodge\n// one.\n//\n// Sibling files: local_read.ts, local_list.ts, local_search.ts, local_edit.ts,\n// local_write.ts. Add only the ones this agent should have.\nexport default localShellTool();\n"
+    },
+    {
+      "path": "registry/local-read.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_read.ts",
+      "content": "import { localReadTool } from \"@kybernesis/local\";\n\n// Read a file from the user's machine.\nexport default localReadTool();\n"
+    },
+    {
+      "path": "registry/local-list.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_list.ts",
+      "content": "import { localListTool } from \"@kybernesis/local\";\n\n// List a directory on the user's machine.\nexport default localListTool();\n"
+    },
+    {
+      "path": "registry/local-search.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_search.ts",
+      "content": "import { localSearchTool } from \"@kybernesis/local\";\n\n// Search file contents on the user's machine. Declares the read-file effect.\nexport default localSearchTool();\n"
+    },
+    {
+      "path": "registry/local-edit.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_edit.ts",
+      "content": "import { localEditTool } from \"@kybernesis/local\";\n\n// Replace exact text in a file. Declares the write-file effect — same consequence as writing, so the same consent.\nexport default localEditTool();\n"
+    },
+    {
+      "path": "registry/local-write.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_write.ts",
+      "content": "import { localWriteTool } from \"@kybernesis/local\";\n\n// Write a file on the user's machine.\nexport default localWriteTool();\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

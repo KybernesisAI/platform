@@ -125,6 +125,71 @@
           "target": "agent/sandbox/sandbox.ts"
         }
       ]
+    },
+    {
+      "name": "local",
+      "type": "registry:item",
+      "title": "Kybernesis Local",
+      "description": "Work on the user's own computer through KYBER Studio: search, read, edit, write, and run commands, with per-effect consent on the desktop.",
+      "dependencies": [
+        "@kybernesis/local"
+      ],
+      "envVars": {
+        "LOCAL_EXEC_AGENT_SECRET": ""
+      },
+      "files": [
+        {
+          "path": "registry/local-tools.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_shell.ts"
+        },
+        {
+          "path": "registry/local-read.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_read.ts"
+        },
+        {
+          "path": "registry/local-list.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_list.ts"
+        },
+        {
+          "path": "registry/local-search.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_search.ts"
+        },
+        {
+          "path": "registry/local-edit.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_edit.ts"
+        },
+        {
+          "path": "registry/local-write.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_write.ts"
+        }
+      ]
+    },
+    {
+      "name": "manage",
+      "type": "registry:item",
+      "title": "Kybernesis Manage",
+      "description": "Let KYBER Studio change this agent: install capabilities and write schedules, authorized by the caller's control-plane grant.",
+      "dependencies": [
+        "@kybernesis/manage",
+        "@kybernesis/enterprise"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": ""
+      },
+      "files": [
+        {
+          "path": "registry/manage-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/kyb.ts"
+        }
+      ]
     }
   ]
 }
