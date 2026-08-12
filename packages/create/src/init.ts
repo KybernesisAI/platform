@@ -190,7 +190,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   }
 
   console.log(bold("\n5/6  Env template + hermetic eval script …"));
-  writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env));
+  writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env, host, DEFAULT_MODEL));
   const pkgPath = join(dir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   pkg.scripts = { ...pkg.scripts, eval: evalScript(name, depts) };

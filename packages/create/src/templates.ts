@@ -134,22 +134,55 @@ ${depts.length ? `  routing: [\n${routing}\n  ],\n` : ""}});
 `;
 }
 
-export function envExample(name: string, depts: string[], issuer: string, channelEnv: string[] = []): string {
+/**
+ * Env every self-hosted agent needs and cannot infer.
+ *
+ * Both of these have bitten a real deployment. EXE_MODEL must match the LLM
+ * integration actually attached — a ChatGPT subscription serves OpenAI models,
+ * so an Anthropic code default fails against it. EXE_VM_NAME has no default at
+ * all by design: guessing a host would hand a user a working link into another
+ * agent's machine.
+ */
+function exeEnvBlock(name: string, model: string): string {
+  return `# Self-hosted host + model (@kybernesis/exe)
+# EXE_MODEL must match the LLM integration you attached to the VM. A ChatGPT
+# subscription serves OpenAI models; the code default will fail against one.
+# Set it explicitly rather than relying on ${model}.
+EXE_MODEL="${model}"
+# Preview URLs are built from this. There is no default on purpose.
+EXE_VM_NAME="${name}"
+
+`;
+}
+
+export function envExample(
+  name: string,
+  depts: string[],
+  issuer: string,
+  channelEnv: string[] = [],
+  host: "vercel" | "exe" = "vercel",
+  model = "",
+): string {
   const deptVars = depts
     .map((d) => {
       const upper = d.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
       return `# ARCANA_${upper}_API_KEY="kb_..."\n# ARCANA_${upper}_WORKSPACE="${name}-${d}"`;
     })
     .join("\n");
+  const header =
+    host === "exe"
+      ? `# Real values live in .env.local ON THE HOST. \`eve start\` does NOT read it the
+# way \`eve dev\` does — scripts/eve-server.sh exports it into the process.`
+      : `# Real values belong in Vercel envs (prod/preview Sensitive); \`eve deploy\`
+# overwrites .env.local from the development environment on every deploy.`;
   return `# ── Kybernesis agent environment ─────────────────────────────────────
-# Real values belong in Vercel envs (prod/preview Sensitive); \`eve deploy\`
-# overwrites .env.local from the development environment on every deploy.
+${header}
 
 # Control-plane governance (@kybernesis/enterprise)
 KYBERNESIS_ISSUER="${issuer}"
 KYBERNESIS_AGENT="${name}"
 
-${channelEnv.length ? `# Channel\n${channelEnv.join("\n")}\n\n` : ""}# Arcana memory (@kybernesis/arcana) — one workspace + scoped kb_ key per brain
+${host === "exe" ? exeEnvBlock(name, model) : ""}${channelEnv.length ? `# Channel\n${channelEnv.join("\n")}\n\n` : ""}# Arcana memory (@kybernesis/arcana) — one workspace + scoped kb_ key per brain
 # ARCANA_API_KEY="kb_..."
 # ARCANA_COMPANY_WORKSPACE="${name}-company"
 # ARCANA_DM_WORKSPACE="${name}-company"
@@ -421,8 +454,11 @@ export default defineSandbox({
   revalidationKey: () => "kybernesis-workshop-v5-docker",
   async bootstrap({ use }) {
     const sandbox = await use();
+    // Base image is Debian-family; refresh indexes before installing browser deps.
     await sandbox.run({ command: "apt-get update" });
     await sandbox.run({ command: "npm install -g pnpm" });
+    // Explicit package.json rather than \`npm init -y\`: init derives the name from
+    // the directory, and npm rejects names starting with a dot (".shot").
     await sandbox.run({
       command:
         "mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\"name\\":\\"kyb-shot\\",\\"private\\":true}' > package.json && npm install playwright",
