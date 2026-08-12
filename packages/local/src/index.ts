@@ -27,17 +27,21 @@ export interface LocalToolsOptions {
   /** Control-plane base URL. Defaults to KYBERNESIS_ISSUER. */
   issuer?: string;
   /**
-   * Shared secret the relay checks. Defaults to LOCAL_EXEC_AGENT_SECRET.
+   * This agent's control-plane credential. Defaults to
+   * KYBERNESIS_AGENT_CREDENTIAL — the same one used to mint A2A sessions.
    *
-   * TEMPORARY, and deliberately loud about it: local execution is not yet a
-   * governed capability, so any holder of this secret can reach a connected
-   * desktop in the org. It must become a revocable grant on the agent edge —
-   * "may talk to this agent" and "may run commands on my laptop" are different
-   * decisions and should not share one switch.
+   * It replaces a shared secret that was hand-issued and said nothing about who
+   * was calling: the relay had to take the agent's name from the request body,
+   * so anything holding the secret could name any agent and reach that org's
+   * desktops. The credential is signed by the org's keys and revoked by
+   * disabling the agent, and the relay reads org and identity from the
+   * signature.
+   *
+   * Still true, and still worth saying: reaching a desktop is not yet its own
+   * revocable capability. "May talk to this agent" and "may run commands on my
+   * laptop" remain one decision rather than two.
    */
-  secret?: string;
-  /** This agent's name; the relay resolves the org from its registration. */
-  agent?: string;
+  credential?: string;
 }
 
 interface CallResult {
@@ -77,26 +81,29 @@ async function call(
   options: LocalToolsOptions,
   action: string,
   payload: Record<string, unknown>,
+  user?: string,
 ): Promise<unknown> {
   const issuer = (
     options.issuer ??
     process.env.KYBERNESIS_ISSUER ??
     "https://agent.kybernesis.ai"
   ).replace(/\/$/, "");
-  const secret = options.secret ?? process.env.LOCAL_EXEC_AGENT_SECRET;
-  const agent = options.agent ?? process.env.KYBERNESIS_AGENT ?? "unknown";
+  const credential = options.credential ?? process.env.KYBERNESIS_AGENT_CREDENTIAL;
 
-  if (!secret) {
+  if (!credential) {
     throw new Error(
-      "Local execution is not configured on this agent (LOCAL_EXEC_AGENT_SECRET is unset).",
+      "Local execution is not configured on this agent (KYBERNESIS_AGENT_CREDENTIAL is unset).",
     );
   }
-  const auth = { "content-type": "application/json", authorization: `Bearer ${secret}` };
+  const auth = { "content-type": "application/json", authorization: `Bearer ${credential}` };
 
   const queued = await fetch(`${issuer}/api/local-exec/call`, {
     method: "POST",
+    // No agent name in the body: the relay reads it from the credential's
+    // signature. A name in the body is a claim, and a claim is exactly what
+    // this route used to route on.
     headers: auth,
-    body: JSON.stringify({ agent, action, payload }),
+    body: JSON.stringify({ action, payload, ...(user ? { user } : {}) }),
     signal: AbortSignal.timeout(30_000),
   });
   if (queued.status === 401) {
@@ -160,6 +167,24 @@ async function call(
   }
 }
 
+/**
+ * The person whose turn is asking, from the verified session principal.
+ *
+ * kybernesisAuth puts the control-plane user id on the session, so this is the
+ * same identity the agent's own door authenticated — not something the model
+ * chose. It decides WHOSE machine the work reaches, which is why it must come
+ * from the session rather than from a tool argument the model could set.
+ *
+ * Undefined for a turn with no signed-in principal (a schedule, an inbound
+ * webhook). The relay then falls back to the org's most recent live desktop,
+ * which is only ever right for a single operator.
+ */
+function askingUser(ctx: {
+  session?: { auth?: { current?: { principalId?: string } | null } | null } | null;
+}): string | undefined {
+  return ctx.session?.auth?.current?.principalId;
+}
+
 export function localShellTool(options: LocalToolsOptions = {}) {
   return defineTool({
     description:
@@ -169,7 +194,7 @@ export function localShellTool(options: LocalToolsOptions = {}) {
       cwd: z.string().optional().describe("Absolute working directory on their machine"),
       timeoutMs: z.number().int().min(1000).max(600_000).optional(),
     }),
-    execute: (input) => call(options, "run-command", input),
+    execute: (input, ctx) => call(options, "run-command", input, askingUser(ctx)),
   });
 }
 
@@ -183,7 +208,7 @@ export function localReadTool(options: LocalToolsOptions = {}) {
       startLine: z.number().int().min(1).optional().describe("Read a window instead of the whole file"),
       endLine: z.number().int().min(1).optional(),
     }),
-    execute: (input) => call(options, "read-file", input),
+    execute: (input, ctx) => call(options, "read-file", input, askingUser(ctx)),
   });
 }
 
@@ -195,7 +220,7 @@ export function localListTool(options: LocalToolsOptions = {}) {
       path: z.string().describe("Absolute directory path on their machine"),
       depth: z.number().int().min(1).max(3).optional().describe("How deep to walk (default 1)"),
     }),
-    execute: (input) => call(options, "list-directory", input),
+    execute: (input, ctx) => call(options, "list-directory", input, askingUser(ctx)),
   });
 }
 
@@ -207,7 +232,7 @@ export function localWriteTool(options: LocalToolsOptions = {}) {
       path: z.string().describe("Absolute path on their machine"),
       content: z.string(),
     }),
-    execute: (input) => call(options, "write-file", input),
+    execute: (input, ctx) => call(options, "write-file", input, askingUser(ctx)),
   });
 }
 
@@ -249,7 +274,7 @@ export function localEditTool(options: LocalToolsOptions = {}) {
       newString: z.string().describe("Replacement text"),
       replaceAll: z.boolean().optional().describe("Replace every occurrence instead of failing"),
     }),
-    execute: (input) => call(options, "write-file", { ...input, op: "edit" }),
+    execute: (input, ctx) => call(options, "write-file", { ...input, op: "edit" }, askingUser(ctx)),
   });
 }
 
@@ -264,6 +289,6 @@ export function localSearchTool(options: LocalToolsOptions = {}) {
       glob: z.string().optional().describe("Only files ending with this, e.g. `.ts`"),
       maxResults: z.number().int().min(1).max(200).optional(),
     }),
-    execute: (input) => call(options, "read-file", { ...input, op: "search" }),
+    execute: (input, ctx) => call(options, "read-file", { ...input, op: "search" }, askingUser(ctx)),
   });
 }
