@@ -1974,6 +1974,31 @@ Also: a long-lived channel session caches the compiled agent. After changing
 capabilities, start a **fresh conversation** before deciding the change did not
 work.
 
+**A restart script must do two more things, and both were learned from a
+stranded user.**
+
+*Serialize restarts.* `@kybernesis/manage` fires one 20s after any change, and
+you will also run one by hand. Two overlapping runs both finish killing before
+either starts, and you end up with **two supervisors and two servers writing to
+one durable store** — two executors racing over the same runs. That is not a
+slow agent, it is a corrupt one. Take a `flock` at the top of the script, and
+assert exactly one server process at the bottom.
+
+*Wait for in-flight turns.* eve does **not** resume a step killed mid-flight.
+Restart into a live turn and that turn never emits another event, the session
+never parks, and every later message queues behind a turn that will never
+finish. The user watches a spinner forever, and no further restart fixes it,
+because the session is stranded rather than stuck. Poll
+`.eve/.workflow-data/runs/*.json` for a `turnWorkflow` in `running` state and
+wait for it to clear — with a cap, so a wedged turn cannot block the restart
+that would clear it.
+
+The escape from an already-stranded session is a **session reset**
+(`ClientSession.reset()`, or Reset in Studio's agent settings), which releases
+the durable owner so the next message starts a fresh conversation. Cancelling
+often does not help: the executor that would honour the cancel is the one that
+died.
+
 ### 11.9 Credential checklist — collect ALL of these from the client
 
 Nothing here can be borrowed from another agent or another account.
