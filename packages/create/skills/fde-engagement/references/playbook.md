@@ -44,6 +44,9 @@ npm create @kybernesis acme-atlas -- --engineer
 # ChatGPT/LLM subscription paying for inference. See section 11:
 npm create @kybernesis acme-atlas -- --host=exe --engineer
 
+# …or, when the client wants the desktop app (KYBER Studio) — see section 12:
+npm create @kybernesis acme-atlas -- --studio
+
 # 3. (Optional, for repeated use) put `kyb` on the PATH for the whole engagement:
 npm install -g @kybernesis/create
 ```
@@ -1990,7 +1993,91 @@ Nothing here can be borrowed from another agent or another account.
 against the client's `-eval` workspace, and a live turn on the real surface —
 sent from the client's own device, not yours.
 
-## 12. Known gaps — state these plainly, do not sell around them
+## 12. KYBER Studio — the desktop surface
+
+Slack and iMessage reach an agent where the client already works. KYBER Studio
+is the third door: a desktop app for people who do not live in a chat tool, and
+the only surface where an agent can work on the user's own files.
+
+Reach for it when the client says any of: *"not everyone here uses Slack"*,
+*"I want it on my laptop"*, *"can it look at our repo"*, or when the pilot
+involves someone technical who will hand the agent real work.
+
+### 12.1 What it is
+
+- **The same agent.** Studio does not run anything. It talks to the agent you
+  deployed — same memory, same tools, same subagents. Nothing to deploy twice.
+- **Governed by the same grants.** Sign-in is control-plane device flow, so
+  desktop access is the grant you already manage. Revoke it and the desktop goes
+  with it.
+- **Optionally hands and eyes.** With `@kybernesis/local` the agent can search,
+  read, edit, write, and run commands on the user's machine, with consent.
+- **Optionally self-modifying.** With `@kybernesis/manage` the client can
+  install capabilities and write routines from the app instead of asking you.
+
+### 12.2 The two packages, and why they are separate
+
+| | What it lets happen | Installed on |
+| --- | --- | --- |
+| `@kybernesis/local` | The agent acts on the USER's machine | the agent |
+| `@kybernesis/manage` | A client changes THE AGENT — deps and source | the agent |
+
+Different blast radius, so they are separate items an engagement chooses
+independently. A reporting agent might want `local` and never `manage`. Neither
+is installed by default, because both let a client reach further than chat does.
+
+```bash
+kyb init acme-agent --host=exe --studio        # both, at scaffold time
+npx eve add local                              # or either one, later
+npx eve add manage
+```
+
+`kyb doctor` checks both: the relay secret for local, and `KYBERNESIS_AGENT` for
+manage, since it cannot check a grant for a name it does not know.
+
+### 12.3 Prerequisites, in order
+
+1. **The agent is registered in the control plane** and the pilot users are
+   granted. Studio lists exactly what a user has a grant for — an agent that is
+   registered but ungranted is invisible, which is the correct behaviour and a
+   confusing one if you forget you did it.
+2. **The agent has a URL on file.** Studio reads `/api/me/agents`; an agent with
+   no deployment URL appears as unreachable rather than silently missing.
+3. **For `manage`: a writable working copy.** Installing edits the repo and
+   rebuilds, so it works on a VM and refuses on a read-only serverless bundle,
+   with that reason. Set `restartCommand` in `agent/channels/kyb.ts` or an
+   install completes without taking effect.
+4. **For `local`: the relay secret** (`LOCAL_EXEC_AGENT_SECRET`) matching the
+   control plane.
+
+### 12.4 What consent looks like for the user
+
+Studio asks per **effect** — run a command, read a file, write a file, list a
+directory — not per tool, and not per turn. Approving `read-file` once covers
+every tool that reads a file out, which is why adding a tool later cannot dodge
+a decision the user already made.
+
+The default is ask. A working folder can be set, but it is a starting directory
+rather than a fence: permission to act on the machine is granted once, and the
+agent may work wherever it is asked to. Whether it builds in its own sandbox or
+on the user's files is decided by the ask, not by a mode — the same way a
+colleague knows "build me a demo" from "look at my repo".
+
+### 12.5 State this plainly to the client
+
+- **Local execution is not yet a governed capability.** The agent authenticates
+  to the relay with a shared secret, so anyone holding it can reach a connected
+  desktop in that org. It must become its own revocable grant, separate from
+  "may talk to this agent". Do not install `local` at a client who would treat
+  that as a surprise.
+- **Reading a file sends it to the model.** Execution is local; the reasoning is
+  not. Fine for most work, and a conversation to have before a Studio points at
+  a regulated repository.
+- **Management routes let a client change the agent.** That is the point, and it
+  means the repository is no longer only yours. Agree who reviews what Studio
+  writes — routines land as source files, so a normal review works.
+
+## 13. Known gaps — state these plainly, do not sell around them
 
 Being straight about these is a feature. Clients have met vendors who were not.
 

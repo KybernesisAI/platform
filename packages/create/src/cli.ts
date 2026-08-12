@@ -24,6 +24,7 @@ function initOptions(rest: string[]): InitOptions {
   const subs = flag(rest, 'subagents');
   return {
     engineer: rest.includes('--engineer'),
+    studio: rest.includes('--studio'),
     channel: flag(rest, "channel") as InitOptions["channel"],
     host: flag(rest, "host") as InitOptions["host"],
     subagents: subs === undefined ? undefined : subs.split(',').map((s) => s.trim()).filter(Boolean),
@@ -63,6 +64,7 @@ ${bold("kyb")} — Kybernesis agent scaffolder & FDE toolkit
       --host=<kind>     ${dim("vercel|exe                                (default: vercel)")}
       --subagents=a,b   ${dim("department subagents                      (default: none)")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
+      --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code

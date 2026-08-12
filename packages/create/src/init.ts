@@ -49,6 +49,15 @@ const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
 export interface InitOptions {
   engineer?: boolean;
+  /**
+   * Wire this agent for KYBER Studio: local execution on the user's own machine,
+   * and management routes so Studio can install capabilities and write routines.
+   *
+   * Off by default. Both let a client reach further than chat does — one onto
+   * the user's laptop, one into the agent's own repository — so they are a
+   * deliberate choice rather than something an engagement gets by accident.
+   */
+  studio?: boolean;
   /** Chat surface. Default "none" — add later with `kyb add channel`. */
   channel?: ChannelKind;
   /** Where the agent runs. Default "vercel". */
@@ -61,6 +70,7 @@ export interface InitOptions {
 
 export async function init(rawName: string | undefined, options: InitOptions = {}): Promise<void> {
   const engineer = options.engineer === true;
+  const studio = options.studio === true;
   const nonInteractive = options.yes === true;
 
   const name = slug(rawName ?? (await ask("Agent name (kebab-case)?", "acme-agent")));
@@ -126,6 +136,18 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   }
   for (const item of plan.registryItems) {
     run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
+  }
+
+  if (studio) {
+    // Two separate items on purpose: `local` lets the agent act on the USER'S
+    // machine (consent per effect, granted on the desktop); `manage` lets a
+    // client change THIS AGENT — its dependencies and its source. Different
+    // blast radius, so an agent can have one without the other.
+    console.log(bold("\n2b2  KYBER Studio: local execution + management routes …"));
+    for (const item of ["local", "manage"]) {
+      const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
+      if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
+    }
   }
 
   const engPlan = engineer ? engineerPlan(host, DEFAULT_MODEL) : null;
@@ -211,6 +233,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     "self-testing (evals)",
     channel === "none" ? null : `${channel} channel`,
     host === "exe" ? "exe.dev host" : null,
+    studio ? "KYBER Studio (local execution + management routes)" : null,
     engineer ? "engineer subagent (workshop + vision loop)" : null,
     depts.length ? `${depts.length} dept subagent(s)` : null,
   ].filter(Boolean);

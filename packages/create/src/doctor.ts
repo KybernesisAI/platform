@@ -260,6 +260,44 @@ export async function doctor(): Promise<void> {
     }
   }
 
+  // ── KYBER Studio wiring ────────────────────────────────────────────────
+  const hasLocal = existsSync(join(cwd, "agent/tools/local_shell.ts"));
+  const hasManage = existsSync(join(cwd, "agent/channels/kyb.ts"));
+
+  if (hasLocal) {
+    // Without the relay secret the tools compile, appear in the tool list, and
+    // fail at the moment the user asks for something — the worst time to learn
+    // a deployment is incomplete.
+    if (process.env.LOCAL_EXEC_AGENT_SECRET) {
+      add("pass", "local execution is configured (LOCAL_EXEC_AGENT_SECRET set)");
+    } else {
+      add(
+        "fail",
+        "local execution has no LOCAL_EXEC_AGENT_SECRET",
+        "the local_* tools will be offered to the model and fail on first use; set the shared secret the control-plane relay expects",
+      );
+    }
+  }
+
+  if (hasManage) {
+    // manage authorizes with the caller's control-plane grant, so it needs to
+    // know which agent it IS before it can check one.
+    if (process.env.KYBERNESIS_AGENT) {
+      add("pass", "management routes can resolve this agent's grants");
+    } else {
+      add(
+        "fail",
+        "management routes have no KYBERNESIS_AGENT",
+        "KYBER Studio cannot install or write routines here: the agent cannot check a grant for a name it does not know",
+      );
+    }
+    add(
+      "warn",
+      "management routes need a writable working copy",
+      "installing edits this repo and rebuilds; on a read-only serverless bundle the routes refuse. Set restartCommand in agent/channels/kyb.ts or an install will not take effect",
+    );
+  }
+
   // ── engineer subagent (build capability scoped to a subagent) ──────────
   const builderDir = join(cwd, "agent/subagents/builder");
   if (existsSync(builderDir)) {
