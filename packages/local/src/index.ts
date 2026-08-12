@@ -49,6 +49,30 @@ interface CallResult {
   device?: string | null;
 }
 
+/**
+ * How long the work may go SILENT before we call it stuck.
+ *
+ * This is an idle timeout, not a deadline. Because the desktop reports output
+ * frames as they appear, a twenty-minute build keeps resetting this clock and
+ * finishes, while a command that hangs is caught in a couple of minutes. A total
+ * deadline gets both of those backwards: it kills healthy long work and waits
+ * patiently on dead work.
+ */
+const IDLE_TIMEOUT_MS = 120_000;
+
+/** Absolute ceiling, so a pathological job cannot hold a turn open forever. */
+const HARD_CEILING_MS = 60 * 60_000;
+
+interface StatusResult {
+  status?: string;
+  result?: unknown;
+  error?: string;
+  outputTail?: string | null;
+  lastFrameAt?: string | null;
+  deliveredAt?: string | null;
+  createdAt?: string | null;
+}
+
 async function call(
   options: LocalToolsOptions,
   action: string,
@@ -67,30 +91,73 @@ async function call(
       "Local execution is not configured on this agent (LOCAL_EXEC_AGENT_SECRET is unset).",
     );
   }
+  const auth = { "content-type": "application/json", authorization: `Bearer ${secret}` };
 
-  const res = await fetch(`${issuer}/api/local-exec/call`, {
+  const queued = await fetch(`${issuer}/api/local-exec/call`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+    headers: auth,
     body: JSON.stringify({ agent, action, payload }),
-    // Slightly longer than the relay's own wait, so a relay timeout surfaces as
-    // its own explanatory message rather than as a fetch abort.
-    signal: AbortSignal.timeout(190_000),
+    signal: AbortSignal.timeout(30_000),
   });
-
-  if (res.status === 401) {
+  if (queued.status === 401) {
     throw new Error("The local-execution relay rejected this agent's credentials.");
   }
-  if (!res.ok) {
-    throw new Error(`The local-execution relay refused this request (HTTP ${res.status}).`);
+  if (!queued.ok) {
+    throw new Error(`The local-execution relay refused this request (HTTP ${queued.status}).`);
   }
-  const body = (await res.json().catch(() => ({}))) as CallResult;
+  const start = (await queued.json().catch(() => ({}))) as {
+    ok?: boolean;
+    jobId?: string;
+    disconnected?: boolean;
+    error?: string;
+  };
+  if (start.disconnected) throw new Error(start.error ?? "Your computer is not connected.");
+  if (!start.jobId) throw new Error(start.error ?? "The relay did not accept this request.");
 
-  // Disconnected, declined, and failed are three different answers, and the
-  // model should tell the user which one happened rather than flattening them.
-  if (body.disconnected) throw new Error(body.error ?? "Your computer is not connected.");
-  if (body.denied) throw new Error(body.error ?? "The user declined this action.");
-  if (!body.ok) throw new Error(body.error ?? "The action failed on your computer.");
-  return body.result;
+  const began = Date.now();
+  let lastActivity = Date.now();
+  let lastSeenFrame: string | null = null;
+
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const res = await fetch(
+      `${issuer}/api/local-exec/status?id=${encodeURIComponent(start.jobId)}`,
+      { headers: auth, signal: AbortSignal.timeout(20_000) },
+    );
+    if (!res.ok) {
+      // A failed poll is not a failed job; keep waiting within the idle window.
+      if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
+        throw new Error("Lost contact with the relay while the work was running.");
+      }
+      continue;
+    }
+    const s = (await res.json()) as StatusResult;
+
+    // Any new frame — or simply being picked up — counts as being alive.
+    if (s.lastFrameAt && s.lastFrameAt !== lastSeenFrame) {
+      lastSeenFrame = s.lastFrameAt;
+      lastActivity = Date.now();
+    }
+    if (s.status === "delivered" && !lastSeenFrame) lastActivity = Date.now();
+
+    if (s.status === "done") return s.result;
+    if (s.status === "denied") {
+      throw new Error("The user declined this action on their computer.");
+    }
+    if (s.status === "error") throw new Error(s.error ?? "The action failed on your computer.");
+
+    if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
+      const tail = s.outputTail ? `\n\nLast output:\n${s.outputTail.slice(-800)}` : "";
+      throw new Error(
+        `No output for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s — the command looks stuck, or the ` +
+          `permission prompt is still waiting on their screen.${tail}`,
+      );
+    }
+    if (Date.now() - began > HARD_CEILING_MS) {
+      throw new Error("Gave up after an hour of work on this command.");
+    }
+  }
 }
 
 export function localShellTool(options: LocalToolsOptions = {}) {
@@ -113,6 +180,8 @@ export function localReadTool(options: LocalToolsOptions = {}) {
     inputSchema: z.object({
       path: z.string().describe("Absolute path on their machine"),
       maxBytes: z.number().int().min(1).max(2_000_000).optional(),
+      startLine: z.number().int().min(1).optional().describe("Read a window instead of the whole file"),
+      endLine: z.number().int().min(1).optional(),
     }),
     execute: (input) => call(options, "read-file", input),
   });
@@ -161,3 +230,40 @@ and do not retry in a loop.
 Before writing or running anything that changes their files, say what you are
 about to do in one line. Reading and listing need no preamble.
 `.trim();
+
+/**
+ * Replace exact text in a file on the user's machine.
+ *
+ * Declares the WRITE-FILE effect deliberately: editing and writing are the same
+ * consequence for the user's code, so they share one consent. Giving edit its
+ * own permission would let an agent reach an approved effect under a name the
+ * user never approved — the exact hole that per-tool permissions create.
+ */
+export function localEditTool(options: LocalToolsOptions = {}) {
+  return defineTool({
+    description:
+      "Change part of a file on the user's own computer by replacing exact text. Prefer this over local_write for existing files: it edits in place instead of rewriting the whole file, and it refuses when the target text is missing or ambiguous rather than damaging the file. Read the file first so oldString matches exactly, including indentation.",
+    inputSchema: z.object({
+      path: z.string().describe("Absolute path on their machine"),
+      oldString: z.string().describe("Exact text to replace, unique within the file"),
+      newString: z.string().describe("Replacement text"),
+      replaceAll: z.boolean().optional().describe("Replace every occurrence instead of failing"),
+    }),
+    execute: (input) => call(options, "write-file", { ...input, op: "edit" }),
+  });
+}
+
+/** Search file contents on the user's machine. Declares the read-file effect. */
+export function localSearchTool(options: LocalToolsOptions = {}) {
+  return defineTool({
+    description:
+      "Search file contents under a directory on the user's own computer, by regular expression. Use it to find where something is defined or used before reading or editing. Skips .git, node_modules, and build output.",
+    inputSchema: z.object({
+      path: z.string().describe("Absolute directory to search under"),
+      pattern: z.string().describe("Regular expression, case-insensitive"),
+      glob: z.string().optional().describe("Only files ending with this, e.g. `.ts`"),
+      maxResults: z.number().int().min(1).max(200).optional(),
+    }),
+    execute: (input) => call(options, "read-file", { ...input, op: "search" }),
+  });
+}
