@@ -260,7 +260,7 @@ export function manageChannel(options: ManageOptions = {}) {
 /** Created from KYBER Studio. */
 export default defineSchedule({
   cron: ${JSON.stringify(body.cron)},
-  prompt: ${JSON.stringify(body.instruction)},
+  markdown: ${JSON.stringify(body.instruction)},
 });
 `;
         mkdirSync(dirname(file), { recursive: true });
@@ -309,9 +309,9 @@ export default defineSchedule({
 
         // Renamed rather than deleted: this is the user's repository, and an
         // undo should not require a client to have kept a copy.
-        const disabled = join(dir, `${slug}.ts.disabled`);
-        writeFileSync(disabled, readFileSync(join(dir, match), "utf8"), "utf8");
-        writeFileSync(join(dir, match), "");
+        const trash = join(appRoot, ".kyb-trash/schedules");
+        mkdirSync(trash, { recursive: true });
+        writeFileSync(join(trash, `${slug}.ts`), readFileSync(join(dir, match), "utf8"), "utf8");
         await run(`rm -f ${JSON.stringify(join(dir, match))}`, appRoot);
 
         const build = await run("npx eve build", appRoot);
@@ -324,10 +324,141 @@ export default defineSchedule({
             }).unref();
           }, 250);
         }
-        return Response.json({ ok: build.ok, kept: `agent/schedules/${slug}.ts.disabled` });
+        return Response.json({ ok: build.ok, kept: `.kyb-trash/schedules/${slug}.ts` });
       }),
     ],
   });
 }
 
 export default manageChannel;
+
+// ── Tools ───────────────────────────────────────────────────────────────────
+
+/**
+ * Let the AGENT manage its own routines, from any surface.
+ *
+ * Without these, "remind me every day at 10am" has no mechanism behind it — and
+ * a model asked for a reminder will happily answer "got it" because that is what
+ * the conversation calls for. It is not lying so much as having no way to tell
+ * that it cannot. Give it the capability and the confirmation becomes true.
+ *
+ * The same file-writing path as the management routes, so a routine created by
+ * asking and one created from KYBER Studio are the same source file.
+ */
+export function routineTools(options: ManageOptions = {}) {
+  const appRoot = options.appRoot ?? process.cwd();
+
+  const rebuild = async (): Promise<{ ok: boolean; output: string }> => {
+    const build = await run("npx eve build", appRoot);
+    if (build.ok && options.restartCommand) {
+      setTimeout(() => {
+        spawn(process.env.SHELL ?? "/bin/bash", ["-lc", options.restartCommand!], {
+          cwd: appRoot,
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      }, 250);
+    }
+    return { ok: build.ok, output: build.output };
+  };
+
+  return {
+    create_routine: {
+      description:
+        "Create a recurring routine for yourself: something you will do on a schedule without being asked again. Use when the user asks to be reminded, to get a digest, or for anything repeating. Requires a cron expression — convert their words yourself (every day at 10am is `0 10 * * *`, weekday mornings at 8:40 is `40 8 * * 1-5`).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short name, e.g. 'creatine reminder'" },
+          cron: { type: "string", description: "5-field cron, in the user's timezone as the host runs it" },
+          instruction: {
+            type: "string",
+            description: "What to do each time. Write it as an instruction to yourself, with enough context to act on alone.",
+          },
+        },
+        required: ["name", "cron", "instruction"],
+      },
+      execute: async (input: { name: string; cron: string; instruction: string }) => {
+        const writable = writableRoot(appRoot);
+        if (!writable.ok) throw new Error(writable.reason);
+
+        const slug = slugify(input.name);
+        const file = join(appRoot, "agent/schedules", `${slug}.ts`);
+        if (existsSync(file)) {
+          throw new Error(`A routine named "${slug}" already exists. Pick another name or delete it.`);
+        }
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          `import { defineSchedule } from "eve/schedules";\n\n/** ${input.name} */\nexport default defineSchedule({\n  cron: ${JSON.stringify(input.cron)},\n  markdown: ${JSON.stringify(input.instruction)},\n});\n`,
+          "utf8",
+        );
+
+        const built = await rebuild();
+        if (!built.ok) {
+          return {
+            created: false,
+            file: `agent/schedules/${slug}.ts`,
+            error: "Written, but the rebuild failed, so it is not live yet.",
+            output: built.output.slice(-600),
+          };
+        }
+        return {
+          created: true,
+          name: slug,
+          cron: input.cron,
+          file: `agent/schedules/${slug}.ts`,
+          note: options.restartCommand
+            ? "Live after a brief restart."
+            : "Written and built; needs a restart to take effect.",
+        };
+      },
+    },
+
+    list_routines: {
+      description:
+        "List the routines you currently run on a schedule. Use before creating one to avoid duplicates, and when the user asks what you are doing for them automatically.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const dir = join(appRoot, "agent/schedules");
+        if (!existsSync(dir)) return { routines: [] };
+        const routines = readdirSync(dir)
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => {
+            const source = readFileSync(join(dir, f), "utf8");
+            return {
+              name: f.replace(/\.ts$/, ""),
+              cron: /cron:\s*"([^"]+)"/.exec(source)?.[1] ?? null,
+              instruction: /markdown:\s*"((?:[^"\\]|\\.)*)"/.exec(source)?.[1]?.replace(/\\"/g, '"') ?? null,
+            };
+          });
+        return { routines };
+      },
+    },
+
+    delete_routine: {
+      description:
+        "Stop and remove one of your routines. Only when the user asks — a routine they set up and forgot is not a reason to remove it.",
+      inputSchema: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      },
+      execute: async (input: { name: string }) => {
+        const dir = join(appRoot, "agent/schedules");
+        const slug = slugify(input.name);
+        const file = join(dir, `${slug}.ts`);
+        if (!existsSync(file)) throw new Error(`No routine named "${slug}".`);
+        // Moved OUT of agent/schedules/, not renamed inside it: eve rejects any
+        // file there that is not .ts or .md, so a backup left in place stops the
+        // agent from building at all. Undo should not cost the user their agent.
+        const trash = join(appRoot, ".kyb-trash/schedules");
+        mkdirSync(trash, { recursive: true });
+        writeFileSync(join(trash, `${slug}.ts`), readFileSync(file, "utf8"), "utf8");
+        await run(`rm -f ${JSON.stringify(file)}`, appRoot);
+        const built = await rebuild();
+        return { deleted: built.ok, name: slug, kept: `.kyb-trash/schedules/${slug}.ts` };
+      },
+    },
+  };
+}
