@@ -1,4 +1,4 @@
-import { defineTool } from "eve/tools";
+import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
 
 /**
@@ -291,4 +291,81 @@ export function localSearchTool(options: LocalToolsOptions = {}) {
     }),
     execute: (input, ctx) => call(options, "read-file", { ...input, op: "search" }, askingUser(ctx)),
   });
+}
+
+/**
+ * Tools from MCP servers running on the user's own machine.
+ *
+ * The combination nothing else has: the agent reasons in the cloud, the server
+ * runs beside the data, and neither needs the other to be reachable. A Postgres
+ * inside a company network, a private repository, an internal API with no
+ * ingress — the desktop dials out, so nothing is ever exposed.
+ *
+ * Resolved per turn from the same relay local execution already uses. A server
+ * the user has not set up simply is not there; a machine that is closed reports
+ * itself offline rather than failing a tool call halfway through.
+ *
+ * ```ts title="agent/tools/local_mcp.ts"
+ * import { localMcpTools } from "@kybernesis/local";
+ * export default localMcpTools();
+ * ```
+ */
+export function localMcpTools(options: LocalToolsOptions = {}) {
+  const resolve = async (_event: unknown, ctx: unknown) => {
+    const user = askingUser(ctx as { session?: { auth?: { current?: { principalId?: string } | null } | null } | null });
+
+    let servers: { id: string; name: string }[] = [];
+    try {
+      const listed = (await call(options, "local-mcp", { method: "servers/list" }, user)) as {
+        servers?: { id: string; name: string }[];
+      };
+      servers = listed?.servers ?? [];
+    } catch {
+      // No desktop, or nothing set up. Neither is an error worth failing a
+      // session over — the agent simply has no local tools this turn.
+      return null;
+    }
+    if (!servers.length) return null;
+
+    const entries: [string, unknown][] = [];
+    for (const server of servers) {
+      let tools: { name: string; description?: string }[] = [];
+      try {
+        const listed = (await call(
+          options,
+          "local-mcp",
+          { server: server.id, method: "tools/list" },
+          user,
+        )) as { tools?: { name: string; description?: string }[] };
+        tools = listed?.tools ?? [];
+      } catch {
+        // One server being down must not cost the others their tools.
+        continue;
+      }
+
+      for (const tool of tools) {
+        // Namespaced by server: two MCP servers exposing `query` are a real
+        // possibility, and the model has to be able to say which one it means.
+        entries.push([
+          `${server.id}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
+          defineTool({
+            description:
+              `${tool.description ?? tool.name} — runs on the user's own computer via ${server.name}.`,
+            inputSchema: z.object({}).passthrough(),
+            execute: (input: Record<string, unknown>) =>
+              call(
+                options,
+                "local-mcp",
+                { server: server.id, method: "tools/call", params: { name: tool.name, arguments: input } },
+                user,
+              ),
+          }),
+        ]);
+      }
+    }
+
+    return entries.length ? Object.fromEntries(entries) : null;
+  };
+
+  return defineDynamic({ events: { "turn.started": resolve } });
 }
