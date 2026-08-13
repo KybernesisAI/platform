@@ -1,5 +1,6 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
+import { type McpServer, callMcpTool, listMcpTools } from "./mcp.js";
 
 /**
  * Connector tools, resolved for whoever is actually talking.
@@ -132,6 +133,35 @@ async function fetchTools(
   }
 }
 
+/**
+ * Remote MCP servers this principal has added.
+ *
+ * Separate from the broker's tools because the agent talks to these itself: the
+ * control plane hands over a URL and a header, and the conversation happens
+ * between two cloud services. Routing tool results through the control plane
+ * would put customer data somewhere it has no reason to be.
+ */
+async function fetchMcpServers(
+  options: ConnectorToolsOptions,
+  user?: string,
+): Promise<McpServer[]> {
+  const credential = credentialOf(options);
+  if (!credential) return [];
+  try {
+    const res = await fetch(`${base(options)}/api/connectors/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ ...(user ? { user } : {}) }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { servers?: McpServer[] };
+    return body.servers ?? [];
+  } catch {
+    return [];
+  }
+}
+
 async function runTool(
   options: ConnectorToolsOptions,
   tool: string,
@@ -163,10 +193,34 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
   const resolve = async (_event: unknown, ctx: unknown) => {
     const user = principalOf(ctx);
     const tools = await fetchTools(options, user);
-    if (!tools.length) return null;
 
-    return Object.fromEntries(
-      tools.map((tool) => [
+    const entries: [string, unknown][] = [];
+
+    // Remote MCP servers, each namespaced by its own slug: two servers
+    // exposing `search` is ordinary, and the model must be able to say which.
+    for (const server of await fetchMcpServers(options, user)) {
+      let remote: { name: string; description?: string }[] = [];
+      try {
+        remote = await listMcpTools(server);
+      } catch {
+        // One unreachable server must not cost the others their tools.
+        continue;
+      }
+      for (const tool of remote) {
+        entries.push([
+          `${server.slug}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
+          defineTool({
+            description: `${tool.description ?? tool.name} — from ${server.name}.`,
+            inputSchema: z.object({}).passthrough(),
+            execute: (input: Record<string, unknown>) =>
+              callMcpTool(server, tool.name, input),
+          }),
+        ]);
+      }
+    }
+
+    entries.push(
+      ...tools.map((tool): [string, unknown] => [
         tool.slug.toLowerCase(),
         defineTool({
           description:
@@ -178,6 +232,8 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
         }),
       ]),
     );
+
+    return entries.length ? Object.fromEntries(entries) : null;
   };
 
   return defineDynamic({
