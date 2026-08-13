@@ -23,12 +23,24 @@ Three categories, and the middle one is the dangerous one:
 - Sid's eval suite: 12 passed, 29 gates — on Grok, on the subscription.
 - Signed, notarized macOS build with a working in-app update control.
 - Sid under version control, local and GitHub in one history.
+- The remote MCP client against a real public server (see item 1).
+- Sid's suite green again on 2026-08-14 after the MCP schema fix and an env
+  cleanup: 11 passed, 1 scored, 29 gates, 5m19s, on the Grok subscription.
 
 ## Built but unverified
 
-1. **Remote MCP (`mcp-direct`) end to end.** Routes, storage, an MCP client that
-   handles both JSON and SSE, and a Check that runs the handshake from the
-   control plane. No remote server has ever answered.
+1. **Remote MCP (`mcp-direct`) — the client half is now verified, the route half
+   is not.** Against a real public server (`https://mcp.deepwiki.com/mcp`,
+   2026-08-14): handshake, `tools/list` returning 3 tools with schemas,
+   `toolInputSchema` translating one of them (including an `anyOf` it does not
+   model, which stays permissive rather than refusing), and a real
+   `read_wiki_contents` call returning content. So the transport, the session
+   header, and the JSON/SSE parsing work.
+
+   What is still unproven: the control-plane routes that store a server and the
+   agent-side path that turns one into tools a deployed agent calls. Not run
+   because both need a signed-in principal. The remaining risk is storage and
+   plumbing, not the protocol.
 2. **Unattended connector runs.** A schedule has no signed-in user and gets the
    shared principal. Never exercised; the first symptom would be a morning
    briefing that silently does nothing.
