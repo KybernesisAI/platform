@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Every package builds. A package that only compiles on the machine that
+      # wrote it is a package that breaks the first client to install it.
+      - name: Build all packages
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # The registry is what `eve add` reads. A malformed item, or one whose
+      # file pointers do not resolve, fails at a client's terminal rather than
+      # here — and the JSON is edited by hand often enough for that to be real.
+      - name: Validate the registry
+        run: node scripts/check-registry.mjs
