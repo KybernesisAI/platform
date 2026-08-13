@@ -2120,6 +2120,55 @@ colleague knows "build me a demo" from "look at my repo".
   means the repository is no longer only yours. Agree who reviews what Studio
   writes — routines land as source files, so a normal review works.
 
+### 12.7 Connectors — the apps library
+
+The Apps tab in Studio is a shelf of services a person connects in one click:
+Gmail, Calendar, Drive, Slack, Notion, Linear, GitHub, Attio, Outlook, HubSpot.
+Connecting one makes its tools appear in that person's next session.
+
+**Setup is one field, and it belongs to the client.** The org's own Composio key
+goes in their control plane at **Settings → Connectors**, set by an owner, the
+same way SSO is. It is never a deployment env var and never ours: each control
+plane belongs to one company, and nobody's people connect their mailboxes under
+another org's account. Direct them to composio.dev → Settings → API Keys.
+
+**What makes it one click** is that Composio has already registered the OAuth
+app for each service. Without a broker, every client has to create a developer
+app per provider — which is exactly the hour lost to Notion on the first
+deployment, version pin and all.
+
+**Two things on every card, because both are load-bearing:**
+
+*Connects as you* versus *for the company*. A user-scoped connection cannot fire
+from a schedule — a routine at 8am has no signed-in person. Anything a briefing
+depends on must be the company's connection.
+
+*An admin must approve*. True for Slack, Notion, and Google Workspace. Say it on
+the card; a client who discovers it at the end of a redirect chain reads the
+product as broken.
+
+**How tools reach the agent.** `@kybernesis/connectors` mounts a dynamic
+resolver in `agent/tools/connectors.ts`. It resolves per session from the
+principal on the turn, asks the control plane what that person has connected,
+and calls back through it to execute. The agent never holds the broker key — it
+proves which agent it is with its own credential, and the control plane decides
+whose account the call runs against.
+
+Resolution is per session, not per turn: a tool set is part of the prompt, and
+rebuilding it every turn re-ingests the conversation at uncached prices. Pass
+`perTurn: true` where people connect things mid-conversation and expect them to
+work immediately.
+
+**Say this to the client.** Their Composio account holds refresh tokens for
+their Google Workspace and Slack — a fourth party alongside the model provider,
+the host, and us. Most will not blink; a regulated one will, and the answer for
+them is `eve-connect`, native eve connections with no broker. That is why every
+card carries a `provider`.
+
+**And watch the bill.** Composio prices per action. An agent in a loop is a very
+different cost profile from a person clicking, and that belongs in the pricing
+conversation before the first invoice, not after.
+
 ## 13. Known gaps — state these plainly, do not sell around them
 
 Being straight about these is a feature. Clients have met vendors who were not.
