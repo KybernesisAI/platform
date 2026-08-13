@@ -27,13 +27,21 @@ export interface ConnectorToolsOptions {
   /** This agent's credential. Defaults to KYBERNESIS_AGENT_CREDENTIAL. */
   credential?: string;
   /**
-   * Resolve at `turn.started` instead of `session.started`.
+   * Resolve at `session.started` only, instead of on every turn.
    *
-   * Off by default: tool sets are part of the prompt, and rebuilding them every
-   * turn re-ingests the conversation at uncached prices. Turn on where people
-   * connect things mid-conversation and expect them to work immediately.
+   * Per turn is the default, and the first deployment is why: connect Gmail
+   * mid-conversation and the agent keeps saying it cannot see your mail until
+   * you happen to start a new one, which reads as the connection being broken
+   * rather than as a caching policy.
+   *
+   * The cost that argued for the old default is mostly handled by the memo
+   * below. When nothing has changed the model sees an identical tool set, so
+   * the prompt cache holds; it only breaks when the tools genuinely differ,
+   * which is exactly when it should.
    */
-  perTurn?: boolean;
+  sessionOnly?: boolean;
+  /** How long a resolved tool list is reused before asking again. */
+  cacheMs?: number;
 }
 
 interface RemoteTool {
@@ -81,12 +89,27 @@ function argumentsSchema(_tool: RemoteTool): z.ZodType {
   return z.object({}).passthrough();
 }
 
+/**
+ * Resolved tool lists, briefly.
+ *
+ * Per-turn resolution without this puts a network round trip in front of every
+ * message. Keyed by principal, because the entire point is that two people get
+ * different tools — a cache that forgot whose would hand one person's
+ * connections to another.
+ */
+const memo = new Map<string, { at: number; tools: RemoteTool[] }>();
+
 async function fetchTools(
   options: ConnectorToolsOptions,
   user?: string,
 ): Promise<RemoteTool[]> {
   const credential = credentialOf(options);
   if (!credential) return [];
+
+  const key = user ?? "(shared)";
+  const ttl = options.cacheMs ?? 60_000;
+  const cached = memo.get(key);
+  if (cached && Date.now() - cached.at < ttl) return cached.tools;
   try {
     const res = await fetch(`${base(options)}/api/connectors/tools`, {
       method: "POST",
@@ -99,7 +122,9 @@ async function fetchTools(
     });
     if (!res.ok) return [];
     const body = (await res.json()) as { tools?: RemoteTool[] };
-    return body.tools ?? [];
+    const tools = body.tools ?? [];
+    memo.set(key, { at: Date.now(), tools });
+    return tools;
   } catch {
     // A control plane that cannot be reached means no connector tools this
     // session, not a broken agent. Everything authored still works.
@@ -156,8 +181,8 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
   };
 
   return defineDynamic({
-    events: options.perTurn
-      ? { "turn.started": resolve }
-      : { "session.started": resolve },
+    events: options.sessionOnly
+      ? { "session.started": resolve }
+      : { "turn.started": resolve },
   });
 }
