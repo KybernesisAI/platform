@@ -67,22 +67,39 @@ Three categories, and the middle one is the dangerous one:
     KybernesisAI org, so Sid's machine can neither pull nor push. A routine
     written from chat is an uncommitted change on a disk. Needs the org policy
     changed or a fine-grained PAT. *(Parked deliberately.)*
-11. ~~**Two server processes keep appearing on Sid.**~~ **Explained and closed.**
-    Two causes, neither of them a supervisor: the lock was inherited by the
-    child (fixed with `9>&-`), and every "second server" sighting after that was
-    my own test harness — `ssh host "script"` sends SIGHUP on disconnect and
-    kills the script mid-restart, leaving exactly what it was meant to prevent.
-    Tested honestly, with both restarts detached from the connection:
+11. ~~**Two server processes keep appearing on Sid.**~~ **Closed. There was
+    never a second server — the measurement was wrong.**
+
+    `pgrep -fc 'server/index.mjs'`, run over ssh, matches the *shell running the
+    pgrep*: the pattern is right there in its own command line. It reports 2 and
+    there is 1. Proven by listing what it matched:
+
+    ```
+    46447: /usr/bin/node /home/exedev/sid/.output/server/index.mjs
+    46488: bash -c ... pgrep -f 'server/index.mjs' ...   ← the shell asking
+    ```
+
+    This is the same error as `pkill -f` killing its own caller in Studio, and
+    it cost far more here because it manufactured a phantom to chase. `ps -eo
+    pid,ppid,args` and read it, or exclude `$$`. `restart.sh` was right all
+    along — it runs as `bash restart.sh`, so its own command line does not
+    contain the pattern and its assertion is sound.
+
+    Two real bugs were fixed on the way: the lock leaking to the child (`9>&-`),
+    and test harnesses being killed mid-restart by ssh's SIGHUP. Both were worth
+    fixing; neither was the thing being investigated. A concurrent race, run
+    detached:
 
     ```
     ssh <host> "setsid nohup bash ~/restart.sh >/tmp/r1.log 2>&1 </dev/null & \
                 sleep 3; setsid nohup bash ~/restart.sh >/tmp/r2.log 2>&1 </dev/null &"
     ```
 
-    Both completed (pid=46002, pid=46127), both asserted a single server, and
-    `pgrep -fc server/index.mjs` returned 1. There is no supervisor: process
-    ancestry is `npm exec eve start → sh -c → node .bin/eve → server/index.mjs`,
-    one chain. **Anything that restarts Sid must detach**, or it becomes the bug.
+    Both completed (pid=46002, pid=46127) and both asserted a single server.
+    There is no supervisor: process ancestry is `npm exec eve start → sh -c →
+    node .bin/eve → server/index.mjs`, one chain. **Anything that restarts Sid
+    must detach** (`setsid nohup … </dev/null &`), or ssh's SIGHUP becomes the
+    bug you go looking for.
 12. **No tests for the transport.** The send path broke five distinct ways in one
     evening. Every fix was verified by hand.
 13. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and

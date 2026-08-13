@@ -13,7 +13,12 @@ Kybernesis. Eve is the plumbing; this is the moat.
 | [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared conversations: per-speaker verified identity, attributed threads, no-re-mention continuation, dual surfaces |
 | [`@kybernesis/evals`](./packages/evals) | The baseline QA suite: memory/routing/smoke behaviors with every production hardening lesson as a default |
 | [`@kybernesis/engineer`](./packages/engineer) | The vision-verified dev loop: in-sandbox screenshots the model can SEE, trade-school build/ship skills, and the workshop sandbox template |
-| [`@kybernesis/create`](./packages/create) | The `kyb` CLI: `init` scaffolds a full governed/remembering/multiplayer/self-testing agent in one command; `doctor` preflights an engagement; `upgrade` bumps packages behind the eval gate |
+| [`@kybernesis/dispatch`](./packages/dispatch) | Agent-to-agent edges: declared remote peers with principal forwarding on by default, and a receiver channel that makes trusting the wrong caller hard to express |
+| [`@kybernesis/connectors`](./packages/connectors) | The user's own SaaS accounts as tools, resolved per principal from the control plane — plus an MCP client for remote servers |
+| [`@kybernesis/local`](./packages/local) | The user's own machine: shell, files, search, and locally-running MCP servers, relayed through KYBER Studio under per-effect consent |
+| [`@kybernesis/manage`](./packages/manage) | The other direction: let Studio install capabilities and write schedules onto a running agent |
+| [`@kybernesis/exe`](./packages/exe) | Running off Vercel: exe.dev's LLM integration, a client's own ChatGPT or Grok subscription, host preflight, Photon iMessage |
+| [`@kybernesis/create`](./packages/create) | The `kyb` CLI: `init` scaffolds a full governed/remembering/multiplayer/self-testing agent in one command; `doctor` preflights an engagement; `upgrade` bumps packages behind the eval gate; `skills` installs the FDE skill suite |
 
 ## Also in this repo
 
@@ -32,14 +37,24 @@ Kybernesis. Eve is the plumbing; this is the moat.
   eve add @kybernesis/evals
   ```
 
+- **[`docs/`](./docs)** — [`gaps.md`](./docs/gaps.md) is the honest ledger of
+  what is verified, what is built-but-never-run, and what is missing. Read it
+  before promising anything to a client.
+
 ## Related, not in this repo
 
-- **Control plane** (`kybernesis-admin`, prod: `agent.kybernesis.ai`) — the
-  issuer/governance service the enterprise package verifies against.
-- **Kyber** (`KybernesisAI/kyber`) — our own production company agent: the
-  reference deployment that dogfoods every package here via published versions.
-- **Eve Studio** — desktop client for non-Slack access (sign-in via the
-  control plane's device flow).
+- **Control plane** ([`KybernesisAI/kybernesis-admin`](https://github.com/KybernesisAI/kybernesis-admin),
+  prod: `agent.kybernesis.ai`) — the issuer/governance service the enterprise
+  package verifies against, and the broker for connectors and local access.
+- **Kyber** ([`KybernesisAI/kyber`](https://github.com/KybernesisAI/kyber)) — our
+  own production company agent: the reference deployment that dogfoods every
+  package here via published versions.
+- **KYBER Studio** ([`KybernesisAI/kyber-studio`](https://github.com/KybernesisAI/kyber-studio))
+  — the desktop client. Signed, notarized, self-updating; the consumer of
+  `local`, `connectors`, and `manage`.
+- **Sid** ([`KybernesisAI/sid`](https://github.com/KybernesisAI/sid)) — the
+  off-Vercel reference deployment (exe.dev, iMessage, a Grok subscription). If
+  something works there, it works at a client.
 
 ## Development
 

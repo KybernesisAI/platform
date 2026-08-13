@@ -1873,6 +1873,45 @@ client with an existing ChatGPT or Claude subscription pays no incremental
 inference cost for the pilot. Say the number out loud in the discovery
 conversation — it changes the shape of the deal.
 
+**Grok, on a SuperGrok or X Premium+ subscription.** Same arrangement, without
+the broker: xAI's Grok Build CLI does a device login and writes a credential
+that is a valid bearer for `https://api.x.ai/v1`. Proven in production on Sid —
+twelve evals, twenty-nine gates, green on the subscription.
+
+```bash
+# on the host, as the unix user the agent runs as
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login                              # device flow → ~/.grok/auth.json
+```
+
+```ts title="agent/agent.ts"
+import { createOpenAI } from "@ai-sdk/openai";
+import { grokSubscription } from "@kybernesis/exe";
+
+export default defineAgent({
+  model: grokSubscription({ model: "grok-4.6", createOpenAI }),
+  modelContextWindowTokens: 400_000,
+});
+```
+
+Three things to know before you promise it to a client:
+
+- The credential is **per-machine and per-user**. It lives in a home directory.
+  A different unix user cannot see it; a new host needs its own login.
+- It **expires in six hours** and the CLI refreshes it in place, so the agent
+  must re-read the file per request. `grokSubscription` does this in a `fetch`
+  wrapper. (Do not reach for a Proxy around the model object — the AI SDK's
+  methods depend on their own `this` and every call dies inside the SDK.)
+- **Unattended refresh over days is unverified.** If nobody runs `grok` on that
+  host for a week, it is an open question, and it would present to the client as
+  the agent breaking for no reason.
+
+**The model will lie about which model it is.** Sid, running Grok, stated it was
+"Claude Opus 4.6, Anthropic" and attributed it to an instruction that exists
+nowhere in its context. Verify from the host — the configured model id and the
+credential in use — never by asking the agent. Expect a client to ask it in a
+demo, and have the real answer ready.
+
 ### 11.5 Third-party APIs: broker the credential, pin the version
 
 Do not put a client's API token on the agent host. Put it in an exe.dev
@@ -1992,6 +2031,15 @@ because the session is stranded rather than stuck. Poll
 `.eve/.workflow-data/runs/*.json` for a `turnWorkflow` in `running` state and
 wait for it to clear — with a cap, so a wedged turn cannot block the restart
 that would clear it.
+
+*And measure it correctly.* `pgrep -f 'server/index.mjs'` run over ssh matches
+**the shell running the pgrep** — the pattern is in its own command line — so it
+reports two servers when there is one. An entire investigation went into hunting
+a phantom supervisor that a `ps -eo pid,ppid,args` would have dismissed in
+thirty seconds. Same family as `pkill -f` killing its caller. Inside a script
+file it is safe (the script's command line is `bash restart.sh`); typed at a
+shell or sent over ssh it is not. When a process count surprises you, **list the
+matches before believing the number.**
 
 The escape from an already-stranded session is a **session reset**
 (`ClientSession.reset()`, or Reset in Studio's agent settings), which releases
@@ -2169,6 +2217,40 @@ card carries a `provider`.
 different cost profile from a person clicking, and that belongs in the pricing
 conversation before the first invoice, not after.
 
+### 12.8 MCP servers — the client's own tools, local and remote
+
+The MCP tab is the escape hatch from the shelf: anything with an MCP server
+becomes agent tools, whether it runs on the person's laptop or on a URL.
+
+**Local** — a command Studio runs on that machine (`npx -y @acme/mcp`, with env
+vars if the server needs them). Studio keeps it alive, and the deployed agent
+reaches it through the same relay as local execution. This is how a client's
+internal tooling — the CLI nobody will ever expose to the internet — becomes
+something the agent can use, without opening a port.
+
+**Remote** — a URL and optional headers. Studio runs the handshake before
+saving, so a bad URL fails at the moment someone types it rather than in the
+middle of a demo.
+
+Consent is **per server**, and approving one does not approve the next. The
+discovery call (listing what a server offers) is exempt — otherwise a person is
+asked to approve something before they can see what it is.
+
+The things that cost real sessions here:
+
+- **The command in a vendor's README is often the installer**, not the server.
+  Plaud's documented line runs an `install` subcommand and exits; the stdio
+  server is the bare command. If a server "connects" and never answers, check
+  that you are running the server.
+- **A server declares its arguments and you must honour them.** Studio passes
+  the published `inputSchema` through to the model (`@kybernesis/local` ≥0.5.0).
+  Before that it did not, and watching the result is the best argument for the
+  fix: nine consecutive calls guessing the name of an argument the server had
+  documented, steered only by error strings.
+- **Discovery must have a deadline.** These resolvers run before a turn and
+  reach across a network to a laptop that might be shut. Budgeted at 6s with a
+  five-minute cache; without that, one closed lid makes every turn hang.
+
 ## 13. Known gaps — state these plainly, do not sell around them
 
 Being straight about these is a feature. Clients have met vendors who were not.
@@ -2186,9 +2268,12 @@ Being straight about these is a feature. Clients have met vendors who were not.
    requester or a `manage`-grant holder may approve — are the planned governance half in
    `@kybernesis/enterprise`.
 
-3. **Eve Studio sign-in is specced, not built.** Employees who do not live in Slack have
-   no polished desktop door yet; HTTP access is token-by-hand via the device flow. The
-   implementation brief is in [[kybernesis-architecture-and-studio-signin]].
+3. **The desktop door is built** — KYBER Studio, signed and notarized, with device-flow
+   sign-in and in-app updates. What is NOT built is a second consent system talking to
+   the first: the control plane holds the standing per-device grant, Studio holds
+   per-effect permissions in a local file, and revoking in one does not revoke the
+   other. An off-boarding story that says "we revoke access centrally" must be qualified
+   at any client that asks the follow-up question.
 
 4. **Off-boarding SLA equals the token TTL** (1h default) for already-minted sessions.
    Suspension is immediate; revocation is not. Tune `IDENTITY_TOKEN_TTL_SECONDS` to the
@@ -2199,9 +2284,20 @@ Being straight about these is a feature. Clients have met vendors who were not.
    a time per session — simultaneous speakers resolve in arrival order, with mid-turn
    messages folded into the next turn best-effort.
 
-6. **Per-user OAuth into personal SaaS and local-file work (the device bridge) are future
-   builds.** Org service accounts with static tokens cover most pilot asks. Subagents in
-   particular *cannot* use per-user OAuth at all — no user principal.
+6. **Per-user OAuth and local-file work are BUILT** — §12.6 and §12.7, both proven end
+   to end. The remaining edge is the one that bites unattended: anything without a
+   signed-in person (a schedule, a subagent) has no user principal, so a user-scoped
+   connection is not available to it. A morning briefing built on someone's personal
+   Gmail connection does not fail loudly — it quietly has no tools. Company-scoped
+   connections are the answer, and that path has not yet been exercised in production.
+
+   Two more, worth saying because a client will meet them:
+
+   - **Tool volume is unmanaged.** Gmail and Calendar alone are 51 tool definitions in
+     every prompt. Real tokens per turn, and measurably worse tool selection as a client
+     connects more. Curation is designed, not shipped — connect what the pilot needs.
+   - **Local MCP servers are per-machine.** A person's second laptop silently has a
+     different set, and nothing in the UI says which machine a server is on.
 
 7. **DM memory is per-workspace, not per-employee, unless you build it.** Splitting DMs
    into one Arcana workspace per person needs a Slack-user-id → workspace-slug map in the

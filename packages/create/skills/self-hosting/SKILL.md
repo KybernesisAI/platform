@@ -25,7 +25,7 @@ kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer
 
 | Capability | On Vercel | Self-hosted replacement |
 | --- | --- | --- |
-| Model access | AI Gateway | exe.dev LLM integration (`exeModel`) — managed, BYO key, or a **ChatGPT subscription** |
+| Model access | AI Gateway | exe.dev LLM integration (`exeModel`) — managed, BYO key, or a **ChatGPT / Grok subscription** |
 | Slack/Photon/Linear credentials | Vercel Connect | **Portable/static credentials the client issues** |
 | Sandbox | `vercel()` hosted | `docker()` on the host |
 | File delivery | Vercel Blob | Blob **or** `DELIVER_DIR` + `DELIVER_BASE_URL` |
@@ -37,6 +37,44 @@ Vercel OIDC, which does not exist on another host. That applies to Slack, the
 Vercel MCP connection, Linear, everything. Each becomes a static credential
 someone must issue and rotate. `kyb doctor` fails loudly if a `@vercel/connect`
 import survives into a self-hosted agent.
+
+## Running on the client's own subscription
+
+A client who already pays for ChatGPT Plus/Pro or SuperGrok / X Premium+ can
+run the agent on it instead of on metered API billing. Both work the same way:
+a CLI performs a device login on the host, writes a credential to the home
+directory, and that credential is a valid bearer for an OpenAI-compatible
+endpoint. eve ships `experimental_chatgpt()` for the first;
+`@kybernesis/exe` ships `grokSubscription()` for the second.
+
+```bash
+# on the host, as the user the agent runs as
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login          # device flow → ~/.grok/auth.json
+```
+
+```ts title="agent/agent.ts"
+import { createOpenAI } from "@ai-sdk/openai";
+import { grokSubscription } from "@kybernesis/exe";
+
+export default defineAgent({
+  model: grokSubscription({ model: "grok-4.6", createOpenAI }),
+  modelContextWindowTokens: 400_000,
+});
+```
+
+What this arrangement costs you, and it is worth saying to the client:
+
+- **It is per-machine and per-user.** The login belongs to the host's home
+  directory. Moving the agent means logging in again; running it as a different
+  unix user means it cannot see the credential at all.
+- **The token expires in hours** (Grok: six) and the CLI refreshes it in place.
+  Read it per request, never once at boot, or the agent works all afternoon and
+  starts failing authentication at dinner for no reason a user can see.
+- **Nobody has proven unattended refresh over days.** If no one runs `grok` on
+  that host, whether the refresh keeps happening is an open question — and it
+  presents as the agent "breaking".
+- **Ask the vendor's terms question before a client demo**, not after.
 
 ## The failure modes, each of which cost a real session
 
@@ -144,3 +182,20 @@ yesterday's agent. Assert the process started AFTER the build it should serve
 (`scripts/eve-server.sh` and the restart pattern in `@kybernesis/exe` do this).
 Related: a long-lived channel session caches the compiled agent, so start a
 fresh conversation after changing capabilities.
+
+A restart script also has to **serialize** (`flock`, released by the child with
+`9>&-`) and **wait for in-flight turns** — eve does not resume a step killed
+mid-flight, and restarting into a live turn strands the session behind a turn
+that will never finish.
+
+Run restarts **detached** from your ssh connection —
+`setsid nohup bash restart.sh >/tmp/r.log 2>&1 </dev/null &` — or a dropped
+connection SIGHUPs the script halfway through and leaves exactly the mess it
+exists to prevent.
+
+**And measure it correctly.** `pgrep -f 'server/index.mjs'` typed over ssh
+matches the shell running it: the pattern is in that shell's own command line,
+so it reports two servers when there is one. A whole investigation went into a
+phantom "second server" that `ps -eo pid,ppid,args` would have dismissed
+immediately. Inside a script file it is safe; typed at a shell it is not. List
+the matches before you believe the count.

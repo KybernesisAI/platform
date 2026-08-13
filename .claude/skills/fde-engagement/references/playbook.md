@@ -40,6 +40,13 @@ npm create @kybernesis acme-atlas -- --engineer
 #    Prompts: display name · department subagents · control-plane issuer.
 #    (Non-interactive/CI: defaults apply when stdin is not a terminal.)
 
+# …or, when the client will NOT use Vercel — their own VM, or their own
+# ChatGPT/LLM subscription paying for inference. See section 11:
+npm create @kybernesis acme-atlas -- --host=exe --engineer
+
+# …or, when the client wants the desktop app (KYBER Studio) — see section 12:
+npm create @kybernesis acme-atlas -- --studio
+
 # 3. (Optional, for repeated use) put `kyb` on the PATH for the whole engagement:
 npm install -g @kybernesis/create
 ```
@@ -1714,9 +1721,528 @@ the control-plane repo's seed scripts.)
 it is far faster than booting the dev server. `npx eve logs` reads the last `eve dev`
 diagnostic log if you need stderr, tool failures, and rebuild lines.
 
+### Self-hosted hosts (exe.dev / client infrastructure)
+
+**I deployed a change and the agent still does the old thing.**
+The restart did not take. Check that the running process started *after* the build
+(`scripts/eve-server.sh` asserts this and fails loudly). A silently-failed restart is the
+single most expensive failure mode off Vercel, because every test you run afterwards
+measures the previous build. If the process is current, start a **fresh conversation** —
+a long-lived channel session caches the compiled agent.
+
+**Every sandbox tool fails with `SandboxTemplateNotProvisionedError`.**
+Either Docker is installed but disabled (`sudo systemctl enable --now docker` — exeuntu
+ships it disabled), or the server was started as `node .output/server/index.mjs`, which
+skips the CLI's template prewarm. Start with `npx eve start`.
+
+**The subagent's screenshots fail with `Cannot find module 'playwright'` but the root
+agent is fine.**
+Subagents own their sandbox; they do not inherit the root's. Give the subagent its own
+`sandbox/sandbox.ts`.
+
+**My env vars are missing under `eve start`.**
+`eve start` does not read `.env.local` the way `eve dev` does. Use
+`scripts/eve-server.sh`, which exports it into the process.
+
+**I killed the agent and my own SSH session at the same time.**
+`pkill -f <pattern>` matches the SSH command line that contains the pattern. Keep kill
+patterns inside a script on the host; never pass them on an `ssh` command line.
+
+**A sandbox VM boots and shows `running`, but every command answers "command not found".**
+SSH is landing on exe.dev's lobby REPL rather than the VM. exe.dev reuses VM names, so a
+name deleted and recreated within a few minutes can keep resolving to the lobby, and a
+stale `known_hosts` entry does the same thing. Use a fresh name, and never reuse the
+caller's `known_hosts` for sandbox VMs.
+
+**A command works when I SSH in by hand but not from the agent.**
+A non-interactive SSH command does not source the login profile, so toolchains installed
+onto the profile PATH (nvm, pyenv, cargo) are invisible. Run through `bash -lc` — but not
+for file I/O, whose stdout must stay byte-clean.
+
+**exe.dev refuses to run commands with my API token.**
+It cannot. A key registered through an API token inherits that token's command scope, and
+shell exec is not a scoped command. Running commands needs a full-permission account key;
+see 11.6 for the isolation this demands.
+
+### Third-party APIs and connections
+
+**The agent reports that a service is down or that a resource "isn't shared" with it.**
+Verify before you believe it, and never change the client's permissions on an agent's
+say-so. An agent's error message is a hypothesis, not evidence — one real case reported an
+outage, then a permissions problem, while the data was reachable the entire time and the
+actual cause was a version header. Read the request and response yourself.
+
+**My manual `curl` works but the agent's identical call fails.**
+It is not identical — and the difference between the two requests *is* the bug. Diff them
+at the first contradiction rather than proving again that the token works. A version
+header, a content type, or a base URL differing by one path segment will do it.
+
+**Calls derived from a large OpenAPI spec fail in ways that make no sense.**
+Specs with ambiguous ID schemes (Notion's `database_id` vs `data_source_id` for the same
+object) make the model pick wrong, and the API's errors describe a different problem.
+Write a small purpose-built tool with the endpoint and IDs pinned; keep the generic
+connection for the long tail.
+
 ---
 
-## 11. Known gaps — state these plainly, do not sell around them
+
+## 11. Self-hosted deployments (when the client will not use Vercel)
+
+Vercel is the default path and the proven one. Take this track when the client
+**cannot or will not** put the agent on Vercel — procurement, data residency, an
+existing VM estate — or when they want inference billed to a subscription they
+already pay for rather than to a gateway.
+
+Everything else in this playbook still applies. This section covers only what
+changes.
+
+**The governing rule: every credential comes from the CLIENT's accounts.** If a
+step works only because you happen to hold a token, that step is a bug in the
+deployment, not a shortcut — it will fail on the real engagement, in front of
+the client. Assume you have no Vercel connection, no blob store, and no API
+keys of your own.
+
+### 11.1 Scaffold
+
+```bash
+kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer
+cd <name> && kyb doctor
+```
+
+`--host=exe` swaps the host bindings; everything else is the same product —
+same memory, same evals, same control-plane wiring, same engineer layer.
+`kyb doctor` knows every failure mode below and fails loudly on each.
+
+### 11.2 What Vercel gives you that a client host does not
+
+| Capability | On Vercel | Self-hosted replacement |
+| --- | --- | --- |
+| Model access | AI Gateway | exe.dev LLM integration (`exeModel`) — managed, BYO key, or a **ChatGPT subscription** |
+| Slack / Photon / Linear credentials | Vercel Connect | **static credentials the client issues** |
+| Sandbox | `vercel()` | `docker()` on the host, or `exeSandbox()` per-task VMs |
+| File delivery | Vercel Blob | Blob **or** `DELIVER_DIR` + `DELIVER_BASE_URL` |
+| Public URLs | deployments | a deploy target, or an account-gated preview |
+| Secrets | Vercel env | host env + the platform's own secret injection |
+
+**Vercel Connect does not work off-Vercel — at all.** It authenticates via
+Vercel OIDC, which does not exist on another host. That applies to Slack, the
+Vercel MCP connection, Linear, everything. Each becomes a static credential
+someone must issue and rotate, and `kyb doctor` fails if a `@vercel/connect`
+import survives into a self-hosted agent.
+
+### 11.3 Host setup (exe.dev)
+
+```bash
+ssh exe.dev new --name <agent>
+ssh exe.dev share port <agent> 8000 && ssh exe.dev share set-public <agent>
+```
+
+Make the host public **before** registering any webhook — webhooks need
+anonymous access, and a provider that fails verification at registration time
+usually will not tell you why.
+
+Then, on the VM: Node 24, `npm ci`, `npx eve build`, and start through
+`scripts/eve-server.sh` from `@kybernesis/exe`.
+
+Three things that will cost you an afternoon if you skip them:
+
+- **`eve start` does not read `.env.local`** the way `eve dev` does. The
+  supervision script exports it into the process for you.
+- **Start via `npx eve start`, not `node .output/server/index.mjs`.** Sandbox
+  template prewarm lives in the CLI, not the built server. Starting the server
+  directly gives you cleaner logs and no prewarm, so every sandbox tool then
+  fails with `SandboxTemplateNotProvisionedError`.
+- **Docker ships disabled on some images**, exeuntu among them. `docker
+  --version` answers happily while nothing can actually run. Fix with `sudo
+  systemctl enable --now docker`.
+
+### 11.4 Model: billing inference to the client's subscription
+
+exe.dev brokers the model, so no provider key sits on the host:
+
+```bash
+ssh exe.dev integrations setup chatgpt --name work    # once, device-code flow
+ssh exe.dev integrations edit llm --openai=chatgpt --openai-account=work
+```
+
+Then `exeModel()` from `@kybernesis/exe` points the agent at it. A Codex-backed
+subscription requires `store: false` on every request; `exeModel` forces it.
+
+This is the single biggest commercial difference in the self-hosted track: a
+client with an existing ChatGPT or Claude subscription pays no incremental
+inference cost for the pilot. Say the number out loud in the discovery
+conversation — it changes the shape of the deal.
+
+**Grok, on a SuperGrok or X Premium+ subscription.** Same arrangement, without
+the broker: xAI's Grok Build CLI does a device login and writes a credential
+that is a valid bearer for `https://api.x.ai/v1`. Proven in production on Sid —
+twelve evals, twenty-nine gates, green on the subscription.
+
+```bash
+# on the host, as the unix user the agent runs as
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login                              # device flow → ~/.grok/auth.json
+```
+
+```ts title="agent/agent.ts"
+import { createOpenAI } from "@ai-sdk/openai";
+import { grokSubscription } from "@kybernesis/exe";
+
+export default defineAgent({
+  model: grokSubscription({ model: "grok-4.6", createOpenAI }),
+  modelContextWindowTokens: 400_000,
+});
+```
+
+Three things to know before you promise it to a client:
+
+- The credential is **per-machine and per-user**. It lives in a home directory.
+  A different unix user cannot see it; a new host needs its own login.
+- It **expires in six hours** and the CLI refreshes it in place, so the agent
+  must re-read the file per request. `grokSubscription` does this in a `fetch`
+  wrapper. (Do not reach for a Proxy around the model object — the AI SDK's
+  methods depend on their own `this` and every call dies inside the SDK.)
+- **Unattended refresh over days is unverified.** If nobody runs `grok` on that
+  host for a week, it is an open question, and it would present to the client as
+  the agent breaking for no reason.
+
+**The model will lie about which model it is.** Sid, running Grok, stated it was
+"Claude Opus 4.6, Anthropic" and attributed it to an instruction that exists
+nowhere in its context. Verify from the host — the configured model id and the
+credential in use — never by asking the agent. Expect a client to ask it in a
+demo, and have the real answer ready.
+
+### 11.5 Third-party APIs: broker the credential, pin the version
+
+Do not put a client's API token on the agent host. Put it in an exe.dev
+http-proxy integration, which injects headers server-side:
+
+```bash
+ssh exe.dev "integrations add http-proxy --name notion \
+  --target https://api.notion.com \
+  --header 'Authorization:Bearer <token>' \
+  --header 'Notion-Version:2025-09-03' \
+  --attach vm:<agent>"
+```
+
+The agent then calls `https://notion.int.exe.xyz` with no credential at all, and
+rotation happens in one place the client controls.
+
+Two rules here, both learned expensively:
+
+**Pin the API version the SPEC describes, not the one in a doc example.** A
+version header copied from documentation while the agent's OpenAPI spec
+describes a newer API produces errors that describe the wrong problem entirely.
+One real case cost most of a day: `Notion-Version: 2022-06-28` against a spec
+using `/v1/data_sources/...` returned `invalid_request_url`, intermittent 503s
+from search, and "not shared with the integration" — three different messages,
+none of them about the version mismatch, two of which look like a permissions
+or availability problem you can waste hours "fixing" on the client's side.
+
+**Use `--header` for the token, never `--bearer=-`.** The stdin form mangles the
+value and the API answers 401 "token is invalid".
+
+**Large specs with ambiguous ID schemes need a purpose-built tool, not a raw
+connection.** Notion's spec is ~1.2MB and splits `database_id` from
+`data_source_id` for the same object; a model deriving calls from it picks
+wrong. Pin the endpoint and the IDs in a small tool under `agent/tools/`, keep
+the generic connection for the long tail, and point the instructions at the
+tool. Reads went from unreliable to deterministic with about sixty lines.
+
+### 11.6 The engineer layer, self-hosted
+
+`--engineer` scaffolds a **builder subagent** that owns the build capability, so
+the root agent never gets a shell. It comes with the full production loop —
+workshop sandbox, Playwright, screenshots, visual verification, delivery — not a
+reduced version of the Vercel one.
+
+- **Subagents own their sandbox; they do NOT inherit the root's.** A builder
+  without its own `sandbox/sandbox.ts` gets a bare template and every screenshot
+  fails with `Cannot find module 'playwright'` while the root's template is
+  fine. `kyb doctor` checks for this.
+- Conversely, if the root agent runs no code, it needs **no** root sandbox.
+  Leaving one there costs a full template prewarm on every deploy for nothing.
+
+**Choosing a sandbox backend:**
+
+`docker()` on the agent's own VM is the default and the safer choice. Reach for
+`exeSandbox()` — a whole exe.dev VM per session, with Docker available *inside*
+it and its own public URL — only when the work needs real isolation or
+per-session compute.
+
+`exeSandbox()` carries one hard constraint you must raise with the client before
+choosing it: **it needs a full-permission account SSH key.** exe.dev keys
+registered through an API token inherit that token's command scope and cannot
+open a shell at all, so there is no scoped credential that can run commands. The
+key it does need grants shell to **every VM on that exe.dev account**. The
+backend therefore refuses to start unless the account is dedicated to this agent
+(its own VM plus its sandboxes), naming any foreign VMs it finds. Overriding
+that with `allowSharedAccount: true` is a decision for the client to make in
+writing, not for you to make on their behalf. VM lifecycle stays on a separately
+scoped token that cannot exec, so neither credential is sufficient alone.
+
+### 11.7 Showing the client what the agent built
+
+- **Vercel Blob refuses to serve HTML inline** — it forces a download. Use it
+  for documents and exports, never to show a web page.
+- **exe.dev forwards ports 3000–9999** to `https://<vm>.exe.xyz:<port>/`, but a
+  VM has exactly **one public port** and the agent's webhook already owns it.
+  Alternate ports are account-gated: fine for the client reviewing work, not for
+  the public.
+- **Anything genuinely public needs a deploy target** — the client's own Vercel
+  token, or their hosting. Treat "public" as a deploy step, not a toggle, and
+  price it into the scope.
+- A sandbox is a container: its ports are not reachable from the host, so a dev
+  server inside it cannot be previewed directly. Copy the artifact out (the
+  `preview` tool in `@kybernesis/exe`) or deploy it.
+
+### 11.8 Prove the restart, every time
+
+There is no deployment pipeline here to tell you a release landed. A restart
+that silently fails leaves the agent serving a stale build — new connections,
+tools, and instructions never appear — and **every test you run afterwards
+measures yesterday's agent.** One session lost an hour to exactly this.
+
+`scripts/eve-server.sh` asserts the running process started *after* the build it
+should be serving, and fails loudly when it did not. Use it rather than
+`pkill` + `npx eve start` by hand. Related: `pkill -f <pattern>` over SSH kills
+your own session when the pattern appears in the SSH command line — and can take
+the agent down with it. Use the pidfile.
+
+Also: a long-lived channel session caches the compiled agent. After changing
+capabilities, start a **fresh conversation** before deciding the change did not
+work.
+
+**A restart script must do two more things, and both were learned from a
+stranded user.**
+
+*Serialize restarts.* `@kybernesis/manage` fires one 20s after any change, and
+you will also run one by hand. Two overlapping runs both finish killing before
+either starts, and you end up with **two supervisors and two servers writing to
+one durable store** — two executors racing over the same runs. That is not a
+slow agent, it is a corrupt one. Take a `flock` at the top of the script, and
+assert exactly one server process at the bottom.
+
+*Wait for in-flight turns.* eve does **not** resume a step killed mid-flight.
+Restart into a live turn and that turn never emits another event, the session
+never parks, and every later message queues behind a turn that will never
+finish. The user watches a spinner forever, and no further restart fixes it,
+because the session is stranded rather than stuck. Poll
+`.eve/.workflow-data/runs/*.json` for a `turnWorkflow` in `running` state and
+wait for it to clear — with a cap, so a wedged turn cannot block the restart
+that would clear it.
+
+The escape from an already-stranded session is a **session reset**
+(`ClientSession.reset()`, or Reset in Studio's agent settings), which releases
+the durable owner so the next message starts a fresh conversation. Cancelling
+often does not help: the executor that would honour the cancel is the one that
+died.
+
+### 11.9 Credential checklist — collect ALL of these from the client
+
+Nothing here can be borrowed from another agent or another account.
+
+1. **Host** — VM/server, plus the platform token if the agent provisions anything
+2. **Model source** — their LLM API key, gateway allocation, or connected subscription
+3. **Channel app** — their Slack app (bot + app token) / Photon project / bot token
+4. **Arcana** — workspaces + scoped `kb_` keys (one per brain, plus `-eval`)
+5. **Storage for deliverables** — their blob store, or a served host directory
+6. **Deploy target** — their Vercel token or hosting, if the agent ships sites
+7. **Sandbox credentials** — only if using `exeSandbox()` (see 11.6)
+8. **Control plane** — agent registered and the pilot cohort granted
+
+### 11.10 Before calling it done
+
+`kyb doctor` green (or every warning consciously accepted), the eval suite green
+against the client's `-eval` workspace, and a live turn on the real surface —
+sent from the client's own device, not yours.
+
+## 12. KYBER Studio — the desktop surface
+
+Slack and iMessage reach an agent where the client already works. KYBER Studio
+is the third door: a desktop app for people who do not live in a chat tool, and
+the only surface where an agent can work on the user's own files.
+
+Reach for it when the client says any of: *"not everyone here uses Slack"*,
+*"I want it on my laptop"*, *"can it look at our repo"*, or when the pilot
+involves someone technical who will hand the agent real work.
+
+### 12.1 What it is
+
+- **The same agent.** Studio does not run anything. It talks to the agent you
+  deployed — same memory, same tools, same subagents. Nothing to deploy twice.
+- **Governed by the same grants.** Sign-in is control-plane device flow, so
+  desktop access is the grant you already manage. Revoke it and the desktop goes
+  with it.
+- **Optionally hands and eyes.** With `@kybernesis/local` the agent can search,
+  read, edit, write, and run commands on the user's machine, with consent.
+- **Optionally self-modifying.** With `@kybernesis/manage` the client can
+  install capabilities and write routines from the app instead of asking you.
+
+### 12.2 The two packages, and why they are separate
+
+| | What it lets happen | Installed on |
+| --- | --- | --- |
+| `@kybernesis/local` | The agent acts on the USER's machine | the agent |
+| `@kybernesis/manage` | A client changes THE AGENT — deps and source | the agent |
+
+Different blast radius, so they are separate items an engagement chooses
+independently. A reporting agent might want `local` and never `manage`. Neither
+is installed by default, because both let a client reach further than chat does.
+
+```bash
+kyb init acme-agent --host=exe --studio        # both, at scaffold time
+npx eve add local                              # or either one, later
+npx eve add manage
+```
+
+`kyb doctor` checks both: the relay secret for local, and `KYBERNESIS_AGENT` for
+manage, since it cannot check a grant for a name it does not know.
+
+### 12.3 Prerequisites, in order
+
+1. **The agent is registered in the control plane** and the pilot users are
+   granted. Studio lists exactly what a user has a grant for — an agent that is
+   registered but ungranted is invisible, which is the correct behaviour and a
+   confusing one if you forget you did it.
+2. **The agent has a URL on file.** Studio reads `/api/me/agents`; an agent with
+   no deployment URL appears as unreachable rather than silently missing.
+3. **For `manage`: a writable working copy.** Installing edits the repo and
+   rebuilds, so it works on a VM and refuses on a read-only serverless bundle,
+   with that reason. Set `restartCommand` in `agent/channels/kyb.ts` or an
+   install completes without taking effect.
+4. **For `local`: nothing to configure.** Setup is one switch in Studio — the
+   agent's settings, *Work on this computer*. Behind it, Studio mints the
+   agent's credential from the control plane, installs it over the manage
+   channel, and records a standing grant for that machine; the agent restarts
+   once to load it. Never hand anyone a credential to paste into an env file.
+   The admin UI's "mint agent credential (shown once)" button remains for
+   recovery and is not the path: a setup step that asks someone to carry a
+   secret between two screens gets done wrong or skipped.
+
+### 12.4 What consent looks like for the user
+
+Studio asks per **effect** — run a command, read a file, write a file, list a
+directory — not per tool, and not per turn. Approving `read-file` once covers
+every tool that reads a file out, which is why adding a tool later cannot dodge
+a decision the user already made.
+
+The default is ask. A working folder can be set, but it is a starting directory
+rather than a fence: permission to act on the machine is granted once, and the
+agent may work wherever it is asked to. Whether it builds in its own sandbox or
+on the user's files is decided by the ask, not by a mode — the same way a
+colleague knows "build me a demo" from "look at my repo".
+
+### 12.5 State this plainly to the client
+
+- **Two things gate a laptop, and they fail differently.** *Identity* is the
+  agent's signed credential — "the local-execution relay rejected my
+  credentials" means that. *Consent* is a standing per-device grant — "you have
+  not allowed this agent to work on this computer" means that. Neither alone
+  reaches anything. The grant is permanent on purpose: "always allow" means
+  always, from a chat window, a schedule, or a message sent from a phone, and it
+  ends on revoke, device removal, or disabling the agent.
+- **Reaching a desktop is still not its own revocable capability.** "May talk to
+  this agent" and "may run commands on my laptop" remain one decision, taken
+  when the person allows the machine. Say so at a client who would treat it as a
+  surprise.
+- **Installing the credential restarts the agent**, and a turn in flight during
+  that restart is lost for good — eve does not resume a step killed mid-flight.
+  It reads as a spinner that never resolves, often alongside a "credential is
+  unset" error from the process that was replaced. Send a new message, and reset
+  the conversation if the session itself is stranded. §11.8 is why a restart
+  script must wait for in-flight turns.
+- **Reading a file sends it to the model.** Execution is local; the reasoning is
+  not. Fine for most work, and a conversation to have before a Studio points at
+  a regulated repository.
+- **Management routes let a client change the agent.** That is the point, and it
+  means the repository is no longer only yours. Agree who reviews what Studio
+  writes — routines land as source files, so a normal review works.
+
+### 12.7 Connectors — the apps library
+
+The Apps tab in Studio is a shelf of services a person connects in one click:
+Gmail, Calendar, Drive, Slack, Notion, Linear, GitHub, Attio, Outlook, HubSpot.
+Connecting one makes its tools appear in that person's next session.
+
+**Setup is one field, and it belongs to the client.** The org's own Composio key
+goes in their control plane at **Settings → Connectors**, set by an owner, the
+same way SSO is. It is never a deployment env var and never ours: each control
+plane belongs to one company, and nobody's people connect their mailboxes under
+another org's account. Direct them to composio.dev → Settings → API Keys.
+
+**What makes it one click** is that Composio has already registered the OAuth
+app for each service. Without a broker, every client has to create a developer
+app per provider — which is exactly the hour lost to Notion on the first
+deployment, version pin and all.
+
+**Two things on every card, because both are load-bearing:**
+
+*Connects as you* versus *for the company*. A user-scoped connection cannot fire
+from a schedule — a routine at 8am has no signed-in person. Anything a briefing
+depends on must be the company's connection.
+
+*An admin must approve*. True for Slack, Notion, and Google Workspace. Say it on
+the card; a client who discovers it at the end of a redirect chain reads the
+product as broken.
+
+**How tools reach the agent.** `@kybernesis/connectors` mounts a dynamic
+resolver in `agent/tools/connectors.ts`. It resolves per session from the
+principal on the turn, asks the control plane what that person has connected,
+and calls back through it to execute. The agent never holds the broker key — it
+proves which agent it is with its own credential, and the control plane decides
+whose account the call runs against.
+
+Resolution is per session, not per turn: a tool set is part of the prompt, and
+rebuilding it every turn re-ingests the conversation at uncached prices. Pass
+`perTurn: true` where people connect things mid-conversation and expect them to
+work immediately.
+
+**Say this to the client.** Their Composio account holds refresh tokens for
+their Google Workspace and Slack — a fourth party alongside the model provider,
+the host, and us. Most will not blink; a regulated one will, and the answer for
+them is `eve-connect`, native eve connections with no broker. That is why every
+card carries a `provider`.
+
+**And watch the bill.** Composio prices per action. An agent in a loop is a very
+different cost profile from a person clicking, and that belongs in the pricing
+conversation before the first invoice, not after.
+
+### 12.8 MCP servers — the client's own tools, local and remote
+
+The MCP tab is the escape hatch from the shelf: anything with an MCP server
+becomes agent tools, whether it runs on the person's laptop or on a URL.
+
+**Local** — a command Studio runs on that machine (`npx -y @acme/mcp`, with env
+vars if the server needs them). Studio keeps it alive, and the deployed agent
+reaches it through the same relay as local execution. This is how a client's
+internal tooling — the CLI nobody will ever expose to the internet — becomes
+something the agent can use, without opening a port.
+
+**Remote** — a URL and optional headers. Studio runs the handshake before
+saving, so a bad URL fails at the moment someone types it rather than in the
+middle of a demo.
+
+Consent is **per server**, and approving one does not approve the next. The
+discovery call (listing what a server offers) is exempt — otherwise a person is
+asked to approve something before they can see what it is.
+
+The things that cost real sessions here:
+
+- **The command in a vendor's README is often the installer**, not the server.
+  Plaud's documented line runs an `install` subcommand and exits; the stdio
+  server is the bare command. If a server "connects" and never answers, check
+  that you are running the server.
+- **A server declares its arguments and you must honour them.** Studio passes
+  the published `inputSchema` through to the model (`@kybernesis/local` ≥0.5.0).
+  Before that it did not, and watching the result is the best argument for the
+  fix: nine consecutive calls guessing the name of an argument the server had
+  documented, steered only by error strings.
+- **Discovery must have a deadline.** These resolvers run before a turn and
+  reach across a network to a laptop that might be shut. Budgeted at 6s with a
+  five-minute cache; without that, one closed lid makes every turn hang.
+
+## 13. Known gaps — state these plainly, do not sell around them
 
 Being straight about these is a feature. Clients have met vendors who were not.
 
@@ -1733,9 +2259,12 @@ Being straight about these is a feature. Clients have met vendors who were not.
    requester or a `manage`-grant holder may approve — are the planned governance half in
    `@kybernesis/enterprise`.
 
-3. **Eve Studio sign-in is specced, not built.** Employees who do not live in Slack have
-   no polished desktop door yet; HTTP access is token-by-hand via the device flow. The
-   implementation brief is in [[kybernesis-architecture-and-studio-signin]].
+3. **The desktop door is built** — KYBER Studio, signed and notarized, with device-flow
+   sign-in and in-app updates. What is NOT built is a second consent system talking to
+   the first: the control plane holds the standing per-device grant, Studio holds
+   per-effect permissions in a local file, and revoking in one does not revoke the
+   other. An off-boarding story that says "we revoke access centrally" must be qualified
+   at any client that asks the follow-up question.
 
 4. **Off-boarding SLA equals the token TTL** (1h default) for already-minted sessions.
    Suspension is immediate; revocation is not. Tune `IDENTITY_TOKEN_TTL_SECONDS` to the
@@ -1746,9 +2275,20 @@ Being straight about these is a feature. Clients have met vendors who were not.
    a time per session — simultaneous speakers resolve in arrival order, with mid-turn
    messages folded into the next turn best-effort.
 
-6. **Per-user OAuth into personal SaaS and local-file work (the device bridge) are future
-   builds.** Org service accounts with static tokens cover most pilot asks. Subagents in
-   particular *cannot* use per-user OAuth at all — no user principal.
+6. **Per-user OAuth and local-file work are BUILT** — §12.6 and §12.7, both proven end
+   to end. The remaining edge is the one that bites unattended: anything without a
+   signed-in person (a schedule, a subagent) has no user principal, so a user-scoped
+   connection is not available to it. A morning briefing built on someone's personal
+   Gmail connection does not fail loudly — it quietly has no tools. Company-scoped
+   connections are the answer, and that path has not yet been exercised in production.
+
+   Two more, worth saying because a client will meet them:
+
+   - **Tool volume is unmanaged.** Gmail and Calendar alone are 51 tool definitions in
+     every prompt. Real tokens per turn, and measurably worse tool selection as a client
+     connects more. Curation is designed, not shipped — connect what the pilot needs.
+   - **Local MCP servers are per-machine.** A person's second laptop silently has a
+     different set, and nothing in the UI says which machine a server is on.
 
 7. **DM memory is per-workspace, not per-employee, unless you build it.** Splitting DMs
    into one Arcana workspace per person needs a Slack-user-id → workspace-slug map in the

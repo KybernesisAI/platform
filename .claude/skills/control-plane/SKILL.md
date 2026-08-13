@@ -46,6 +46,31 @@ This exact sequence was verified against production 2026-08-05. The demo
 moment for clients is step 3→4 — access appearing and disappearing from the
 admin screen.
 
+## It also brokers connectors and the user's own machine
+
+Governance was the first job; the plane now also holds the two things an agent
+cannot hold itself.
+
+**Connectors** (`/api/connectors`, `link`, `disconnect`, `tools`, `execute`,
+`custom`, `mcp`, `mcp/test`). Each ORG holds its own broker (Composio) API key,
+encrypted at rest with `SECRETS_KEY` (AES-256-GCM, `v1:<iv>:<tag>:<ct>`), set
+through the admin — never an env var, never our key used for a client. The
+agent asks the plane which services the CURRENT principal has connected;
+`@kybernesis/connectors` turns the answer into tools for that turn only. The
+broker's entity is `<registered-agent-name>:<userId>` — the registered NAME,
+not the agent's UUID.
+
+**Local access** (`/api/local-exec/*`). A device enrolls, the user grants it
+once, and that grant is STANDING — no expiry. Requests and responses are relayed
+as frames; the plane never executes anything. See `@kybernesis/local`.
+
+**A client must refresh on the earlier of the token and the bundle.** They have
+independent lifetimes: a token with 57 minutes left and a bundle with 12 will
+start returning 401 while every dashboard says the session is fine. This cost a
+full day, presented to the user as "log out and log back in", and the fix is one
+line — `Math.min(tokenExpiry, bundleExpiry)`. On a 401, force a refresh and
+retry ONCE before showing a human anything.
+
 ## Boundaries to state plainly
 
 Control-plane grants govern the HTTP/desktop doors — NOT the Slack door

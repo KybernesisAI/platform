@@ -1,10 +1,10 @@
 ---
-description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), engineer (build+ship), dispatch (agent-to-agent), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
+description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), engineer (build+ship), dispatch (agent-to-agent), connectors (Gmail/Calendar/remote MCP), local (the user's own machine), manage (Studio→agent), exe (off-Vercel hosting), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
 ---
 
 # The Kybernesis packages
 
-Seven packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
+Eleven packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
 `KybernesisAI/platform`. Registry: `https://registry.kybernesis.ai`
 (`eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json`,
 then `eve add @kybernesis/<item>`). Each covers one axis:
@@ -60,6 +60,28 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   0.2.1 lesson: eve resolves remote URLs at BOOT — url() must degrade
   (env → discovery-if-credentialed → fallbackUrl), never throw on a missing
   credential, or the whole agent (and its evals) fails to boot.
+- **connectors** — the user's SaaS accounts, brokered. `connectorTools()` is a
+  dynamic resolver: at turn start it asks the control plane which services THIS
+  principal has connected and returns those tools. Composio is the broker; the
+  API key is per-org, held in the control plane (never an env var, never a
+  client's key in our account). Tools are named `<toolkit>_<action>`. Also
+  exports `toolInputSchema` (broker JSON Schema → zod) and a minimal MCP client
+  for `mcp-direct` servers that speaks BOTH JSON and text/event-stream.
+- **local** — the user's own machine, through KYBER Studio. `localShellTool`,
+  `localRead/List/Write/Edit/SearchTool`, plus `localMcpTools()` for MCP servers
+  running on that machine, relayed. Every effect is consented in Studio; the
+  agent never holds a shell. `LOCAL_INSTRUCTIONS` explains the arrangement to
+  the model — mount it or the agent will offer to do things it cannot do.
+- **manage** — the other direction: `manageChannel()` lets Studio install
+  capabilities and write schedules onto a running agent, and `routineTools()`
+  turns "every morning at 8, brief me" into a real schedule file. This is how a
+  routine gets created from chat without anyone touching the repo.
+- **exe** — running off Vercel. `exeModel()` for exe.dev's LLM integration,
+  `grokSubscription()` / `readGrokCredential()` for a SuperGrok or X Premium+
+  login (`grok login` → `~/.grok/auth.json`, a valid bearer for api.x.ai —
+  same shape as eve's `experimental_chatgpt()`), `hostPreflight()`, Photon
+  iMessage credentials, and a `/preview` tool. Subpaths: `/slack`, `/photon`,
+  `/sandbox`, `/preview`. See the `self-hosting` skill.
 - **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing,
   engineer? })` = smoke + 5 memory + routing per dept + optional vision-loop
   eval. Judge model ≠ model under test. Hermetic runs force all workspaces to
@@ -91,6 +113,36 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   company-general wording (dept-flavored prompts delegate and hide tool
   calls), no security vocabulary ("canary" triggers refusals), long routing
   timeouts. Do not "clean up" the odd-looking patterns.
+- **A per-turn dynamic resolver needs a deadline.** `connectorTools()` and
+  `localMcpTools()` run before every turn and reach across a network. Without a
+  budget (6s) and a cache (60s connectors, 5min local discovery) one unreachable
+  laptop makes every turn hang — the agent looks broken and nothing in the log
+  says why.
+- **Composio: one request per toolkit.** Repeating `toolkit_slug` in a single
+  `/api/v3/tools` call returns an EMPTY list, so connecting a second service
+  silently emptied the first. The logo is at `meta.logo`, not `logo`. A 200 can
+  still carry `successful: false` — check the body, not the status.
+- **The broker's entity is the agent's REGISTERED name**, not its UUID.
+  `<agent>:<userId>`. Studio knows agents by id; normalize before you ask the
+  broker, or a connected account looks unconnected.
+- **MCP requires the handshake.** `initialize` AND `notifications/initialized`
+  before `tools/list`, or the server never answers. Spawn through a LOGIN shell
+  (a bare spawn misses the user's PATH and node) and always bind
+  `child.on("error")` — without it a failed spawn is an unhandled rejection
+  that takes the process, not a error message.
+- **Translate the MCP/broker inputSchema — never pass an open object.** A tool
+  with no declared arguments makes the model guess: nine calls to find a
+  `file_id` the server had documented all along. `mcpInputSchema` (local) and
+  `toolInputSchema` (connectors) do this; keep them permissive where the server
+  says nothing.
+- **Never wrap a model object in a Proxy.** The AI SDK's model methods depend on
+  their own `this`; intercepting them detaches it and every call dies inside the
+  SDK on a missing internal. To swap a credential, wrap `fetch` instead — and
+  re-read the credential per request: a Grok login expires in six hours and the
+  CLI refreshes it in place.
+- **Credentials are never a user's problem.** No client ever puts a key in a
+  `.env` — broker keys live per-org in the control plane, encrypted at rest, set
+  through an admin screen. A design that ends in "paste this token" is wrong.
 - **npm**: only the `kybernesis` account creates new packages in the scope;
   publishes need the human's browser auth; new versions take 1–3 min to
   propagate to anonymous reads.
