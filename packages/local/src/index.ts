@@ -310,38 +310,90 @@ export function localSearchTool(options: LocalToolsOptions = {}) {
  * export default localMcpTools();
  * ```
  */
+/**
+ * How long resolution may take, in total, before the turn goes on without it.
+ *
+ * This exists because the first version had no limit and stopped the agent
+ * dead. Resolvers run BEFORE the model sees anything, so a slow answer here is
+ * not a slow tool — it is an agent that never replies. A desktop that is
+ * asleep, a server that is cold-starting under npx, a relay job nobody picks
+ * up: all of them have to cost this much and no more.
+ */
+const RESOLVE_BUDGET_MS = 6_000;
+
+/** Discovered tools, so a turn is not a relay round trip. */
+const discovered = new Map<string, { at: number; tools: Record<string, unknown> }>();
+const DISCOVERY_TTL_MS = 5 * 60_000;
+
+/** Resolve, or give up quietly when the budget is gone. */
+async function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function localMcpTools(options: LocalToolsOptions = {}) {
   const resolve = async (_event: unknown, ctx: unknown) => {
     const user = askingUser(ctx as { session?: { auth?: { current?: { principalId?: string } | null } | null } | null });
 
-    let servers: { id: string; name: string }[] = [];
-    try {
-      const listed = (await call(options, "local-mcp", { method: "servers/list" }, user)) as {
-        servers?: { id: string; name: string }[];
-      };
-      servers = listed?.servers ?? [];
-    } catch {
-      // No desktop, or nothing set up. Neither is an error worth failing a
-      // session over — the agent simply has no local tools this turn.
+    const cacheKey = user ?? "(shared)";
+    const cached = discovered.get(cacheKey);
+    if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) {
+      return Object.keys(cached.tools).length ? cached.tools : null;
+    }
+
+    const began = Date.now();
+    const left = (): number => Math.max(0, RESOLVE_BUDGET_MS - (Date.now() - began));
+
+    const servers = await within(
+      (async () => {
+        try {
+          const listed = (await call(options, "local-mcp", { method: "servers/list" }, user)) as {
+            servers?: { id: string; name: string }[];
+          };
+          return listed?.servers ?? [];
+        } catch {
+          // No desktop, or nothing set up. Neither is an error worth failing a
+          // turn over — the agent simply has no local tools this time.
+          return [];
+        }
+      })(),
+      left(),
+      [] as { id: string; name: string }[],
+    );
+    if (!servers.length) {
+      // Remembered, so an absent desktop is not re-asked on every message.
+      discovered.set(cacheKey, { at: Date.now(), tools: {} });
       return null;
     }
-    if (!servers.length) return null;
 
     const entries: [string, unknown][] = [];
     for (const server of servers) {
-      let tools: { name: string; description?: string }[] = [];
-      try {
-        const listed = (await call(
-          options,
-          "local-mcp",
-          { server: server.id, method: "tools/list" },
-          user,
-        )) as { tools?: { name: string; description?: string }[] };
-        tools = listed?.tools ?? [];
-      } catch {
-        // One server being down must not cost the others their tools.
-        continue;
-      }
+      if (left() <= 0) break;
+      const tools = await within(
+        (async () => {
+          try {
+            const listed = (await call(
+              options,
+              "local-mcp",
+              { server: server.id, method: "tools/list" },
+              user,
+            )) as { tools?: { name: string; description?: string }[] };
+            return listed?.tools ?? [];
+          } catch {
+            // One server being down must not cost the others their tools.
+            return [];
+          }
+        })(),
+        left(),
+        [] as { name: string; description?: string }[],
+      );
 
       for (const tool of tools) {
         // Namespaced by server: two MCP servers exposing `query` are a real
@@ -364,7 +416,9 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
       }
     }
 
-    return entries.length ? Object.fromEntries(entries) : null;
+    const tools = Object.fromEntries(entries);
+    discovered.set(cacheKey, { at: Date.now(), tools });
+    return entries.length ? tools : null;
   };
 
   return defineDynamic({ events: { "turn.started": resolve } });
