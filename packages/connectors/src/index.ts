@@ -80,14 +80,83 @@ function principalOf(ctx: unknown): string | undefined {
 }
 
 /**
- * A JSON Schema from the broker, made safe to hand a model.
+ * The broker's JSON Schema, turned into something a model can be held to.
  *
- * Passed through as an object schema rather than reconstructed field by field:
- * these come from hundreds of services and any translation we invent will be
- * wrong for some of them in ways that only show up as a confused model.
+ * The first version passed everything through as an open object, which meant
+ * the model got a tool name, a sentence of description, and no idea what
+ * arguments existed. It guesses well enough to look like it works and badly
+ * enough to fail on the third call — the worst possible middle. Composio
+ * returns real schemas; dropping them was throwing away the only precise thing
+ * in the payload.
+ *
+ * Translation is deliberately shallow. These schemas come from hundreds of
+ * services and anything clever we invent will be wrong for some of them in ways
+ * that surface as a confused model rather than an error, so unknown constructs
+ * degrade to "unknown but named" instead of being reinterpreted. A field the
+ * model can see and pass through is far better than a field it never knew about.
  */
-function argumentsSchema(_tool: RemoteTool): z.ZodType {
-  return z.object({}).passthrough();
+function fieldSchema(spec: Record<string, unknown>): z.ZodTypeAny {
+  const type = Array.isArray(spec.type) ? spec.type[0] : spec.type;
+  const describe = (schema: z.ZodTypeAny): z.ZodTypeAny =>
+    typeof spec.description === "string" ? schema.describe(spec.description) : schema;
+
+  if (Array.isArray(spec.enum) && spec.enum.length) {
+    const values = spec.enum.filter((v): v is string => typeof v === "string");
+    if (values.length) return describe(z.enum(values as [string, ...string[]]));
+  }
+
+  switch (type) {
+    case "string":
+      return describe(z.string());
+    case "number":
+    case "integer":
+      return describe(z.number());
+    case "boolean":
+      return describe(z.boolean());
+    case "array": {
+      const items = (spec.items ?? {}) as Record<string, unknown>;
+      return describe(z.array(Object.keys(items).length ? fieldSchema(items) : z.unknown()));
+    }
+    case "object": {
+      const properties = (spec.properties ?? {}) as Record<string, Record<string, unknown>>;
+      if (!Object.keys(properties).length) return describe(z.record(z.string(), z.unknown()));
+      return describe(objectSchema(spec));
+    }
+    default:
+      return describe(z.unknown());
+  }
+}
+
+function objectSchema(spec: Record<string, unknown>): z.ZodTypeAny {
+  const properties = (spec.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set(
+    (Array.isArray(spec.required) ? spec.required : []).filter(
+      (v): v is string => typeof v === "string",
+    ),
+  );
+
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const [name, field] of Object.entries(properties)) {
+    const built = fieldSchema(field ?? {});
+    shape[name] = required.has(name) ? built : built.optional();
+  }
+  return z.object(shape);
+}
+
+/**
+ * Exported so it can be tested directly. A tool schema is the contract a model
+ * is held to — a mistranslated `required` or a dropped enum is a silent
+ * accuracy loss, which is exactly the kind of bug that never announces itself.
+ */
+export function toolInputSchema(tool: { inputSchema?: Record<string, unknown> }): z.ZodType {
+  const spec = tool.inputSchema;
+  if (!spec || typeof spec !== "object") return z.object({}).passthrough();
+  const properties = (spec.properties ?? {}) as Record<string, unknown>;
+  // No properties means the broker told us nothing useful, and an empty object
+  // schema would say "this tool takes no arguments" — a stronger and wronger
+  // claim than staying open.
+  if (!Object.keys(properties).length) return z.object({}).passthrough();
+  return objectSchema(spec) as z.ZodType;
 }
 
 /**
@@ -226,7 +295,7 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
           description:
             tool.description ??
             `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`,
-          inputSchema: argumentsSchema(tool),
+          inputSchema: toolInputSchema(tool),
           execute: (input: Record<string, unknown>) =>
             runTool(options, tool.slug, input, user),
         }),

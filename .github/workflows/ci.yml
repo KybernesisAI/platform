@@ -27,5 +27,8 @@ jobs:
       # The registry is what `eve add` reads. A malformed item, or one whose
       # file pointers do not resolve, fails at a client's terminal rather than
       # here — and the JSON is edited by hand often enough for that to be real.
+      - name: Tests
+        run: npm test
+
       - name: Validate the registry
         run: node scripts/check-registry.mjs
