@@ -38,6 +38,7 @@ export interface GrokSubscriptionOptions<TModel> {
   createOpenAI: (config: {
     baseURL: string;
     apiKey: string;
+    fetch?: typeof globalThis.fetch;
   }) => { chat: (model: string) => TModel };
 }
 
@@ -96,29 +97,29 @@ export function grokSubscription<TModel>(options: GrokSubscriptionOptions<TModel
   // "fine" and cannot answer is worse than one that refuses to start.
   readGrokCredential(options.authPath);
 
-  const provider = options.createOpenAI({
-    baseURL,
-    // The SDK wants a string at construction; the fetch below supplies the
-    // real, current one.
-    apiKey: "grok-subscription",
-  });
-
-  const model = provider.chat(options.model) as TModel & {
-    doGenerate?: unknown;
-    doStream?: unknown;
+  /**
+   * Swap the Authorization header at the moment of the call.
+   *
+   * Done in fetch rather than by wrapping the model: the SDK's model methods
+   * rely on their own `this`, and intercepting them through a Proxy detaches
+   * that binding — every call then dies inside the SDK on a missing internal,
+   * which is a confusing way to learn you were too clever. A fetch wrapper
+   * touches the one thing that actually needs to change.
+   */
+  const withCurrentToken: typeof globalThis.fetch = async (input, init) => {
+    const { key } = readGrokCredential(options.authPath);
+    const headers = new Headers(init?.headers);
+    headers.set("authorization", `Bearer ${key}`);
+    return await globalThis.fetch(input, { ...init, headers });
   };
 
-  return new Proxy(model as object, {
-    get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver);
-      if (property !== "doGenerate" && property !== "doStream") return value;
-      return async (input: { headers?: Record<string, string> }) => {
-        const { key } = readGrokCredential(options.authPath);
-        return await (value as (o: unknown) => unknown)({
-          ...input,
-          headers: { ...(input.headers ?? {}), authorization: `Bearer ${key}` },
-        });
-      };
-    },
-  }) as TModel;
+  const provider = options.createOpenAI({
+    baseURL,
+    // Required by the SDK at construction; the fetch above supplies the real,
+    // current credential on every request.
+    apiKey: "grok-subscription",
+    fetch: withCurrentToken,
+  });
+
+  return provider.chat(options.model);
 }
