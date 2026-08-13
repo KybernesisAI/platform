@@ -21,6 +21,11 @@
 
 export { exeModel, type ExeModelOptions } from "./model.js";
 export {
+  grokSubscription,
+  readGrokCredential,
+  type GrokSubscriptionOptions,
+} from "./grok.js";
+export {
   hostPreflight,
   type HostPreflightResult,
   type HostCheck,
