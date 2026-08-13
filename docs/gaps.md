@@ -44,11 +44,15 @@ Three categories, and the middle one is the dangerous one:
    definitions in every prompt, from two services. Real tokens per turn and
    measurably worse selection. Curated top-N plus an escape hatch is the
    proposal; it needs an eval across flat / two-level / hybrid first.
-6. **Connector tool schemas are thin where the broker's list view is thin.**
-   Watching Sid call Plaud: nine attempts to pass a `file_id` the published
-   schema never mentioned, guided only by error messages. Two fixes: fetch the
-   per-tool definition rather than the list entry, and feed a failed call's
-   error back into the session so the next attempt knows.
+6. ~~**Connector tool schemas are thin.**~~ **Fixed, and it was ours.** The
+   published schema was never thin: Plaud's `get_file` declares a required
+   `file_id` *with a description*. `localMcpTools()` read `tools/list` for names
+   and descriptions and threw the `inputSchema` away, handing the model an open
+   object — so nine calls guessing an argument name that was in the payload the
+   whole time. `@kybernesis/local` 0.5.0 translates it (`mcpInputSchema`, six
+   tests against Plaud's real schemas). Running on Sid; **not yet published**
+   (item 16), and the one-attempt-instead-of-nine still wants a human turn in
+   Studio to watch.
 7. **`eve-connect` is unimplemented.** It is the answer for a client who refuses
    a fourth party holding their tokens, and today it is only a `provider` value
    on a card.
@@ -63,11 +67,22 @@ Three categories, and the middle one is the dangerous one:
     KybernesisAI org, so Sid's machine can neither pull nor push. A routine
     written from chat is an uncommitted change on a disk. Needs the org policy
     changed or a fine-grained PAT. *(Parked deliberately.)*
-11. **Two server processes keep appearing on Sid.** `restart.sh` asserts exactly
-    one and passes; something respawns afterwards, most likely exe.dev's own
-    supervisor racing the script. Two servers on one durable store is the
-    condition that strands sessions — the root cause behind a whole evening of
-    "nothing is happening", and still unexplained.
+11. ~~**Two server processes keep appearing on Sid.**~~ **Explained and closed.**
+    Two causes, neither of them a supervisor: the lock was inherited by the
+    child (fixed with `9>&-`), and every "second server" sighting after that was
+    my own test harness — `ssh host "script"` sends SIGHUP on disconnect and
+    kills the script mid-restart, leaving exactly what it was meant to prevent.
+    Tested honestly, with both restarts detached from the connection:
+
+    ```
+    ssh <host> "setsid nohup bash ~/restart.sh >/tmp/r1.log 2>&1 </dev/null & \
+                sleep 3; setsid nohup bash ~/restart.sh >/tmp/r2.log 2>&1 </dev/null &"
+    ```
+
+    Both completed (pid=46002, pid=46127), both asserted a single server, and
+    `pgrep -fc server/index.mjs` returned 1. There is no supervisor: process
+    ancestry is `npm exec eve start → sh -c → node .bin/eve → server/index.mjs`,
+    one chain. **Anything that restarts Sid must detach**, or it becomes the bug.
 12. **No tests for the transport.** The send path broke five distinct ways in one
     evening. Every fix was verified by hand.
 13. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and
@@ -111,7 +126,14 @@ Three categories, and the middle one is the dangerous one:
 
 1. The tool-volume eval, then curation. It is now concrete: 51 definitions from
    two services, and every connector added makes it worse.
-2. Per-tool schemas (item 6). The Plaud retry loop is the evidence.
-3. Verify the unverified column — remote MCP, unattended runs, the watchdog.
-4. Find what respawns Sid's second server (item 11). It is the oldest unexplained
-   thing here and it caused the worst symptoms.
+2. Verify the unverified column — remote MCP, unattended runs, the watchdog.
+   These are the last places where "it typechecks" is standing in for "it ran".
+3. Automate publishing (item 16). It has now blocked a finished fix twice.
+
+## Needs Ian, exactly
+
+- `cd ~/platform/packages/local && npm publish --access public` — ships the MCP
+  schema fix as `@kybernesis/local@0.5.0`. Sid already runs the built copy, so
+  this is about every *other* install.
+- One Plaud question to Sid in Studio, to watch the fix land: it should ask for
+  a file by id in one call, not nine.

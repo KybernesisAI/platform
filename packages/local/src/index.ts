@@ -294,6 +294,81 @@ export function localSearchTool(options: LocalToolsOptions = {}) {
 }
 
 /**
+ * An MCP server's JSON Schema, turned into something the model is held to.
+ *
+ * MCP servers publish real schemas on tools/list — Plaud's `get_file` declares
+ * a required `file_id` with a description — and this resolver used to discard
+ * them and hand the model an open object. Watching that play out: nine
+ * consecutive calls guessing the argument name, steered only by error strings,
+ * before it landed. The schema was in the payload the whole time.
+ *
+ * Deliberately shallow, and unknown constructs stay permissive: these come from
+ * servers written by everyone, and a rule we invent that the server does not
+ * have is worse than a field we pass through untyped.
+ *
+ * The same translation exists in @kybernesis/connectors for broker tools. Two
+ * copies of fifty lines beats a dependency between two packages that otherwise
+ * share nothing.
+ */
+function fieldSchema(spec: Record<string, unknown>): z.ZodTypeAny {
+  const type = Array.isArray(spec.type) ? spec.type[0] : spec.type;
+  const describe = (schema: z.ZodTypeAny): z.ZodTypeAny =>
+    typeof spec.description === "string" ? schema.describe(spec.description) : schema;
+
+  if (Array.isArray(spec.enum) && spec.enum.length) {
+    const values = spec.enum.filter((v): v is string => typeof v === "string");
+    if (values.length) return describe(z.enum(values as [string, ...string[]]));
+  }
+
+  switch (type) {
+    case "string":
+      return describe(z.string());
+    case "number":
+    case "integer":
+      return describe(z.number());
+    case "boolean":
+      return describe(z.boolean());
+    case "array": {
+      const items = (spec.items ?? {}) as Record<string, unknown>;
+      return describe(z.array(Object.keys(items).length ? fieldSchema(items) : z.unknown()));
+    }
+    case "object": {
+      const properties = (spec.properties ?? {}) as Record<string, unknown>;
+      if (!Object.keys(properties).length) return describe(z.record(z.string(), z.unknown()));
+      return describe(objectSchema(spec));
+    }
+    default:
+      return describe(z.unknown());
+  }
+}
+
+function objectSchema(spec: Record<string, unknown>): z.ZodTypeAny {
+  const properties = (spec.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set(
+    (Array.isArray(spec.required) ? spec.required : []).filter(
+      (v): v is string => typeof v === "string",
+    ),
+  );
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const [name, field] of Object.entries(properties)) {
+    const built = fieldSchema(field ?? {});
+    shape[name] = required.has(name) ? built : built.optional();
+  }
+  return z.object(shape);
+}
+
+/** An MCP tool's declared inputs, or an open object when it declares none. */
+export function mcpInputSchema(spec: Record<string, unknown> | undefined): z.ZodType {
+  if (!spec || typeof spec !== "object") return z.object({}).passthrough();
+  const properties = (spec.properties ?? {}) as Record<string, unknown>;
+  // No properties means the server told us nothing. An empty object schema
+  // would claim the tool takes no arguments, which is a stronger and wronger
+  // statement than staying open.
+  if (!Object.keys(properties).length) return z.object({}).passthrough();
+  return objectSchema(spec) as z.ZodType;
+}
+
+/**
  * Tools from MCP servers running on the user's own machine.
  *
  * The combination nothing else has: the agent reasons in the cloud, the server
@@ -384,7 +459,13 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
               "local-mcp",
               { server: server.id, method: "tools/list" },
               user,
-            )) as { tools?: { name: string; description?: string }[] };
+            )) as {
+              tools?: {
+                name: string;
+                description?: string;
+                inputSchema?: Record<string, unknown>;
+              }[];
+            };
             return listed?.tools ?? [];
           } catch {
             // One server being down must not cost the others their tools.
@@ -392,7 +473,7 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
           }
         })(),
         left(),
-        [] as { name: string; description?: string }[],
+        [] as { name: string; description?: string; inputSchema?: Record<string, unknown> }[],
       );
 
       for (const tool of tools) {
@@ -403,7 +484,7 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
           defineTool({
             description:
               `${tool.description ?? tool.name} — runs on the user's own computer via ${server.name}.`,
-            inputSchema: z.object({}).passthrough(),
+            inputSchema: mcpInputSchema(tool.inputSchema),
             execute: (input: Record<string, unknown>) =>
               call(
                 options,
