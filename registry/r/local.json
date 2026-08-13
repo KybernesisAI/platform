@@ -6,8 +6,7 @@
   "dependencies": [
     "@kybernesis/local"
   ],
-  "envVars": {
-  },
+  "envVars": {},
   "files": [
     {
       "path": "registry/local-tools.ts",
@@ -44,6 +43,12 @@
       "type": "registry:file",
       "target": "agent/tools/local_write.ts",
       "content": "import { localWriteTool } from \"@kybernesis/local\";\n\n// Write a file on the user's machine.\nexport default localWriteTool();\n"
+    },
+    {
+      "path": "registry/local-mcp.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_mcp.ts",
+      "content": "import { localMcpTools } from \"@kybernesis/local\";\n\n// Tools from MCP servers running on the user's OWN computer, reached through\n// KYBER Studio's outbound connection.\n//\n// This is the case a hosted connector cannot cover: a database inside a company\n// network, a private repository, an internal API with no ingress. The desktop\n// dials out, so nothing has to be exposed to reach it.\n//\n// Nothing here when the user has no servers set up, or when their desktop is\n// closed — a closed laptop means no local tools this turn, not a failed turn.\nexport default localMcpTools();\n"
     }
   ],
   "$schema": "https://ui.shadcn.com/schema/registry-item.json"

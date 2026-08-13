@@ -134,8 +134,7 @@
       "dependencies": [
         "@kybernesis/local"
       ],
-      "envVars": {
-      },
+      "envVars": {},
       "files": [
         {
           "path": "registry/local-tools.ts",
@@ -166,8 +165,14 @@
           "path": "registry/local-write.ts",
           "type": "registry:file",
           "target": "agent/tools/local_write.ts"
+        },
+        {
+          "path": "registry/local-mcp.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_mcp.ts"
         }
-      ]
+      ],
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json"
     },
     {
       "name": "manage",
@@ -187,6 +192,23 @@
           "path": "registry/manage-channel.ts",
           "type": "registry:file",
           "target": "agent/channels/kyb.ts"
+        }
+      ]
+    },
+    {
+      "name": "connectors",
+      "type": "registry:item",
+      "title": "Kybernesis Connectors",
+      "description": "Gmail, Calendar, Slack, Notion and the rest, connected by each person in KYBER Studio. Tools resolve per turn from whoever is talking, so one colleague's mailbox is never another's tool.",
+      "dependencies": [
+        "@kybernesis/connectors"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/connectors.ts",
+          "type": "registry:file",
+          "target": "agent/tools/connectors.ts"
         }
       ]
     }

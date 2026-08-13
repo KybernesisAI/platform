@@ -1,0 +1,18 @@
+{
+  "name": "connectors",
+  "type": "registry:item",
+  "title": "Kybernesis Connectors",
+  "description": "Gmail, Calendar, Slack, Notion and the rest, connected by each person in KYBER Studio. Tools resolve per turn from whoever is talking, so one colleague's mailbox is never another's tool.",
+  "dependencies": [
+    "@kybernesis/connectors"
+  ],
+  "envVars": {},
+  "files": [
+    {
+      "path": "registry/connectors.ts",
+      "type": "registry:file",
+      "target": "agent/tools/connectors.ts",
+      "content": "import { connectorTools } from \"@kybernesis/connectors\";\n\n// Tools for whatever the person talking has connected in KYBER Studio — Gmail,\n// Calendar, Slack, Notion, a custom MCP server, whatever is on their shelf.\n//\n// Resolved per turn from the identity that authenticated the turn, so one\n// colleague's mailbox never becomes a tool in another's conversation, and a\n// service connected mid-conversation works on the next message rather than the\n// next session.\n//\n// Costs nothing until it is used: without a control-plane credential the\n// resolver returns no tools at all, so an unregistered agent carries no prompt\n// weight and raises no errors.\nexport default connectorTools();\n"
+    }
+  ]
+}
