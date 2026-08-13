@@ -6,36 +6,51 @@
 <body style="font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.5rem;line-height:1.65;color:#111">
   <h1 style="letter-spacing:-0.02em">Kybernesis eve registry</h1>
   <p>An integration registry for <a href="https://eve.dev">eve</a> agents, in the standard <a href="https://ui.shadcn.com/docs/registry">shadcn registry format</a>.</p>
+
   <h2 style="font-size:1.1rem;margin-top:2rem">Add the registry (once per project)</h2>
   <pre style="background:#f5f5f5;padding:1rem;border-radius:8px;overflow-x:auto">eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json</pre>
+
   <h2 style="font-size:1.1rem;margin-top:2rem">Items</h2>
-
-  <p style="margin-bottom:4px"><strong>arcana</strong> — durable long-term memory via <a href="https://kybernesis.ai/arcana">Kybernesis Arcana</a>: MCP connection, recall/remember/brain-note skills, and recall-first instructions. Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/arcana</pre>
-
-  <p style="margin-bottom:4px"><strong>enterprise</strong> — control-plane governance for eve agents: offline token verification and per-agent grant enforcement (invite / grant / revoke from the Kybernesis admin). Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/enterprise</pre>
-
-  <p style="margin-bottom:4px"><strong>multiplayer</strong> — shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions. Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/multiplayer</pre>
-
-  <p style="margin-bottom:4px"><strong>evals</strong> — the baseline QA suite: memory, routing, and smoke behaviors with every production hardening lesson as a default. Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/evals</pre>
-
-  <p style="margin-bottom:4px"><strong>engineer</strong> — a vision-verified dev loop: workshop sandbox, a screenshot tool the model can see, and trade-school skills for building and shipping software. Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/engineer</pre>
-
-  <p style="margin-bottom:4px"><strong>dispatch</strong> — agent-to-agent dispatch: declared remote-peer edges with principal forwarding on by default, and a receiver channel that only trusts enumerated peer deployments. Apache-2.0.</p>
-  <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/dispatch</pre>
+  <div id="items"><p style="color:#555">Loading…</p></div>
 
   <p style="margin-top:2rem;font-size:0.9rem;color:#555">
-    <a href="https://github.com/KybernesisAI/platform/tree/master/registry">Registry source</a> ·
-    npm: <a href="https://www.npmjs.com/package/@kybernesis/arcana">arcana</a> ·
-    <a href="https://www.npmjs.com/package/@kybernesis/enterprise">enterprise</a> ·
-    <a href="https://www.npmjs.com/package/@kybernesis/multiplayer">multiplayer</a> ·
-    <a href="https://www.npmjs.com/package/@kybernesis/evals">evals</a> ·
-    <a href="https://www.npmjs.com/package/@kybernesis/engineer">engineer</a> ·
-    <a href="https://www.npmjs.com/package/@kybernesis/dispatch">dispatch</a>
+    <a href="https://github.com/KybernesisAI/platform/tree/master/registry">Registry source</a>
   </p>
+
+  <!--
+    The list is rendered from r/registry.json rather than written out by hand.
+
+    It used to be hand-maintained, and it drifted exactly the way hand-maintained
+    lists do: two packages shipped, the JSON knew about them, and this page went
+    on advertising six items. A catalogue that disagrees with the thing it
+    catalogues is worse than no catalogue, because someone trusts it.
+  -->
+  <script>
+    const escape = (value) =>
+      String(value ?? "").replace(/[&<>"]/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+      );
+
+    fetch("/r/registry.json", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((registry) => {
+        const items = registry.items ?? [];
+        document.getElementById("items").innerHTML = items
+          .map(
+            (item) => `
+              <p style="margin-bottom:4px">
+                <strong>${escape(item.name)}</strong> — ${escape(item.description)}
+              </p>
+              <pre style="background:#f5f5f5;padding:0.6rem 1rem;border-radius:8px;overflow-x:auto;margin-top:0">eve add @kybernesis/${escape(item.name)}</pre>
+            `,
+          )
+          .join("");
+      })
+      .catch(() => {
+        document.getElementById("items").innerHTML =
+          '<p style="color:#555">The catalogue could not be loaded. ' +
+          '<a href="/r/registry.json">Read it directly</a>.</p>';
+      });
+  </script>
 </body>
 </html>
