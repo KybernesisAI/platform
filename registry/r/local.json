@@ -7,7 +7,6 @@
     "@kybernesis/local"
   ],
   "envVars": {
-    "LOCAL_EXEC_AGENT_SECRET": ""
   },
   "files": [
     {

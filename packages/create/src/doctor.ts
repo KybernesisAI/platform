@@ -265,16 +265,18 @@ export async function doctor(): Promise<void> {
   const hasManage = existsSync(join(cwd, "agent/channels/kyb.ts"));
 
   if (hasLocal) {
-    // Without the relay secret the tools compile, appear in the tool list, and
-    // fail at the moment the user asks for something — the worst time to learn
-    // a deployment is incomplete.
-    if (process.env.LOCAL_EXEC_AGENT_SECRET) {
-      add("pass", "local execution is configured (LOCAL_EXEC_AGENT_SECRET set)");
+    // Without a credential the tools compile, appear in the tool list, and fail
+    // at the moment the user asks for something — the worst time to learn a
+    // deployment is incomplete. This is NOT a value to go and set by hand: the
+    // switch in Studio installs it, and a missing one means nobody has turned
+    // local access on yet.
+    if (process.env.KYBERNESIS_AGENT_CREDENTIAL) {
+      add("pass", "local execution can identify this agent to the control plane");
     } else {
       add(
-        "fail",
-        "local execution has no LOCAL_EXEC_AGENT_SECRET",
-        "the local_* tools will be offered to the model and fail on first use; set the shared secret the control-plane relay expects",
+        "warn",
+        "local execution is installed but this agent has no credential yet",
+        "turn on 'Work on this computer' in the agent's settings in KYBER Studio — it mints and installs one; do not paste a credential by hand",
       );
     }
   }

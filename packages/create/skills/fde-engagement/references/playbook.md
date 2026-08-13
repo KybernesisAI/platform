@@ -2072,8 +2072,14 @@ manage, since it cannot check a grant for a name it does not know.
    rebuilds, so it works on a VM and refuses on a read-only serverless bundle,
    with that reason. Set `restartCommand` in `agent/channels/kyb.ts` or an
    install completes without taking effect.
-4. **For `local`: the relay secret** (`LOCAL_EXEC_AGENT_SECRET`) matching the
-   control plane.
+4. **For `local`: nothing to configure.** Setup is one switch in Studio — the
+   agent's settings, *Work on this computer*. Behind it, Studio mints the
+   agent's credential from the control plane, installs it over the manage
+   channel, and records a standing grant for that machine; the agent restarts
+   once to load it. Never hand anyone a credential to paste into an env file.
+   The admin UI's "mint agent credential (shown once)" button remains for
+   recovery and is not the path: a setup step that asks someone to carry a
+   secret between two screens gets done wrong or skipped.
 
 ### 12.4 What consent looks like for the user
 
@@ -2090,11 +2096,23 @@ colleague knows "build me a demo" from "look at my repo".
 
 ### 12.5 State this plainly to the client
 
-- **Local execution is not yet a governed capability.** The agent authenticates
-  to the relay with a shared secret, so anyone holding it can reach a connected
-  desktop in that org. It must become its own revocable grant, separate from
-  "may talk to this agent". Do not install `local` at a client who would treat
-  that as a surprise.
+- **Two things gate a laptop, and they fail differently.** *Identity* is the
+  agent's signed credential — "the local-execution relay rejected my
+  credentials" means that. *Consent* is a standing per-device grant — "you have
+  not allowed this agent to work on this computer" means that. Neither alone
+  reaches anything. The grant is permanent on purpose: "always allow" means
+  always, from a chat window, a schedule, or a message sent from a phone, and it
+  ends on revoke, device removal, or disabling the agent.
+- **Reaching a desktop is still not its own revocable capability.** "May talk to
+  this agent" and "may run commands on my laptop" remain one decision, taken
+  when the person allows the machine. Say so at a client who would treat it as a
+  surprise.
+- **Installing the credential restarts the agent**, and a turn in flight during
+  that restart is lost for good — eve does not resume a step killed mid-flight.
+  It reads as a spinner that never resolves, often alongside a "credential is
+  unset" error from the process that was replaced. Send a new message, and reset
+  the conversation if the session itself is stranded. §11.8 is why a restart
+  script must wait for in-flight turns.
 - **Reading a file sends it to the model.** Execution is local; the reasoning is
   not. Fine for most work, and a conversation to have before a Studio points at
   a regulated repository.
