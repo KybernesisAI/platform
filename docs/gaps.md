@@ -24,6 +24,8 @@ Three categories, and the middle one is the dangerous one:
 - Signed, notarized macOS build with a working in-app update control.
 - Sid under version control, local and GitHub in one history.
 - The remote MCP client against a real public server (see item 1).
+- Kyber on current packages: enterprise 0.4, engineer 0.3, plus connectors,
+  local and manage. Its eval suite passed on the upgrade — 10 passed, 22 gates.
 - Sid's suite green again on 2026-08-14 after the MCP schema fix and an env
   cleanup: 11 passed, 1 scored, 29 gates, 5m19s, on the Grok subscription.
 
@@ -41,45 +43,51 @@ Three categories, and the middle one is the dangerous one:
    agent-side path that turns one into tools a deployed agent calls. Not run
    because both need a signed-in principal. The remaining risk is storage and
    plumbing, not the protocol.
-2. **Unattended connector runs.** A schedule has no signed-in user and gets the
+2. **Kyber ↔ Sid, agent to agent.** Both ends are deployed: Kyber has a
+   governed peer to `sid`, Sid's eve channel is now a dispatchChannel in
+   governed mode (with kybernesisAuth kept as extraAuth so Studio still gets
+   in), and Studio renders the exchange as a collapsed, expandable line. What
+   has never run is the hop itself — the control-plane **edges are not granted**,
+   and the mint refuses with a clean `edge_not_granted`, which is the negative
+   case working. One form in the admin per direction unblocks it.
+3. **Unattended connector runs.** A schedule has no signed-in user and gets the
    shared principal. Never exercised; the first symptom would be a morning
    briefing that silently does nothing.
-3. **Studio's dead-man's switch and dispatch deadline.** Written after the
+4. **Studio's dead-man's switch and dispatch deadline.** Written after the
    wedges, never seen firing.
-4. **The Grok credential refreshing unattended.** It expires every six hours and
+5. **The Grok credential refreshing unattended.** It expires every six hours and
    the CLI refreshes it in place. If nobody runs `grok` on that VM for a day,
    does it still hold? Unknown, and it would present as the agent "breaking".
 
 ## Missing — client-facing
 
-5. **Tool volume is unmanaged.** Gmail (23) plus Calendar (28) is 51 tool
+6. **Tool volume is unmanaged.** Gmail (23) plus Calendar (28) is 51 tool
    definitions in every prompt, from two services. Real tokens per turn and
    measurably worse selection. Curated top-N plus an escape hatch is the
    proposal; it needs an eval across flat / two-level / hybrid first.
-6. ~~**Connector tool schemas are thin.**~~ **Fixed, and it was ours.** The
+7. ~~**Connector tool schemas are thin.**~~ **Fixed, and it was ours.** The
    published schema was never thin: Plaud's `get_file` declares a required
    `file_id` *with a description*. `localMcpTools()` read `tools/list` for names
    and descriptions and threw the `inputSchema` away, handing the model an open
    object — so nine calls guessing an argument name that was in the payload the
    whole time. `@kybernesis/local` 0.5.0 translates it (`mcpInputSchema`, six
-   tests against Plaud's real schemas). Running on Sid; **not yet published**
-   (item 16), and the one-attempt-instead-of-nine still wants a human turn in
-   Studio to watch.
-7. **`eve-connect` is unimplemented.** It is the answer for a client who refuses
+   tests against Plaud's real schemas). Published and running on Sid. The
+   one-attempt-instead-of-nine still wants a human turn in Studio to watch.
+8. **`eve-connect` is unimplemented.** It is the answer for a client who refuses
    a fourth party holding their tokens, and today it is only a `provider` value
    on a card.
-8. **No admin screen for the connector catalog.** The ten are seeded; an org
+9. **No admin screen for the connector catalog.** The ten are seeded; an org
    cannot add an eleventh or hide one without SQL.
-9. **Nothing shows which machine a local MCP server is on.** They are per-device
-   by design; a second Mac silently has a different set.
+10. **Nothing shows which machine a local MCP server is on.** They are per-device
+    by design; a second Mac silently has a different set.
 
 ## Missing — operational
 
-10. **The VM cannot reach its own repo.** Deploy keys are disabled at the
+11. **The VM cannot reach its own repo.** Deploy keys are disabled at the
     KybernesisAI org, so Sid's machine can neither pull nor push. A routine
     written from chat is an uncommitted change on a disk. Needs the org policy
     changed or a fine-grained PAT. *(Parked deliberately.)*
-11. ~~**Two server processes keep appearing on Sid.**~~ **Closed. There was
+12. ~~**Two server processes keep appearing on Sid.**~~ **Closed. There was
     never a second server — the measurement was wrong.**
 
     `pgrep -fc 'server/index.mjs'`, run over ssh, matches the *shell running the
@@ -112,29 +120,38 @@ Three categories, and the middle one is the dangerous one:
     node .bin/eve → server/index.mjs`, one chain. **Anything that restarts Sid
     must detach** (`setsid nohup … </dev/null &`), or ssh's SIGHUP becomes the
     bug you go looking for.
-12. **No tests for the transport.** The send path broke five distinct ways in one
+13. ~~**A restart could serve a stale build.**~~ **Fixed.** `restart.sh`
+    proved the PROCESS started after the BUILD, which says nothing about whether
+    the build reflects the SOURCE. Sid spent a day serving a build ten hours
+    older than its files while reporting "OK: serving the current build". It now
+    builds when the source has moved and refuses to restart into a failed build.
+
+    This was worse than it sounds: `@kybernesis/manage` calls this script after
+    writing files, so **every install from KYBER Studio reported success and
+    changed nothing.**
+14. **No tests for the transport.** The send path broke five distinct ways in one
     evening. Every fix was verified by hand.
-13. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and
+15. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and
     the runner ships npm 10; they resolve one transitive range differently, so
     the pipelines run `npm install`. Reproducibility traded for a pipeline that
     runs. Pinning the runner's npm major would fix it properly.
-14. **Local `.dmg` packaging needs python**, which this machine lacks.
+16. **Local `.dmg` packaging needs python**, which this machine lacks.
     `--mac dir` sidesteps it for the pre-release launch check.
-15. **Sid has no monitoring.** A stranded session, a dead turn, or a failed
+17. **Sid has no monitoring.** A stranded session, a dead turn, or a failed
     restart is found by a person noticing.
-16. **Publishing is manual.** Every package needs a human at an npm browser
+18. **Publishing is manual.** Every package needs a human at an npm browser
     prompt, and it has repeatedly been the slowest step in a fix.
 
 ## Missing — security and governance
 
-17. **Two consent systems that cannot revoke each other.** The control plane
+19. **Two consent systems that cannot revoke each other.** The control plane
     holds a standing per-device grant; Studio holds per-effect permissions in a
     local file. Revoking in one does not revoke the other.
-18. **Reaching a desktop is still not its own capability.** "May talk to this
+20. **Reaching a desktop is still not its own capability.** "May talk to this
     agent" and "may run commands on my laptop" remain one decision.
-19. **Local execution runs in Studio's main process**, not a supervised daemon.
+21. **Local execution runs in Studio's main process**, not a supervised daemon.
     A bug there takes the window with it.
-20. **No audit trail for connector use.** Who ran which tool against whose
+22. **No audit trail for connector use.** Who ran which tool against whose
     account is not recorded anywhere a client could review.
 
 ## Known-and-accepted
@@ -157,12 +174,16 @@ Three categories, and the middle one is the dangerous one:
    two services, and every connector added makes it worse.
 2. Verify the unverified column — remote MCP, unattended runs, the watchdog.
    These are the last places where "it typechecks" is standing in for "it ran".
-3. Automate publishing (item 16). It has now blocked a finished fix twice.
+3. Automate publishing (item 18). It has now blocked a finished fix twice.
 
 ## Needs Ian, exactly
 
-- `cd ~/platform/packages/local && npm publish --access public` — ships the MCP
-  schema fix as `@kybernesis/local@0.5.0`. Sid already runs the built copy, so
-  this is about every *other* install.
-- One Plaud question to Sid in Studio, to watch the fix land: it should ask for
-  a file by id in one call, not nine.
+- **Grant the two A2A edges** at https://agent.kybernesis.ai/agents. The form is
+  per-callee — "Agent-to-agent edges (who may CALL this agent)":
+  - open **sid**, allow calls from **Kyber**;
+  - open **Kyber**, allow calls from **sid**.
+  Names are case-sensitive. Until then the mint returns `edge_not_granted`.
+- **Publish two packages**: `@kybernesis/multiplayer@0.2.0` (refusePublic) and
+  `@kybernesis/local@0.6.0` (the tool guard). Kyber's local tools stay ungated
+  in Slack channels until both are on npm.
+- One Plaud question to Sid in Studio, to watch the schema fix land.
