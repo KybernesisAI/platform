@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -177,6 +177,33 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL));
   writeFileSync(join(dir, "agent/extensions/arcana.ts"), rootArcanaTs());
   writeFileSync(join(dir, "evals/kybernesis.eval.ts"), evalFileTs(displayName, depts));
+
+  /**
+   * A self-hosted agent gets its restart script installed, not described.
+   *
+   * There is no deploy pipeline off Vercel, so restarting IS the release — and
+   * the script that does it carries every lesson that path has cost: serialize
+   * concurrent restarts, build when the source moved, wait for in-flight turns,
+   * and count servers by what they are rather than by who mentions them.
+   *
+   * It used to ship inside @kybernesis/exe with a line in the docs telling
+   * people where to find it, which means a new deployment starts with none of
+   * that and rediscovers it one outage at a time.
+   */
+  if (host === "exe") {
+    const source = join(dir, "node_modules/@kybernesis/exe/scripts/eve-server.sh");
+    const target = join(dir, "scripts/eve-server.sh");
+    try {
+      mkdirSync(join(dir, "scripts"), { recursive: true });
+      copyFileSync(source, target);
+      chmodSync(target, 0o755);
+      console.log(dim("     scripts/eve-server.sh — restart with proof (serialized, builds if stale)"));
+    } catch {
+      console.log(
+        yellow("  ! could not install scripts/eve-server.sh — copy it from node_modules/@kybernesis/exe/scripts/"),
+      );
+    }
+  }
 
   if (plan.file) {
     console.log(bold(`\n4/6  Channel: ${channel} …`));
