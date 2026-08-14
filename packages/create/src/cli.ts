@@ -6,6 +6,7 @@
  *                         self-testing eve agent (also: npm create @kybernesis)
  *   kyb doctor            preflight an agent project: keys, issuer, envs, discovery
  *   kyb skills [--global] install/refresh the FDE Claude Code skill suite
+ *   kyb arcana            set memory workspaces + keys, and verify them
  *   kyb register          register this agent with the control plane (device flow)
  *   kyb deploy            put this repo on its host and restart it, with proof
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
@@ -18,6 +19,7 @@ import { upgrade } from "./upgrade.js";
 import { installSkills } from "./skills.js";
 import { deploy } from "./deploy.js";
 import { register } from "./register.js";
+import { configureArcana } from "./arcana.js";
 
 
 function flag(rest: string[], key: string): string | undefined {
@@ -47,6 +49,9 @@ switch (command) {
     break;
   case "skills":
     installSkills({ global: rest.includes("--global") });
+    break;
+  case "arcana":
+    await configureArcana({ dir: process.cwd(), suggest: flag(rest, "name") ?? "agent" });
     break;
   case "register":
     await register({ name: flag(rest, "name"), url: flag(rest, "url") });
@@ -79,6 +84,7 @@ ${bold("kyb")} — Kybernesis agent scaffolder & FDE toolkit
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code
       --global          ${dim("install to ~/.claude/skills instead of this repo")}
+  ${bold("kyb arcana")}          set memory workspaces + keys, and verify each pair
   ${bold("kyb register")}        register this agent with the control plane
       --name=<name>     ${dim("defaults to KYBERNESIS_AGENT in .env.local")}
       --url=<url>       ${dim("defaults to https://$EXE_VM_NAME.exe.xyz")}

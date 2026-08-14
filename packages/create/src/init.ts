@@ -32,6 +32,7 @@ import {
   subagentInstructionsMd,
 } from "./templates.js";
 import { suiteDir } from "./skills.js";
+import { configureArcana } from "./arcana.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -177,6 +178,11 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL));
   writeFileSync(join(dir, "agent/extensions/arcana.ts"), rootArcanaTs());
   writeFileSync(join(dir, "evals/kybernesis.eval.ts"), evalFileTs(displayName, depts));
+
+  // Ask for the memory keys HERE, while the person is still standing in the
+  // scaffold — not in a printed next-step they will read after the context has
+  // gone. Skipped with --yes, which is for CI and takes no input by design.
+  if (!options.yes) await configureArcana({ dir, suggest: name, depts });
 
   /**
    * A self-hosted agent gets its restart script installed, not described.

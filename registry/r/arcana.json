@@ -9,7 +9,9 @@
   ],
   "envVars": {
     "ARCANA_API_KEY": "",
-    "ARCANA_COMPANY_WORKSPACE": ""
+    "ARCANA_COMPANY_WORKSPACE": "",
+    "ARCANA_DM_WORKSPACE": "",
+    "ARCANA_EVAL_API_KEY": ""
   },
   "files": [
     {
