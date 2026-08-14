@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { bold, dim, green } from "./util.js";
@@ -29,6 +29,22 @@ export function installSkills(opts: { global?: boolean } = {}): void {
   const target = opts.global
     ? join(homedir(), ".claude", "skills")
     : join(process.cwd(), ".claude", "skills");
+
+  /**
+   * Never install the suite into itself.
+   *
+   * Run from inside the package's own skills/ directory, this copies the suite
+   * to skills/.claude/skills — which then ships inside the published tarball,
+   * so every consumer installs a duplicate suite nested one level down. That
+   * happened, got committed, and was one `npm publish` from being everyone's.
+   */
+  if (resolve(target).startsWith(resolve(src))) {
+    console.error(
+      "Refusing to install the suite into itself — run kyb skills from an agent repo, not from the package.",
+    );
+    process.exit(2);
+  }
+
   mkdirSync(target, { recursive: true });
   const names = readdirSync(src).filter((n) => !n.startsWith("."));
   for (const name of names) {
