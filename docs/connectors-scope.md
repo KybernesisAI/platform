@@ -13,7 +13,7 @@ the user never sees.
 | --- | --- | --- |
 | `composio` | brokered OAuth for hundreds of services | breadth. Registering an OAuth client per provider ourselves is ten a week and three hundred is a business |
 | `eve-connect` | eve's native `connect()` via Vercel Connect | no fourth party in the credential path, for a client whose security review rejects one |
-| `local-mcp` | an MCP server on the user's own machine, reached through the local-execution relay | the thing neither Claude Desktop nor Grok Bot can do |
+| `local-mcp` | an MCP server on the user's own machine, reached through the local-execution relay | the thing hosted desktop assistants cannot do |
 
 **`provider` is on every card from day one.** Not because we need all three
 immediately, but because the first enterprise client whose review rejects
