@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
 
 /**
  * Grok on a SuperGrok / X Premium+ subscription, not on token-billed API keys.
@@ -34,6 +38,17 @@ export interface GrokSubscriptionOptions<TModel> {
   authPath?: string;
   /** xAI API base. Rarely changed. */
   baseURL?: string;
+  /**
+   * Keep the credential alive by running the Grok CLI when it is close to
+   * expiring. Defaults to true; pass false where the host refreshes it some
+   * other way (a cron, a supervisor).
+   *
+   * Set `grokBinary` if the CLI is not on PATH — the installer puts it in
+   * ~/.grok/bin, which a service process's PATH usually does not include.
+   */
+  autoRefresh?: boolean;
+  /** Path to the `grok` binary. Defaults to ~/.grok/bin/grok, then PATH. */
+  grokBinary?: string;
   /** `createOpenAI` from `@ai-sdk/openai`, passed in so this package pins no provider version. */
   createOpenAI: (config: {
     baseURL: string;
@@ -81,6 +96,55 @@ export function readGrokCredential(authPath?: string): {
   return { key: entry.key, email: entry.email, expiresAt };
 }
 
+/** Where the installer puts the CLI, which a service process rarely has on PATH. */
+function grokBinaryPath(explicit?: string): string {
+  if (explicit) return explicit;
+  const installed = join(homedir(), ".grok", "bin", "grok");
+  return existsSync(installed) ? installed : "grok";
+}
+
+/**
+ * Refresh the credential by asking the CLI to do it.
+ *
+ * The token lasts six hours and the stored refresh token is what renews it —
+ * but only the CLI ever exchanges it. Nothing in a long-running agent touches
+ * that file, so an agent that reads the credential faithfully on every request
+ * still dies six hours after the last human ran `grok`. That is not
+ * hypothetical: it took a production agent down, and it presented as a 403
+ * from the model API with no mention of expiry.
+ *
+ * `grok models` is a cheap authenticated command; running it renews the token
+ * in place as a side effect. Deliberately shelling out to the vendor's own CLI
+ * rather than reimplementing their OAuth refresh against an undocumented
+ * endpoint — when xAI changes it, their CLI changes with it.
+ *
+ * Best-effort by design: if the refresh fails, the request still goes out with
+ * whatever credential is on disk, and the API's own error is a better
+ * description of the problem than anything invented here.
+ */
+let refreshing: Promise<void> | null = null;
+
+async function refreshCredential(options: {
+  grokBinary?: string;
+  authPath?: string;
+}): Promise<void> {
+  // One at a time: a burst of concurrent turns must not run six logins.
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    try {
+      await run(grokBinaryPath(options.grokBinary), ["models"], { timeout: 60_000 });
+    } catch {
+      /* Best effort — the request proceeds and the API reports the truth. */
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
+}
+
+/** Renew a little before the deadline, so a long turn cannot expire mid-flight. */
+const RENEW_WITHIN_MS = 15 * 60_000;
+
 /**
  * A Grok model billed to the subscription.
  *
@@ -106,7 +170,15 @@ export function grokSubscription<TModel>(options: GrokSubscriptionOptions<TModel
    * which is a confusing way to learn you were too clever. A fetch wrapper
    * touches the one thing that actually needs to change.
    */
+  const autoRefresh = options.autoRefresh ?? true;
+
   const withCurrentToken: typeof globalThis.fetch = async (input, init) => {
+    if (autoRefresh) {
+      const { expiresAt } = readGrokCredential(options.authPath);
+      if (!expiresAt || expiresAt.getTime() - Date.now() < RENEW_WITHIN_MS) {
+        await refreshCredential({ grokBinary: options.grokBinary, authPath: options.authPath });
+      }
+    }
     const { key } = readGrokCredential(options.authPath);
     const headers = new Headers(init?.headers);
     headers.set("authorization", `Bearer ${key}`);
