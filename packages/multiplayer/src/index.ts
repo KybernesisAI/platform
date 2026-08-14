@@ -1,4 +1,5 @@
 export {
+  refusePublic,
   requireDm,
   sessionSurface,
   slackUserIdOf,

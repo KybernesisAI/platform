@@ -74,6 +74,35 @@ export function requireDm(session: SessionAuthLike): SessionAuthContext {
   return caller;
 }
 
+/**
+ * Guard for capabilities whose RESULT should not land where everyone can read
+ * it — someone's laptop, someone's inbox, someone's private repository.
+ *
+ * Distinct from `requireDm`, and the difference is the whole point. `requireDm`
+ * fails closed on anything that is not a Slack DM, which also refuses KYBER
+ * Studio and the eve TUI — surfaces with no audience at all, where the
+ * capability is exactly what the person came for. This refuses only the surface
+ * that is genuinely public: a shared channel, where the asker is one of several
+ * people and the answer is visible to all of them.
+ *
+ * The concrete case: a Slack agent with local execution installed. "@agent read
+ * ~/notes.md" in a shared channel is a verified request from someone with a
+ * grant on their own machine — and posting that file into the channel shows it
+ * to everyone in the room. Their device consent was never a decision about an
+ * audience.
+ *
+ * The thrown message is model-visible, so the agent offers the obvious fix
+ * itself instead of reporting a failure.
+ */
+export function refusePublic(session: SessionAuthLike, capability?: string): void {
+  if (sessionSurface(session) !== "channel") return;
+  const what = capability ? `${capability} ` : "";
+  throw new Error(
+    `This ${what}capability is private: the result would be visible to everyone in this ` +
+      `channel. Do not retry it here — offer to continue in a direct message instead.`,
+  );
+}
+
 /** Slack user id of the current caller, when the session came from Slack. */
 export function slackUserIdOf(session: SessionAuthLike): string | null {
   const value = session.auth.current?.attributes.user_id;

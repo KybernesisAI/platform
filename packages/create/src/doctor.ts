@@ -270,7 +270,11 @@ export async function doctor(): Promise<void> {
     // deployment is incomplete. This is NOT a value to go and set by hand: the
     // switch in Studio installs it, and a missing one means nobody has turned
     // local access on yet.
-    if (process.env.KYBERNESIS_AGENT_CREDENTIAL) {
+    // `env`, not `process.env`: every other check reads the merged view, and
+    // reading the bare environment here reported a missing credential on an
+    // agent whose .env.local had one two lines above. A preflight tool that
+    // cries wolf is a preflight tool people learn to skip.
+    if (env.KYBERNESIS_AGENT_CREDENTIAL) {
       add("pass", "local execution can identify this agent to the control plane");
     } else {
       add(
@@ -284,7 +288,7 @@ export async function doctor(): Promise<void> {
   if (hasManage) {
     // manage authorizes with the caller's control-plane grant, so it needs to
     // know which agent it IS before it can check one.
-    if (process.env.KYBERNESIS_AGENT) {
+    if (env.KYBERNESIS_AGENT) {
       add("pass", "management routes can resolve this agent's grants");
     } else {
       add(

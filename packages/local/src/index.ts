@@ -42,6 +42,31 @@ export interface LocalToolsOptions {
    * laptop" remain one decision rather than two.
    */
   credential?: string;
+  /**
+   * Called before every local effect, with the tool's context. Throw to refuse.
+   *
+   * The agent's own consent story is per-effect and per-device, decided by the
+   * person at their machine. What it cannot know is the ROOM: the same verified
+   * person asking the same agent to read the same file is a different act in a
+   * private conversation than in a shared channel with eleven colleagues in it.
+   * A deployment that has both surfaces decides that here.
+   *
+   * ```ts title="agent/tools/local_read.ts"
+   * import { refusePublic } from "@kybernesis/multiplayer";
+   * export default localReadTool({ guard: (ctx) => refusePublic(ctx.session) });
+   * ```
+   *
+   * A thrown message reaches the model, so word it as something the agent can
+   * say back to the person.
+   */
+  guard?: (ctx: LocalToolContext) => void | Promise<void>;
+}
+
+/** The slice of eve's tool context these tools rely on. */
+export interface LocalToolContext {
+  session?: {
+    auth?: { current?: { principalId?: string } | null } | null;
+  } | null;
 }
 
 interface CallResult {
@@ -81,8 +106,12 @@ async function call(
   options: LocalToolsOptions,
   action: string,
   payload: Record<string, unknown>,
-  user?: string,
+  ctx?: LocalToolContext,
 ): Promise<unknown> {
+  // Before anything reaches the network. A guard that ran after the request
+  // would be a log line, not a guard.
+  if (options.guard && ctx) await options.guard(ctx);
+  const user = askingUser(ctx);
   const issuer = (
     options.issuer ??
     process.env.KYBERNESIS_ISSUER ??
@@ -179,10 +208,8 @@ async function call(
  * webhook). The relay then falls back to the org's most recent live desktop,
  * which is only ever right for a single operator.
  */
-function askingUser(ctx: {
-  session?: { auth?: { current?: { principalId?: string } | null } | null } | null;
-}): string | undefined {
-  return ctx.session?.auth?.current?.principalId;
+function askingUser(ctx?: LocalToolContext): string | undefined {
+  return ctx?.session?.auth?.current?.principalId;
 }
 
 export function localShellTool(options: LocalToolsOptions = {}) {
@@ -194,7 +221,7 @@ export function localShellTool(options: LocalToolsOptions = {}) {
       cwd: z.string().optional().describe("Absolute working directory on their machine"),
       timeoutMs: z.number().int().min(1000).max(600_000).optional(),
     }),
-    execute: (input, ctx) => call(options, "run-command", input, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "run-command", input, ctx),
   });
 }
 
@@ -208,7 +235,7 @@ export function localReadTool(options: LocalToolsOptions = {}) {
       startLine: z.number().int().min(1).optional().describe("Read a window instead of the whole file"),
       endLine: z.number().int().min(1).optional(),
     }),
-    execute: (input, ctx) => call(options, "read-file", input, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "read-file", input, ctx),
   });
 }
 
@@ -220,7 +247,7 @@ export function localListTool(options: LocalToolsOptions = {}) {
       path: z.string().describe("Absolute directory path on their machine"),
       depth: z.number().int().min(1).max(3).optional().describe("How deep to walk (default 1)"),
     }),
-    execute: (input, ctx) => call(options, "list-directory", input, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "list-directory", input, ctx),
   });
 }
 
@@ -232,7 +259,7 @@ export function localWriteTool(options: LocalToolsOptions = {}) {
       path: z.string().describe("Absolute path on their machine"),
       content: z.string(),
     }),
-    execute: (input, ctx) => call(options, "write-file", input, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "write-file", input, ctx),
   });
 }
 
@@ -274,7 +301,7 @@ export function localEditTool(options: LocalToolsOptions = {}) {
       newString: z.string().describe("Replacement text"),
       replaceAll: z.boolean().optional().describe("Replace every occurrence instead of failing"),
     }),
-    execute: (input, ctx) => call(options, "write-file", { ...input, op: "edit" }, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "write-file", { ...input, op: "edit" }, ctx),
   });
 }
 
@@ -289,7 +316,7 @@ export function localSearchTool(options: LocalToolsOptions = {}) {
       glob: z.string().optional().describe("Only files ending with this, e.g. `.ts`"),
       maxResults: z.number().int().min(1).max(200).optional(),
     }),
-    execute: (input, ctx) => call(options, "read-file", { ...input, op: "search" }, askingUser(ctx)),
+    execute: (input, ctx) => call(options, "read-file", { ...input, op: "search" }, ctx),
   });
 }
 
@@ -415,7 +442,11 @@ async function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
 
 export function localMcpTools(options: LocalToolsOptions = {}) {
   const resolve = async (_event: unknown, ctx: unknown) => {
-    const user = askingUser(ctx as { session?: { auth?: { current?: { principalId?: string } | null } | null } | null });
+    // The same context the effect tools get, so a guard sees discovery too:
+    // in a shared channel these tools should not merely refuse when called,
+    // they should not be offered.
+    const toolCtx = ctx as LocalToolContext;
+    const user = askingUser(toolCtx);
 
     const cacheKey = user ?? "(shared)";
     const cached = discovered.get(cacheKey);
@@ -429,7 +460,7 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
     const servers = await within(
       (async () => {
         try {
-          const listed = (await call(options, "local-mcp", { method: "servers/list" }, user)) as {
+          const listed = (await call(options, "local-mcp", { method: "servers/list" }, toolCtx)) as {
             servers?: { id: string; name: string }[];
           };
           return listed?.servers ?? [];
@@ -458,7 +489,7 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
               options,
               "local-mcp",
               { server: server.id, method: "tools/list" },
-              user,
+              toolCtx,
             )) as {
               tools?: {
                 name: string;
@@ -490,7 +521,7 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
                 options,
                 "local-mcp",
                 { server: server.id, method: "tools/call", params: { name: tool.name, arguments: input } },
-                user,
+                toolCtx,
               ),
           }),
         ]);
