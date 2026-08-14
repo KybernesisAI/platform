@@ -32,6 +32,9 @@ Three categories, and the middle one is the dangerous one:
 - **Studio's agent-to-agent rendering**, against the recorded stream from that
   exchange (`kyber-studio/test/fixtures/a2a-kyber-sid.jsonl`, five tests).
 - **The Grok credential self-healing** from a forced expiry, mid-turn.
+- **Studio's agent-to-agent rendering**: a collapsed line naming the peer, the
+  exchange opening as its own view-only conversation, and the peers a control
+  plane has granted listed in the agent panel.
 - Kyber on current packages: enterprise 0.4, engineer 0.3, plus connectors,
   local and manage. Its eval suite passed on the upgrade — 10 passed, 22 gates.
 - Sid's suite green again on 2026-08-14 after the MCP schema fix and an env
@@ -51,10 +54,16 @@ Three categories, and the middle one is the dangerous one:
    agent-side path that turns one into tools a deployed agent calls. Not run
    because both need a signed-in principal. The remaining risk is storage and
    plumbing, not the protocol.
-2. **Unattended connector runs.** A schedule has no signed-in user and gets the
+2. **Rooms: a multi-hop hand-off.** Group conversations are built — addressing,
+   catch-up context on hand-off, per-member queueing, a watchdog, a stop
+   control, pin and delete. What has NOT been watched is a real three-agent
+   chain (planner → designer → engineer), or whether the catch-up text lands
+   usefully in the third agent's context. Two agents in a room has been seen;
+   the interesting case has not.
+3. **Unattended connector runs.** A schedule has no signed-in user and gets the
    shared principal. Never exercised; the first symptom would be a morning
    briefing that silently does nothing.
-3. **Studio's dead-man's switch and dispatch deadline.** Written after the
+4. **Studio's dead-man's switch and dispatch deadline.** Written after the
    wedges, never seen firing.
 ~~**The Grok credential refreshing unattended.**~~ **Answered: it does not,
    and it took Sid down.** The token expired at 22:40 and the failure surfaced
@@ -67,11 +76,11 @@ Three categories, and the middle one is the dangerous one:
 
 ## Missing — client-facing
 
-4. **Tool volume is unmanaged.** Gmail (23) plus Calendar (28) is 51 tool
+5. **Tool volume is unmanaged.** Gmail (23) plus Calendar (28) is 51 tool
    definitions in every prompt, from two services. Real tokens per turn and
    measurably worse selection. Curated top-N plus an escape hatch is the
    proposal; it needs an eval across flat / two-level / hybrid first.
-5. ~~**Connector tool schemas are thin.**~~ **Fixed, and it was ours.** The
+6. ~~**Connector tool schemas are thin.**~~ **Fixed, and it was ours.** The
    published schema was never thin: Plaud's `get_file` declares a required
    `file_id` *with a description*. `localMcpTools()` read `tools/list` for names
    and descriptions and threw the `inputSchema` away, handing the model an open
@@ -79,21 +88,21 @@ Three categories, and the middle one is the dangerous one:
    whole time. `@kybernesis/local` 0.5.0 translates it (`mcpInputSchema`, six
    tests against Plaud's real schemas). Published and running on Sid. The
    one-attempt-instead-of-nine still wants a human turn in Studio to watch.
-6. **`eve-connect` is unimplemented.** It is the answer for a client who refuses
+7. **`eve-connect` is unimplemented.** It is the answer for a client who refuses
    a fourth party holding their tokens, and today it is only a `provider` value
    on a card.
-7. **No admin screen for the connector catalog.** The ten are seeded; an org
+8. **No admin screen for the connector catalog.** The ten are seeded; an org
    cannot add an eleventh or hide one without SQL.
-8. **Nothing shows which machine a local MCP server is on.** They are per-device
+9. **Nothing shows which machine a local MCP server is on.** They are per-device
    by design; a second Mac silently has a different set.
 
 ## Missing — operational
 
-9. **The VM cannot reach its own repo.** Deploy keys are disabled at the
-   KybernesisAI org, so Sid's machine can neither pull nor push. A routine
-   written from chat is an uncommitted change on a disk. Needs the org policy
-   changed or a fine-grained PAT. *(Parked deliberately.)*
-10. ~~**Two server processes keep appearing on Sid.**~~ **Closed. There was
+10. **The VM cannot reach its own repo.** Deploy keys are disabled at the
+    KybernesisAI org, so Sid's machine can neither pull nor push. A routine
+    written from chat is an uncommitted change on a disk. Needs the org policy
+    changed or a fine-grained PAT. *(Parked deliberately.)*
+11. ~~**Two server processes keep appearing on Sid.**~~ **Closed. There was
     never a second server — the measurement was wrong.**
 
     `pgrep -fc 'server/index.mjs'`, run over ssh, matches the *shell running the
@@ -126,7 +135,7 @@ Three categories, and the middle one is the dangerous one:
     node .bin/eve → server/index.mjs`, one chain. **Anything that restarts Sid
     must detach** (`setsid nohup … </dev/null &`), or ssh's SIGHUP becomes the
     bug you go looking for.
-11. ~~**A restart could serve a stale build.**~~ **Fixed.** `restart.sh`
+12. ~~**A restart could serve a stale build.**~~ **Fixed.** `restart.sh`
     proved the PROCESS started after the BUILD, which says nothing about whether
     the build reflects the SOURCE. Sid spent a day serving a build ten hours
     older than its files while reporting "OK: serving the current build". It now
@@ -139,27 +148,27 @@ Three categories, and the middle one is the dangerous one:
     module with five tests over a recorded production stream. The rest of the
     send path — dispatch deadline, silence watchdog, 401 refresh, session
     recovery — is still verified by hand only.
-12. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and
+13. **`npm ci` cannot be used in CI.** The lock is written by npm 11 locally and
     the runner ships npm 10; they resolve one transitive range differently, so
     the pipelines run `npm install`. Reproducibility traded for a pipeline that
     runs. Pinning the runner's npm major would fix it properly.
-13. **Local `.dmg` packaging needs python**, which this machine lacks.
+14. **Local `.dmg` packaging needs python**, which this machine lacks.
     `--mac dir` sidesteps it for the pre-release launch check.
-14. **Sid has no monitoring.** A stranded session, a dead turn, or a failed
+15. **Sid has no monitoring.** A stranded session, a dead turn, or a failed
     restart is found by a person noticing.
-15. **Publishing is manual.** Every package needs a human at an npm browser
+16. **Publishing is manual.** Every package needs a human at an npm browser
     prompt, and it has repeatedly been the slowest step in a fix.
 
 ## Missing — security and governance
 
-16. **Two consent systems that cannot revoke each other.** The control plane
+17. **Two consent systems that cannot revoke each other.** The control plane
     holds a standing per-device grant; Studio holds per-effect permissions in a
     local file. Revoking in one does not revoke the other.
-17. **Reaching a desktop is still not its own capability.** "May talk to this
+18. **Reaching a desktop is still not its own capability.** "May talk to this
     agent" and "may run commands on my laptop" remain one decision.
-18. **Local execution runs in Studio's main process**, not a supervised daemon.
+19. **Local execution runs in Studio's main process**, not a supervised daemon.
     A bug there takes the window with it.
-19. **No audit trail for connector use.** Who ran which tool against whose
+20. **No audit trail for connector use.** Who ran which tool against whose
     account is not recorded anywhere a client could review.
 
 ## Known-and-accepted
@@ -179,9 +188,9 @@ Three categories, and the middle one is the dangerous one:
 ## What I would do next, in order
 
 1. The tool-volume eval, then curation. It is now concrete: 51 definitions from
-    two services, and every connector added makes it worse.
+   two services, and every connector added makes it worse.
 2. Verify the unverified column — remote MCP, unattended runs, the watchdog.
-    These are the last places where "it typechecks" is standing in for "it ran".
+   These are the last places where "it typechecks" is standing in for "it ran".
 3. Automate publishing (item 15). It has now blocked a finished fix twice.
 
 ## Needs Ian, exactly

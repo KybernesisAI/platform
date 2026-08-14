@@ -182,3 +182,25 @@ yesterday's agent. Assert the process started AFTER the build it should serve
 (`scripts/eve-server.sh` and the restart pattern in `@kybernesis/exe` do this).
 Related: a long-lived channel session caches the compiled agent, so start a
 fresh conversation after changing capabilities.
+
+A restart script also has to **serialize** (`flock`, released by the child with
+`9>&-`) and **wait for in-flight turns** — eve does not resume a step killed
+mid-flight, and restarting into a live turn strands the session behind a turn
+that will never finish.
+
+Run restarts **detached** from your ssh connection —
+`setsid nohup bash restart.sh >/tmp/r.log 2>&1 </dev/null &` — or a dropped
+connection SIGHUPs the script halfway through and leaves exactly the mess it
+exists to prevent.
+
+**Build before you restart.** Proving the process started after the build says
+nothing about whether the build reflects the source — an agent served a build ten
+hours older than its files while reporting success. It also breaks installs:
+`@kybernesis/manage` writes files and then calls the restart script.
+
+**And measure it correctly.** `pgrep -f 'server/index.mjs'` typed over ssh
+matches the shell running it: the pattern is in that shell's own command line,
+so it reports two servers when there is one. A whole investigation went into a
+phantom "second server" that `ps -eo pid,ppid,args` would have dismissed
+immediately. Inside a script file it is safe; typed at a shell it is not. List
+the matches before you believe the count.

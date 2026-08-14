@@ -2032,6 +2032,23 @@ because the session is stranded rather than stuck. Poll
 wait for it to clear — with a cap, so a wedged turn cannot block the restart
 that would clear it.
 
+*And build before you restart.* Proving the process started after the BUILD says
+nothing about whether the build reflects the SOURCE. A production agent ran for a
+day on a build ten hours older than its files, reporting "OK: serving the current
+build" every time. Worse, `@kybernesis/manage` calls the restart script after
+writing files — so **every capability installed from Studio reported success and
+changed nothing.** Build when the source has moved, and refuse to restart into a
+build that failed.
+
+*And measure it correctly.* `pgrep -f 'server/index.mjs'` run over ssh matches
+**the shell running the pgrep** — the pattern is in its own command line — so it
+reports two servers when there is one. An entire investigation went into hunting
+a phantom supervisor that a `ps -eo pid,ppid,args` would have dismissed in
+thirty seconds. Same family as `pkill -f` killing its caller. Inside a script
+file it is safe (the script's command line is `bash restart.sh`); typed at a
+shell or sent over ssh it is not. When a process count surprises you, **list the
+matches before believing the number.**
+
 The escape from an already-stranded session is a **session reset**
 (`ClientSession.reset()`, or Reset in Studio's agent settings), which releases
 the durable owner so the next message starts a fresh conversation. Cancelling
@@ -2241,6 +2258,46 @@ The things that cost real sessions here:
 - **Discovery must have a deadline.** These resolvers run before a turn and
   reach across a network to a laptop that might be shut. Budgeted at 6s with a
   five-minute cache; without that, one closed lid makes every turn hang.
+
+### 12.9 Rooms — several agents in one conversation
+
+A client with a planner, a designer, and an engineer agent can put all three in
+one room and work with them the way they would with people. The room lives
+entirely in the desktop app: each member keeps its own session with its own
+deployment, and the app is what puts a message in front of all of them. **No
+agent needs to know the feature exists**, which is what makes it work with an
+agent the client wrote themselves.
+
+**Addressing is the routing, and it is worth teaching in one line.** Name a
+member and only they answer. `@everyone` addresses the room. Name nobody and
+the room's lead answers — the first member — who brings the others in. Matching
+is literal and requires the `@`, because an agent called Design must not be
+summoned by the word "design" in an ordinary sentence.
+
+**Hand-offs are how work moves.** An agent's reply reaches another agent only
+when it names them, and whoever is brought in receives what they missed since
+they last spoke. Without that catch-up a hand-off is incoherent: the engineer is
+asked to "build this" having never seen what "this" is.
+
+Say these plainly to a client, because all three will come up:
+
+- **Every hop is a billed turn** on a deployed agent. A three-agent hand-off
+  chain is three turns, and there is a depth cap so a pair that keeps addressing
+  each other cannot run away.
+- **The convention is a prompt, not a protocol.** Each turn carries a line
+  telling the agent it is in a room and how to hand off. A well-behaved agent
+  follows it; nothing enforces it. A misbehaving one is ignored rather than able
+  to start a cascade — agent-to-agent relay has NO policy fallback, precisely so
+  one reply cannot become a reply from everyone.
+- **A relayed message runs under the human's identity.** When the planner hands
+  to the engineer, the engineer acts with that person's authority on another
+  agent's say-so. Among a client's own agents that is usually what they want.
+  It is still a governance decision, and it should be made rather than
+  discovered.
+
+What NOT to promise: emergent self-organisation. The chain works when someone —
+a person or an agent — explicitly hands off. It is a room where people and
+agents talk, not an autonomous workflow engine.
 
 ## 13. Known gaps — state these plainly, do not sell around them
 

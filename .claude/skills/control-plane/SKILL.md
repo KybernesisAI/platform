@@ -53,7 +53,8 @@ cannot hold itself.
 
 **Connectors** (`/api/connectors`, `link`, `disconnect`, `tools`, `execute`,
 `custom`, `mcp`, `mcp/test`). Each ORG holds its own broker (Composio) API key,
-encrypted at rest with `SECRETS_KEY` (AES-256-GCM, `v1:<iv>:<tag>:<ct>`), set
+encrypted at rest with `SECRET_ENCRYPTION_KEY` (AES-256-GCM,
+`v1:<iv>:<tag>:<ct>`), set
 through the admin — never an env var, never our key used for a client. The
 agent asks the plane which services the CURRENT principal has connected;
 `@kybernesis/connectors` turns the answer into tools for that turn only. The
