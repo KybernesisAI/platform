@@ -1804,6 +1804,17 @@ keys of your own.
 
 ### 11.1 Scaffold
 
+The whole path is commands now — there is no step where an FDE is expected to
+improvise a deploy:
+
+```bash
+kyb init <name> --host=exe --channel=none --engineer --studio
+kyb register      # device flow; grants you; idempotent by name
+kyb deploy        # copy + install + restart + prove
+kyb doctor && npm run eval
+```
+
+
 ```bash
 kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer
 cd <name> && kyb doctor

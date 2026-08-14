@@ -86,9 +86,13 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   engineer? })` = smoke + 5 memory + routing per dept + optional vision-loop
   eval. Judge model ≠ model under test. Hermetic runs force all workspaces to
   `<name>-eval` via the npm script.
-- **create** — the `kyb` CLI: `init [--engineer]`, `doctor`, `upgrade`
-  (carries eve to the Kybernesis-CERTIFIED pin, never blind latest),
-  `skills`. Ships THIS skill suite.
+- **create** — the `kyb` CLI, and the whole lifecycle of an agent:
+  `init` (scaffold; `--host=exe` also installs the hardened restart script),
+  `register` (control plane, via device flow — no admin session, no pasted
+  token, grants the person who ran it, idempotent by name),
+  `deploy` (copy + install + restart + PROVE it; `eve deploy` on Vercel),
+  `doctor`, `upgrade` (carries eve to the Kybernesis-CERTIFIED pin, never
+  blind latest), `skills`. Ships THIS skill suite.
 
 ## Gotchas that each cost a real debugging session
 

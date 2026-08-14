@@ -15,11 +15,21 @@ the deployment, not a shortcut. It will fail on the real engagement.
 ## Scaffold
 
 ```bash
-kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer
+kyb init <name> --host=exe --channel=<imessage|slack|telegram|none> --engineer --studio
+kyb register        # control plane: device flow, grants you, idempotent by name
+kyb deploy          # copy + install + restart, and prove it took
+kyb doctor          # preflight; it knows the self-hosted failure modes below
 ```
 
-`--host=exe` swaps the bindings; everything else is the same product. Run
-`kyb doctor` after — it knows the self-hosted failure modes below.
+`--host=exe` swaps the bindings and installs `scripts/eve-server.sh` — the
+restart script, with every lesson below already in it. `--studio` adds local
+execution and the management routes.
+
+**Deploying is `kyb deploy`, not a hand-rolled rsync.** It refuses to copy
+`node_modules` (native modules built on a laptop do not run on the host) or
+`.eve` (the durable store — copying over it eats production state), restarts
+detached so a dropped connection cannot SIGHUP the restart halfway, and waits
+for the script to report health rather than reporting success on exit code.
 
 ## What Vercel gives you that a client host does not
 
