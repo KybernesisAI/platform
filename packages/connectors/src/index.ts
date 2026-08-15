@@ -167,19 +167,56 @@ export function toolInputSchema(tool: { inputSchema?: Record<string, unknown> })
  * different tools — a cache that forgot whose would hand one person's
  * connections to another.
  */
-const memo = new Map<string, { at: number; tools: RemoteTool[] }>();
+interface ConnectedAccount {
+  id: string;
+  /** What the person named it. Null when the service has only one account. */
+  label: string | null;
+}
+
+const memo = new Map<string, { at: number; tools: RemoteTool[]; accounts: Accounts }>();
+
+/** Connected accounts per service slug, as the control plane reports them. */
+type Accounts = Record<string, ConnectedAccount[]>;
+
+/**
+ * Names for one service's tools, given the accounts behind it.
+ *
+ * Exported to be tested directly: getting this wrong does not throw, it sends
+ * mail from the wrong mailbox. One account keeps the bare name — renaming
+ * everyone's only Gmail to gmail_send_email_personal would be a worse prompt
+ * and would rename tools under every agent already using them.
+ */
+export function toolNamesFor(
+  toolSlug: string,
+  accounts: { id: string; label: string | null }[],
+): { name: string; account?: string }[] {
+  const base = toolSlug.toLowerCase();
+  if (accounts.length <= 1) return [{ name: base, account: accounts[0]?.id }];
+  return accounts.map((a, i) => ({
+    name: `${base}_${slug(a.label ?? `account_${i + 1}`)}`,
+    account: a.id,
+  }));
+}
+
+/** A tool name an agent can call: letters, digits, underscore. */
+function slug(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
 
 async function fetchTools(
   options: ConnectorToolsOptions,
   user?: string,
-): Promise<RemoteTool[]> {
+): Promise<{ tools: RemoteTool[]; accounts: Accounts }> {
   const credential = credentialOf(options);
-  if (!credential) return [];
+  const empty = { tools: [] as RemoteTool[], accounts: {} as Accounts };
+  if (!credential) return empty;
 
   const key = user ?? "(shared)";
   const ttl = options.cacheMs ?? 60_000;
   const cached = memo.get(key);
-  if (cached && Date.now() - cached.at < ttl) return cached.tools;
+  if (cached && Date.now() - cached.at < ttl) {
+    return { tools: cached.tools, accounts: cached.accounts };
+  }
   try {
     const res = await fetch(`${base(options)}/api/connectors/tools`, {
       method: "POST",
@@ -190,15 +227,20 @@ async function fetchTools(
       body: JSON.stringify({ ...(user ? { user } : {}) }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!res.ok) return [];
-    const body = (await res.json()) as { tools?: RemoteTool[] };
+    if (!res.ok) return empty;
+    const body = (await res.json()) as { tools?: RemoteTool[]; accounts?: Accounts };
     const tools = body.tools ?? [];
-    memo.set(key, { at: Date.now(), tools });
-    return tools;
+    // Lower-cased keys: the toolkit on a tool and the slug on an account come
+    // from different places in the broker's API and do not agree on case.
+    const accounts: Accounts = Object.fromEntries(
+      Object.entries(body.accounts ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+    memo.set(key, { at: Date.now(), tools, accounts });
+    return { tools, accounts };
   } catch {
     // A control plane that cannot be reached means no connector tools this
     // session, not a broken agent. Everything authored still works.
-    return [];
+    return empty;
   }
 }
 
@@ -236,6 +278,7 @@ async function runTool(
   tool: string,
   args: Record<string, unknown>,
   user?: string,
+  account?: string,
 ): Promise<unknown> {
   const credential = credentialOf(options);
   if (!credential) {
@@ -244,7 +287,12 @@ async function runTool(
   const res = await fetch(`${base(options)}/api/connectors/execute`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
-    body: JSON.stringify({ tool, arguments: args, ...(user ? { user } : {}) }),
+    body: JSON.stringify({
+      tool,
+      arguments: args,
+      ...(user ? { user } : {}),
+      ...(account ? { account } : {}),
+    }),
     signal: AbortSignal.timeout(120_000),
   });
   const body = (await res.json().catch(() => ({}))) as { result?: unknown; error?: string };
@@ -261,7 +309,7 @@ async function runTool(
 export function connectorTools(options: ConnectorToolsOptions = {}) {
   const resolve = async (_event: unknown, ctx: unknown) => {
     const user = principalOf(ctx);
-    const tools = await fetchTools(options, user);
+    const { tools, accounts } = await fetchTools(options, user);
 
     const entries: [string, unknown][] = [];
 
@@ -288,19 +336,42 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
       }
     }
 
-    entries.push(
-      ...tools.map((tool): [string, unknown] => [
-        tool.slug.toLowerCase(),
-        defineTool({
-          description:
-            tool.description ??
-            `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`,
-          inputSchema: toolInputSchema(tool),
-          execute: (input: Record<string, unknown>) =>
-            runTool(options, tool.slug, input, user),
-        }),
-      ]),
-    );
+    /**
+     * One tool per account when a service is connected more than once.
+     *
+     * Tools belong to a toolkit, not to a connection, so two Gmail accounts
+     * return one identical set — and an agent holding a single `gmail_send_email`
+     * for two mailboxes sends from whichever the broker defaults to. Nobody can
+     * predict which, and mail from the wrong account is not a retryable error.
+     *
+     * A service connected once is left exactly as it was. Appending "_personal"
+     * to someone's only mailbox would be a worse prompt for the common case,
+     * and it would rename tools under every agent already using them.
+     */
+    for (const tool of tools) {
+      const forSlug = accounts[(tool.toolkit ?? "").toLowerCase()] ?? [];
+      const labelOf = new Map(forSlug.map((a) => [a.id, a.label]));
+
+      for (const named of toolNamesFor(tool.slug, forSlug)) {
+        const label = named.account ? labelOf.get(named.account) : null;
+        // Say which account only when there is more than one to choose between.
+        // Otherwise every description grows a qualifier answering a question
+        // nobody asked.
+        const qualifier = forSlug.length > 1 && label ? ` Acts as the "${label}" account.` : "";
+        entries.push([
+          named.name,
+          defineTool({
+            description:
+              (tool.description ??
+                `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`) +
+              qualifier,
+            inputSchema: toolInputSchema(tool),
+            execute: (input: Record<string, unknown>) =>
+              runTool(options, tool.slug, input, user, named.account),
+          }),
+        ]);
+      }
+    }
 
     return entries.length ? Object.fromEntries(entries) : null;
   };
