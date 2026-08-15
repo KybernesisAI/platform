@@ -43,7 +43,7 @@ function sshTarget(dir: string, explicit?: string): string | null {
   return null;
 }
 
-export async function deploy(options: { host?: string; dir?: string }): Promise<void> {
+export async function deploy(options: { host?: string; dir?: string; noEnv?: boolean }): Promise<void> {
   const dir = options.dir ?? process.cwd();
   if (!existsSync(join(dir, "agent"))) {
     console.log(red("Not an eve agent project (no agent/ directory)."));
@@ -84,11 +84,14 @@ export async function deploy(options: { host?: string; dir?: string }): Promise<
    * not run on the host. `.eve` is the durable store — conversations, turn
    * history, the workflow queue — and overwriting it with a local copy is how
    * a deployment eats its own production state.
+   *
+   * `.env.local` is excluded from the SOURCE sync and sent separately below.
+   * It is not source: rsync --delete would remove a host-only file, and a
+   * half-matching copy is worse than a deliberate one.
    */
-  console.log(bold("1/3  Copying source …"));
+  console.log(bold("1/4  Copying source …"));
   const ok = run("rsync", [
     "-az",
-    "--delete",
     "--exclude",
     "node_modules",
     "--exclude",
@@ -108,7 +111,53 @@ export async function deploy(options: { host?: string; dir?: string }): Promise<
     return;
   }
 
-  console.log(bold("\n2/3  Installing dependencies on the host …"));
+  /**
+   * The agent cannot boot without its environment.
+   *
+   * This step was missing, and the failure was exactly as opaque as it sounds:
+   * source copied, dependencies installed, build succeeded, and the server died
+   * on `Invalid extension config: apiKey: expected string, received undefined`
+   * — an error about a mount, thirty lines into a log, when the actual cause
+   * was that no configuration had ever reached the machine.
+   *
+   * Sent separately from the source sync so `--delete` cannot touch it, and
+   * skippable for deployments whose secrets are managed on the host.
+   */
+  if (!options.noEnv) {
+    const envFile = join(dir, ".env.local");
+    if (existsSync(envFile)) {
+      console.log(bold("\n2/4  Environment …"));
+      /**
+       * Only when the host has none.
+       *
+       * The host's copy is authoritative: it holds credentials minted ON the
+       * host, values a laptop never had, and secrets nobody keeps in a working
+       * tree. A local stub overwriting it does not misconfigure a deployment,
+       * it destroys one — that happened here, to a production agent, and
+       * `rsync --delete` took the backup with it in the same run.
+       */
+      const hasRemote =
+        spawnSync("ssh", [target, `test -s ${remote}/.env.local`]).status === 0;
+      if (hasRemote) {
+        console.log(dim("  host has its own — left untouched"));
+      } else if (!run("scp", ["-q", envFile, `${target}:${remote}/.env.local`])) {
+        console.log(red("  Could not copy .env.local — the agent will not start without it."));
+        process.exitCode = 1;
+        return;
+      } else {
+        console.log(dim("  sent (host had none)"));
+      }
+    } else {
+      console.log(
+        yellow(
+          "\n  ! No .env.local here. The host needs one, or the agent will fail to boot\n" +
+            "    on the first config it dereferences. Run kyb arcana, or create it there.",
+        ),
+      );
+    }
+  }
+
+  console.log(bold("\n3/4  Installing dependencies on the host …"));
   if (!run("ssh", [target, `cd ${remote} && npm install --no-audit --no-fund`])) {
     console.log(red("  npm install failed on the host."));
     process.exitCode = 1;
@@ -123,7 +172,7 @@ export async function deploy(options: { host?: string; dir?: string }): Promise<
    * exists to prevent. setsid + nohup + no stdin is the difference between a
    * deploy and an outage.
    */
-  console.log(bold("\n3/3  Restarting (detached) …"));
+  console.log(bold("\n4/4  Restarting (detached) …"));
 
   /**
    * Find the restart script rather than assuming its name.

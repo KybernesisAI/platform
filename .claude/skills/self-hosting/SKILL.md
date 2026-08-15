@@ -88,6 +88,18 @@ What this arrangement costs you, and it is worth saying to the client:
 
 ## The failure modes, each of which cost a real session
 
+- **The LLM integration serves chat-completions, not the Responses API.** An
+  agent pointed at `/v1/responses` gets `404 unsupported endpoint`, which
+  reaches eve as `MODEL_CALL_FAILED` with the real cause buried in a log.
+  `exeModel()` defaults to chat for this reason (≥0.5.2); pass
+  `api: "responses"` only when the integration fronts a provider that supports
+  it.
+- **Evals must run ON the host.** `llm.int.exe.xyz` is internal to exe.dev, so
+  a laptop cannot reach it — every model call fails with a connection error to
+  the cloud metadata address, which looks like a broken agent and is not.
+- **An integration has to be attached to the VM** (`integrations attach llm
+  <vm>`, or `auto:all`). Check with `ssh exe.dev integrations list`.
+
 - **Docker ships disabled on some images.** exe.dev's exeuntu runs
   `systemctl disable docker.service`, so `docker --version` works while nothing
   can run. Every sandbox call fails with `SandboxTemplateNotProvisionedError`.

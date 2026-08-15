@@ -27,8 +27,19 @@ export interface ExeModelOptions<TModel> {
    * agent already depends on.
    */
   createOpenAI: (config: { baseURL: string; apiKey: string }) => {
+    chat: (model: string) => TModel;
     responses: (model: string) => TModel;
   };
+  /**
+   * Which OpenAI surface to call.
+   *
+   * Defaults to "chat", because exe's LLM integration serves
+   * `/v1/chat/completions` and answers `/v1/responses` with
+   * `404 unsupported endpoint` — which reaches eve as MODEL_CALL_FAILED, with
+   * the actual cause four levels down in a log. The Responses API is available
+   * for integrations that front a provider supporting it.
+   */
+  api?: "chat" | "responses";
 }
 
 type CallOptions = {
@@ -66,7 +77,10 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
 
   // apiKey is required by the SDK but unused: exe injects the real credential.
   const provider = options.createOpenAI({ baseURL, apiKey: "exe-integration" });
-  const base = provider.responses(options.model) as Record<string, unknown> & {
+  const api = options.api ?? "chat";
+  const base = (api === "responses"
+    ? provider.responses(options.model)
+    : provider.chat(options.model)) as Record<string, unknown> & {
     doGenerate: (o: CallOptions) => unknown;
     doStream: (o: CallOptions) => unknown;
   };

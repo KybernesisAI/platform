@@ -57,7 +57,7 @@ switch (command) {
     await register({ name: flag(rest, "name"), url: flag(rest, "url") });
     break;
   case "deploy":
-    await deploy({ host: flag(rest, "host") });
+    await deploy({ host: flag(rest, "host"), noEnv: rest.includes("--no-env") });
     break;
   case "upgrade":
     await upgrade(rest.includes("--skip-eval"));
@@ -90,6 +90,7 @@ ${bold("kyb")} — Kybernesis agent scaffolder & FDE toolkit
       --url=<url>       ${dim("defaults to https://$EXE_VM_NAME.exe.xyz")}
   ${bold("kyb deploy")}          copy to the host, install, restart, prove it took
       --host=<target>   ${dim("ssh target; defaults to $EXE_VM_NAME.exe.xyz")}
+      --no-env          ${dim("do not send .env.local (host manages its own secrets)")}
   ${bold("kyb upgrade")}         bump @kybernesis/* packages, gated on evals
       --skip-eval       ${dim("skip the eval gate")}
 
