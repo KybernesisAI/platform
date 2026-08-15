@@ -20,7 +20,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "peerDependencies": {
     "eve": ">=0.30",

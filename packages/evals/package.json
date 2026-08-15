@@ -27,7 +27,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepare": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "devDependencies": {
     "@types/node": "24.x",

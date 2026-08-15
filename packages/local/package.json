@@ -21,7 +21,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "peerDependencies": {
     "eve": ">=0.30",

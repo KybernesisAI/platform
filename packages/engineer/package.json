@@ -43,7 +43,8 @@
   "scripts": {
     "build": "eve extension build",
     "prepare": "eve extension build",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "dependencies": {
     "zod": "4.4.3",
