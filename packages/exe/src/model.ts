@@ -101,6 +101,91 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
     },
   });
 
+  /**
+   * Answer a non-streaming call by streaming and collecting the result.
+   *
+   * The Codex backend behind a ChatGPT subscription refuses non-streaming
+   * requests outright (`{"detail":"Stream must be set to true"}` → HTTP 400).
+   * Streaming is how an agent turn runs, so this stays invisible until
+   * something asks for a whole answer at once — a judge scoring an eval, a
+   * structured extraction, a generated title — and then it fails with an error
+   * about `stream` for a call whose author never chose its streaming-ness.
+   *
+   * Collecting the stream is the honest fix: the backend gets the only shape it
+   * accepts, and the caller gets the shape it asked for.
+   */
+  async function generateViaStream(o: CallOptions): Promise<unknown> {
+    const result = (await base.doStream(forceStoreFalse(o))) as {
+      stream: ReadableStream<Record<string, unknown>>;
+      request?: unknown;
+      response?: unknown;
+    };
+
+    const content: Array<Record<string, unknown>> = [];
+    const text = new Map<string, string>();
+    const reasoning = new Map<string, string>();
+    let finishReason: unknown = "unknown";
+    let usage: unknown = {};
+    let providerMetadata: unknown;
+    let warnings: unknown[] = [];
+    let responseMetadata: Record<string, unknown> = {};
+
+    const reader = result.stream.getReader();
+    for (;;) {
+      const { done, value: part } = await reader.read();
+      if (done) break;
+      if (!part) continue;
+      switch (part.type) {
+        case "stream-start":
+          warnings = (part.warnings as unknown[]) ?? [];
+          break;
+        case "response-metadata": {
+          const { type: _drop, ...rest } = part;
+          responseMetadata = { ...responseMetadata, ...rest };
+          break;
+        }
+        case "text-delta":
+          text.set(String(part.id), (text.get(String(part.id)) ?? "") + String(part.delta ?? ""));
+          break;
+        case "reasoning-delta":
+          reasoning.set(String(part.id), (reasoning.get(String(part.id)) ?? "") + String(part.delta ?? ""));
+          break;
+        // Tool calls, sources and files arrive whole; only text and reasoning
+        // are split into deltas that have to be rejoined.
+        case "tool-call":
+        case "tool-result":
+        case "source":
+        case "file": {
+          content.push({ ...part });
+          break;
+        }
+        case "finish":
+          finishReason = part.finishReason ?? "unknown";
+          usage = part.usage ?? usage;
+          providerMetadata = part.providerMetadata;
+          break;
+        case "error":
+          throw part.error instanceof Error ? part.error : new Error(String(part.error));
+        default:
+          break;
+      }
+    }
+
+    // Reasoning before text, matching the provider's own generate ordering.
+    for (const [, value] of reasoning) if (value) content.unshift({ type: "reasoning", text: value });
+    for (const [, value] of text) if (value) content.push({ type: "text", text: value });
+
+    return {
+      content,
+      finishReason,
+      usage,
+      warnings,
+      providerMetadata,
+      request: result.request ?? {},
+      response: { ...responseMetadata, ...((result.response as Record<string, unknown>) ?? {}) },
+    };
+  }
+
   const wrapped = {
     specificationVersion: base.specificationVersion,
     provider: base.provider,
@@ -108,7 +193,16 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
     get supportedUrls() {
       return base.supportedUrls;
     },
-    doGenerate: (o: CallOptions) => base.doGenerate(forceStoreFalse(o)),
+    doGenerate: async (o: CallOptions) => {
+      try {
+        return await base.doGenerate(forceStoreFalse(o));
+      } catch (error) {
+        // Only the backend's own "must stream" refusal is retried. Every other
+        // failure is the caller's to see, unchanged.
+        if (!/stream must be set to true/i.test(String((error as Error)?.message ?? error))) throw error;
+        return generateViaStream(o);
+      }
+    },
     doStream: (o: CallOptions) => base.doStream(forceStoreFalse(o)),
   };
   // The wrapper is call-compatible with the provider's model; hand back the
