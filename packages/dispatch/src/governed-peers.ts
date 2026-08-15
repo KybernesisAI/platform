@@ -39,6 +39,21 @@ export interface GovernedPeersOptions {
   cacheMs?: number;
   /** How long to wait for a peer's answer before giving up. */
   timeoutMs?: number;
+  /**
+   * Peers that already have a declared `remotePeer()` file, so they are not
+   * offered twice.
+   *
+   * Some peers earn their file: `remotePeer` forwards the human's principal,
+   * which is the only correct way to reach an agent holding personal data.
+   * Discovery would list those peers too, and an agent shown two routes to the
+   * same colleague will sometimes pick the one that answers as itself — the
+   * quieter of the two failures, because it succeeds and returns less.
+   *
+   * Naming a peer here is not the thing this module exists to remove. It does
+   * not make the peer reachable; the file already did that. It says "handled
+   * elsewhere", and removing the line costs a duplicate, not a capability.
+   */
+  declared?: string[];
 }
 
 interface Peer {
@@ -168,7 +183,9 @@ export function governedPeers(options: GovernedPeersOptions = {}) {
   return defineDynamic({
     events: {
       "turn.started": async () => {
-        const peers = await discover(options);
+        const all = await discover(options);
+        const skip = new Set((options.declared ?? []).map((n) => n.toLowerCase()));
+        const peers = all.filter((p) => !skip.has(p.name.toLowerCase()));
         if (peers.length === 0) return null;
 
         const tools: Record<string, unknown> = {};
