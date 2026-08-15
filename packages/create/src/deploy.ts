@@ -205,14 +205,46 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
 
   run("ssh", [target, `cd ${remote}\n${remoteScript}`]);
 
-  console.log(dim("\n  Waiting for the restart to report …"));
+  /**
+   * Wait on PROGRESS, not on a clock.
+   *
+   * A restart takes seconds, so this used to poll for 200s and then declare
+   * failure. A FIRST deploy is not a restart: it installs node_modules and
+   * builds from cold, which routinely runs longer than that. The deploy would
+   * report "did not report health" and exit non-zero while the build was still
+   * running perfectly well — and the honest reading of that message is that the
+   * thing is broken, so the next move is usually to kill it and start over.
+   *
+   * So: give up only when the host goes QUIET (nothing new in the log for a few
+   * minutes), and echo each new line meanwhile, because a long wait with
+   * visible progress is a different experience from a long wait in silence.
+   */
+  console.log(dim("\n  Waiting for the restart to report (first deploys build from cold) …"));
+  const QUIET_LIMIT_MS = 4 * 60_000;
+  const CEILING_MS = 30 * 60_000;
+  const startedAt = Date.now();
   let last = "";
-  for (let i = 0; i < 40; i++) {
-    const out = execFileSync("ssh", [target, `tail -6 /tmp/kyb-deploy.log 2>/dev/null || true`], {
+  let seen = "";
+  let lastChange = Date.now();
+  while (Date.now() - startedAt < CEILING_MS) {
+    const out = execFileSync("ssh", [target, `tail -40 /tmp/kyb-deploy.log 2>/dev/null || true`], {
       encoding: "utf8",
     });
     last = out;
+    if (out !== seen) {
+      for (const line of out.split("\n")) {
+        if (line && !seen.includes(line) && /npm|install|build|SOURCE IS NEWER|waiting|pid=|health:|FAILED/i.test(line)) {
+          console.log(dim(`    ${line.trim().slice(0, 120)}`));
+        }
+      }
+      seen = out;
+      lastChange = Date.now();
+    }
     if (/health:|FAILED/.test(out)) break;
+    if (Date.now() - lastChange > QUIET_LIMIT_MS) {
+      console.log(yellow(`\n  ! nothing new on the host for ${Math.round(QUIET_LIMIT_MS / 60_000)} minutes — giving up on the wait`));
+      break;
+    }
     await new Promise((r) => setTimeout(r, 5000));
   }
 
@@ -227,7 +259,10 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
   console.log(
     healthy
       ? green("\n  ✓ deployed and serving the current build")
-      : yellow("\n  ! the restart did not report health — check /tmp/kyb-deploy.log on the host"),
+      : yellow(
+          "\n  ! the restart did not report health. It may still be building — this stops watching, it does not stop the host.\n" +
+            `    Watch it:  ssh ${target} 'tail -f /tmp/kyb-deploy.log'`,
+        ),
   );
   if (!healthy) process.exitCode = 1;
 }
