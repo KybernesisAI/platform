@@ -152,9 +152,32 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     // client change THIS AGENT — its dependencies and its source. Different
     // blast radius, so an agent can have one without the other.
     console.log(bold("\n2b2  KYBER Studio: local execution + management routes …"));
+    const studioFailures: string[] = [];
     for (const item of ["local", "manage"]) {
-      const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
-      if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
+      // The @kybernesis/ prefix is load-bearing: a bare name resolves against
+      // eve OWN registry, which has no such item, so both installs failed with
+      // "not found" — and allowFail swallowed it. --studio therefore did
+      // nothing at all, silently, and the first sign was Studio refusing to
+      // connect an agent that looked correctly scaffolded.
+      const ok = run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], {
+        cwd: dir,
+        allowFail: true,
+      });
+      if (!ok) {
+        studioFailures.push(item);
+        console.log(yellow(`  ! ${item} did not install — re-run: npx eve add @kybernesis/${item}`));
+      }
+    }
+    // Said again, loudly, at the end. A warning printed sixty lines before a
+    // green summary is a warning nobody reads — and the agent that results
+    // looks correctly scaffolded right up until KYBER Studio refuses it.
+    if (studioFailures.length) {
+      console.log(
+        yellow(
+          `\n  ! --studio did NOT complete: ${studioFailures.join(", ")} missing.\n` +
+            `    This agent cannot be connected to a desktop until they install.`,
+        ),
+      );
     }
   }
 
