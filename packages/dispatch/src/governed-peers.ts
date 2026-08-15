@@ -137,41 +137,80 @@ async function ask(
   const { sessionId } = (await started.json()) as { sessionId?: string };
   if (!sessionId) throw new Error(`${peer.name} did not open a session.`);
 
-  // Read its stream to the end of the turn. The peer may think for a while, so
-  // this waits on CONTENT rather than on a fixed deadline per poll.
-  const began = Date.now();
-  let index = 0;
+  /**
+   * Read the turn off the peer's NDJSON stream, incrementally.
+   *
+   * The stream FOLLOWS the live session: it stays open after the turn so the
+   * next one arrives on the same connection. Buffering it whole — `await
+   * res.text()` — therefore waits for a connection that never closes, and the
+   * call dies on its own timeout having already received the answer.
+   *
+   * That failure is host-shaped, which is what made it confusing: a callee on
+   * serverless ends its response when the function returns, so a buffered read
+   * resolves and everything looks correct. Against a callee on a long-lived
+   * host, the identical code hangs every time.
+   *
+   * So: parse line by line as bytes arrive, and stop at the turn boundary.
+   */
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeout);
   let reply = "";
-  while (Date.now() - began < timeout) {
+  try {
     const res = await fetch(
-      `${base}/eve/v1/session/${encodeURIComponent(sessionId)}/stream?startIndex=${index}`,
-      { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) },
+      `${base}/eve/v1/session/${encodeURIComponent(sessionId)}/stream?startIndex=0`,
+      { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
     );
-    if (!res.ok) break;
-    const text = await res.text();
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      index += 1;
-      try {
-        const event = JSON.parse(line) as { type?: string; data?: Record<string, unknown> };
+    if (!res.ok || !res.body) throw new Error(`${peer.name} would not stream its answer (HTTP ${res.status}).`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Keep the trailing fragment: a chunk boundary lands mid-line often
+      // enough that dropping it loses whole events under load.
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let event: { type?: string; data?: Record<string, unknown> };
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
         // Only a terminal message is the answer: eve emits narration as its own
         // completed message with finishReason "tool-calls", and treating those
         // as the reply returns the peer's intentions instead of its answer.
         if (event.type === "message.completed" && event.data?.finishReason === "stop") {
           reply = String(event.data.message ?? "");
         }
-        if (event.type === "session.waiting" || event.type === "turn.completed") {
-          if (reply) return reply;
+        if (event.type === "turn.failed" || event.type === "session.failed") {
+          const detail = (event.data as { message?: string } | undefined)?.message;
+          throw new Error(`${peer.name} failed to answer${detail ? `: ${detail}` : "."}`);
         }
-      } catch {
-        /* a partial line; the next poll re-reads from this index */
+        if (event.type === "session.waiting" || event.type === "turn.completed") {
+          await reader.cancel().catch(() => {});
+          if (reply) return reply;
+          throw new Error(`${peer.name} finished its turn without a reply.`);
+        }
       }
     }
     if (reply) return reply;
-    await new Promise((r) => setTimeout(r, 1_500));
+    throw new Error(`${peer.name} closed the stream without answering.`);
+  } catch (error) {
+    if (reply) return reply;
+    if ((error as Error)?.name === "AbortError") {
+      throw new Error(`${peer.name} did not answer within ${Math.round(timeout / 1000)}s.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(deadline);
   }
-  if (reply) return reply;
-  throw new Error(`${peer.name} did not answer within ${Math.round(timeout / 1000)}s.`);
 }
 
 /** A tool name an agent can actually call: letters, digits, underscore. */
