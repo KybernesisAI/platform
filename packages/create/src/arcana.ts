@@ -1,6 +1,7 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { upsertEnv } from "./envfile.js";
 import { ask, bold, dim, green, red, yellow } from "./util.js";
 
 /**
@@ -35,29 +36,53 @@ async function check(workspace: string, key: string): Promise<"ok" | "forbidden"
   }
 }
 
-function upsertEnv(dir: string, values: Record<string, string>): void {
-  const p = join(dir, ".env.local");
-  let text = existsSync(p) ? readFileSync(p, "utf8") : "";
-  for (const [k, v] of Object.entries(values)) {
-    if (!v) continue;
-    const line = `${k}="${v}"`;
-    const re = new RegExp(`^${k}=.*$`, "m");
-    if (re.test(text)) text = text.replace(re, line);
-    else text += (text.endsWith("\n") || text === "" ? "" : "\n") + line + "\n";
+/**
+ * The department subagents this repo actually has.
+ *
+ * Run standalone, this command used to ask only for the company and eval
+ * brains, because the dept list was something only `kyb init` knew. An agent
+ * with departments would then be set up "successfully" with every subagent
+ * still keyless — the exact silent-amnesia failure this command exists to
+ * prevent. The repo already knows; read it instead of asking init to remember.
+ */
+function departments(dir: string): string[] {
+  const root = join(dir, "agent", "subagents");
+  if (!existsSync(root)) return [];
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && existsSync(join(root, e.name, "extensions", "arcana.ts")))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
   }
-  if (existsSync(p)) writeFileSync(p, text);
-  else appendFileSync(p, text);
+}
+
+/** The agent's own name, for proposing workspace names that match convention. */
+export function agentName(dir: string, fallback: string): string {
+  try {
+    const env = readFileSync(join(dir, ".env.local"), "utf8");
+    const hit = /^KYBERNESIS_AGENT="?([^"\n]+)"?$/m.exec(env);
+    if (hit?.[1]) return hit[1];
+  } catch {
+    /* no env yet — the directory name is the next best guess */
+  }
+  return fallback;
 }
 
 export interface ArcanaSetup {
   dir: string;
   /** Proposed workspace prefix — the agent's name. Only a suggestion. */
   suggest: string;
-  /** Department subagents, each of which gets its own brain. */
+  /**
+   * Department subagents, each of which gets its own brain. Omitted when this
+   * runs as `kyb arcana`, where the repo itself is the source of truth.
+   */
   depts?: string[];
 }
 
-export async function configureArcana({ dir, suggest, depts = [] }: ArcanaSetup): Promise<void> {
+export async function configureArcana({ dir, suggest, depts }: ArcanaSetup): Promise<void> {
+  const subagents = depts ?? departments(dir);
   console.log(bold("\n     Memory (Arcana) — workspaces and keys"));
   console.log(
     dim(
@@ -97,7 +122,7 @@ export async function configureArcana({ dir, suggest, depts = [] }: ArcanaSetup)
   // key is stored; drop the placeholder we used to prompt with.
   delete values.ARCANA_EVAL_API_KEY_WORKSPACE;
 
-  for (const dept of depts) {
+  for (const dept of subagents) {
     await pair(
       `Subagent "${dept}"`,
       `ARCANA_${dept.toUpperCase()}_WORKSPACE`,

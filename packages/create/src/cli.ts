@@ -12,15 +12,39 @@
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
  *     --skip-eval           skip the eval gate (not for production changes)
  */
-import { bold, dim } from "./util.js";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { bold, dim, red } from "./util.js";
 import { init, type InitOptions } from "./init.js";
 import { doctor } from "./doctor.js";
 import { upgrade } from "./upgrade.js";
 import { installSkills } from "./skills.js";
 import { deploy } from "./deploy.js";
 import { register } from "./register.js";
-import { configureArcana } from "./arcana.js";
+import { agentName, configureArcana } from "./arcana.js";
 
+
+/** This build's version, so a skew can name itself instead of being guessed at. */
+const VERSION = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
+  } catch {
+    return "unknown";
+  }
+})();
+
+/** Is the working directory already an eve agent, rather than a place to make one? */
+function insideAgentProject(): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
+    return "eve" in deps || existsSync(join(process.cwd(), "agent"));
+  } catch {
+    return existsSync(join(process.cwd(), "agent"));
+  }
+}
 
 function flag(rest: string[], key: string): string | undefined {
   const hit = rest.find((a: string) => a.startsWith(`--${key}=`));
@@ -51,7 +75,13 @@ switch (command) {
     installSkills({ global: rest.includes("--global") });
     break;
   case "arcana":
-    await configureArcana({ dir: process.cwd(), suggest: flag(rest, "name") ?? "agent" });
+    // Propose from what the repo says it is. Suggesting "agent-company" to
+    // someone standing in an agent called something else reads as a tool that
+    // has not looked at their project.
+    await configureArcana({
+      dir: process.cwd(),
+      suggest: flag(rest, "name") ?? agentName(process.cwd(), basename(process.cwd())),
+    });
     break;
   case "register":
     await register({ name: flag(rest, "name"), url: flag(rest, "url") });
@@ -67,7 +97,26 @@ switch (command) {
     break;
   default:
     if (!command.startsWith("-")) {
-      // `npm create @kybernesis acme-agent` → argv[2] is the name.
+      // `npm create @kybernesis acme-agent` → argv[2] is the name. Inside an
+      // agent repo that reading is almost always wrong: it means a subcommand
+      // this build is too old to know, and scaffolding a project named after
+      // someone's command is a startling answer to a typo. It has already
+      // happened — `kyb arcana` on an older build started a whole new setup
+      // instead of asking for keys, so the version skew looked like a missing
+      // prompt and cost an afternoon.
+      if (insideAgentProject()) {
+        console.error(`
+${red(`kyb: no such command "${command}"`)}
+${dim("  (this looks like an agent project, so it was not read as a new project name)")}
+
+  This kyb is ${bold(VERSION)}. If you expected that command, it is newer:
+
+      ${bold("npm i -g @kybernesis/create@latest")}
+
+  Run ${bold("kyb")} with no arguments for the command list.
+`);
+        process.exit(1);
+      }
       await init(command, initOptions(rest));
       break;
     }
