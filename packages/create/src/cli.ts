@@ -92,6 +92,11 @@ switch (command) {
   case "upgrade":
     await upgrade(rest.includes("--skip-eval"));
     break;
+  case "--version":
+  case "-v":
+  case "version":
+    console.log(VERSION);
+    break;
   case undefined:
     await init(undefined, initOptions(rest));
     break;
@@ -121,7 +126,9 @@ ${dim("  (this looks like an agent project, so it was not read as a new project 
       break;
     }
     console.log(`
-${bold("kyb")} — Kybernesis agent scaffolder & FDE toolkit
+${bold("kyb")} ${dim(VERSION)} — Kybernesis agent scaffolder & FDE toolkit
+${dim("  Every command below exists in this build. If one is missing, the install is older than the docs:")}
+${dim("  npm i -g @kybernesis/create@latest")}
 
   ${bold("kyb init [name]")}     scaffold a Kybernesis eve agent (core: enterprise + arcana + evals)
       --channel=<kind>  ${dim("none|slack|imessage|telegram|discord|web  (default: none)")}
