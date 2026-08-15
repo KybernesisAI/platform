@@ -2,7 +2,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { bold, dim, green, red, yellow } from "./util.js";
+import { upsertEnv } from "./envfile.js";
+
+import { ask, bold, dim, green, red, yellow } from "./util.js";
 
 /**
  * `kyb deploy` — put this repo on its host and restart it, with proof.
@@ -43,6 +45,71 @@ function sshTarget(dir: string, explicit?: string): string | null {
   return null;
 }
 
+/**
+ * Make sure EXE_MODEL names a model the integration actually serves.
+ *
+ * `kyb init` leaves it empty on purpose: the valid ids come from the host's
+ * integration, and the laptop cannot see them — `llm.int.exe.xyz` resolves only
+ * from an attached VM. But nothing then asked again, so a deployment could
+ * complete, report healthy, and fail on the first message with an error that
+ * never mentions the empty value.
+ *
+ * The host CAN see the catalog, and this command is already talking to it. So
+ * ask it, and offer the ids. Two details worth keeping: the id must carry its
+ * provider prefix (`openai/…`), and an unknown id answers `404 unsupported
+ * endpoint: /v1/responses` — an error about the endpoint, for a problem with
+ * the model.
+ */
+async function ensureModel(dir: string, target: string): Promise<void> {
+  if (env(dir).EXE_MODEL) return;
+
+  console.log(yellow("  EXE_MODEL is empty — the agent has no model to run."));
+  console.log(dim("  Asking the host which models its integration serves …"));
+
+  let ids: string[] = [];
+  try {
+    const raw = execFileSync(
+      "ssh",
+      [target, "curl -s --max-time 15 https://llm.int.exe.xyz/models.json || true"],
+      { encoding: "utf8" },
+    );
+    type Entry = { id?: string; apis?: string[] };
+    const catalog = JSON.parse(raw) as { models?: Entry[]; data?: Entry[] } | Entry[];
+    // The live catalog is `{ schema_version, models: [...] }`. `data` and a bare
+    // array are accepted too rather than assuming one shape forever.
+    const entries: Entry[] = Array.isArray(catalog) ? catalog : (catalog.models ?? catalog.data ?? []);
+    ids = entries
+      .map((m) => m?.id)
+      .filter((id): id is string => typeof id === "string" && id.includes("/"))
+      .sort();
+  } catch {
+    ids = [];
+  }
+
+  if (ids.length === 0) {
+    console.log(red("\n  Could not read the model catalog from the host."));
+    console.log(
+      dim(
+        `  Check the integration is attached (ssh exe.dev integrations list), then run on the host:\n` +
+          `    ssh ${target} 'curl -s https://llm.int.exe.xyz/models.json'\n` +
+          `  Set EXE_MODEL to an id WITH its provider prefix, e.g. openai/gpt-5.6-sol.\n`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  console.log(dim("\n  Models this host can serve:"));
+  ids.forEach((id, i) => console.log(`    ${i + 1}. ${id}`));
+  const answer = await ask(`\n  EXE_MODEL (number or full id)?`, ids[0]!);
+  const chosen = /^\d+$/.test(answer.trim()) ? ids[Number(answer.trim()) - 1] : answer.trim();
+  if (!chosen) {
+    console.log(red("  No model chosen — stopping before deploying an agent that cannot answer."));
+    process.exit(1);
+  }
+  upsertEnv(dir, { EXE_MODEL: chosen });
+  console.log(green(`  ✓ EXE_MODEL="${chosen}" written to .env.local\n`));
+}
+
 export async function deploy(options: { host?: string; dir?: string; noEnv?: boolean }): Promise<void> {
   const dir = options.dir ?? process.cwd();
   if (!existsSync(join(dir, "agent"))) {
@@ -71,6 +138,8 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
   const name = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).name ?? "agent";
   const remote = `~/${name}`;
   console.log(dim(`  host: ${target}   path: ${remote}\n`));
+
+  await ensureModel(dir, target);
 
   const run = (cmd: string, args: string[]): boolean => {
     const r = spawnSync(cmd, args, { cwd: dir, stdio: "inherit" });
