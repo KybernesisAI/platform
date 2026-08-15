@@ -607,3 +607,35 @@ export { default } from "@kybernesis/engineer";
         ],
   };
 }
+
+
+/**
+ * The eval judge, for an exe.dev host.
+ *
+ * Without this the judge resolves through Vercel's AI Gateway and fails with
+ * "Unauthenticated request to AI Gateway" on a host that has no gateway key
+ * and does not need one — the agent passes every gate the judge is not part
+ * of, which reads as a half-broken agent rather than a missing config.
+ *
+ * Judged by a DIFFERENT provider from the one under test. A model grading its
+ * own output is a weak test, and the Anthropic path is a plain Messages
+ * endpoint, so none of the subscription backend's constraints apply.
+ */
+export function exeEvalConfigTs(): string {
+  return `import { defineEvalConfig } from "eve/evals";
+import { createAnthropic } from "@ai-sdk/anthropic";
+
+const exe = createAnthropic({
+  baseURL: process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1",
+  apiKey: "exe-integration",
+});
+
+export default defineEvalConfig({
+  // A different provider from the agent under test, on purpose.
+  judge: { model: exe(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-4-6") },
+  // Real model and real memory on every turn: generous timeout, gentle concurrency.
+  timeoutMs: 300_000,
+  maxConcurrency: 1,
+});
+`;
+}

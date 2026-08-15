@@ -22,6 +22,7 @@ import {
   engineerPlan,
   envExample,
   evalFileTs,
+  exeEvalConfigTs,
   evalScript,
   hostAgentTs,
   hostSteps,
@@ -33,6 +34,7 @@ import {
 } from "./templates.js";
 import { suiteDir } from "./skills.js";
 import { configureArcana } from "./arcana.js";
+import { upsertEnv } from "./envfile.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -130,7 +132,12 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir });
   }
 
-  const extraDeps = [...plan.deps, ...(host === "exe" ? ["@kybernesis/exe", "@ai-sdk/openai"] : [])];
+  // @ai-sdk/anthropic is for the EVAL JUDGE, not the agent: an agent judged
+  // by the model it runs on is a weak test.
+  const extraDeps = [
+    ...plan.deps,
+    ...(host === "exe" ? ["@kybernesis/exe", "@ai-sdk/openai", "@ai-sdk/anthropic"] : []),
+  ];
   if (extraDeps.length) {
     console.log(bold(`\n2b   Installing for ${channel}/${host}: ${extraDeps.join(", ")} …`));
     run("npm", ["install", ...extraDeps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
@@ -178,10 +185,38 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL));
   writeFileSync(join(dir, "agent/extensions/arcana.ts"), rootArcanaTs());
   writeFileSync(join(dir, "evals/kybernesis.eval.ts"), evalFileTs(displayName, depts));
+  // A self-hosted agent judges through its own integration; the default
+  // resolves through a gateway it has no key for, and only the judged gates
+  // fail — which reads as a half-broken agent rather than a missing config.
+  if (host === "exe") writeFileSync(join(dir, "evals/evals.config.ts"), exeEvalConfigTs());
 
   // Ask for the memory keys HERE, while the person is still standing in the
   // scaffold — not in a printed next-step they will read after the context has
   // gone. Skipped with --yes, which is for CI and takes no input by design.
+  /**
+   * Write the values this command already knows.
+   *
+   * These were left blank, so the first thing a person met after a clean
+   * scaffold was `kyb register` reporting "No agent name" — a step they were
+   * never offered, reading as one they had skipped.
+   */
+  const known: Record<string, string> = { KYBERNESIS_ISSUER: issuer, KYBERNESIS_AGENT: name };
+  if (host === "exe") {
+    // Usually the agent's name, and usually not. Everything downstream — the
+    // deploy target, the registered URL — derives from this one value.
+    known.EXE_VM_NAME = options.yes ? name : await ask("exe.dev VM name?", name);
+    /**
+     * Left empty on purpose rather than guessed.
+     *
+     * Model ids are per-integration and carry a provider prefix. A hardcoded
+     * default put one host's id on another, where an unknown id answers
+     * `404 unsupported endpoint` — an error about the endpoint for a problem
+     * with the model. Empty fails honestly; the host lists its own with
+     * curl https://llm.int.exe.xyz/models.json
+     */
+    known.EXE_MODEL = "";
+  }
+  upsertEnv(dir, known);
   if (!options.yes) await configureArcana({ dir, suggest: name, depts });
 
   /**

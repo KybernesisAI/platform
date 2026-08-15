@@ -88,6 +88,9 @@ What this arrangement costs you, and it is worth saying to the client:
 
 ## The failure modes, each of which cost a real session
 
+- **`EXE_MODEL` is deliberately empty after `kyb init`.** Set it from the
+  host: `curl https://llm.int.exe.xyz/models.json`. Nothing can guess it —
+  ids are per-integration.
 - **Model ids carry a provider prefix**: `openai/gpt-5.6-sol`, not
   `gpt-5.6-sol`. Get them from `curl https://llm.int.exe.xyz/models.json` on
   the host, and note its `preferred_model`.
