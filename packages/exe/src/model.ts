@@ -80,6 +80,27 @@ type CallOptions = {
  * same agent file works against any provider source.
  */
 export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
+  /**
+   * Refuse an empty model id at construction.
+   *
+   * `exeModel({ model: process.env.EXE_MODEL })` with the variable unset sends
+   * `model: ""`, and the integration answers HTTP 400 `missing required "model"
+   * field in request body`. eve reports that as MODEL_CALL_FAILED on every
+   * turn, so a whole eval suite fails with thirteen red gates and a page of
+   * provider stack traces, none of which say "the model id is empty" — the one
+   * sentence that resolves it.
+   *
+   * Failing here names the variable, before anything sends a request.
+   */
+  if (!options.model || !String(options.model).trim()) {
+    throw new Error(
+      "exeModel: no model id. EXE_MODEL is empty or unset in this process. " +
+        "Set it to an id the integration serves, WITH its provider prefix (e.g. openai/gpt-5.6-sol) — " +
+        "list them with: curl -s https://llm.int.exe.xyz/models.json. " +
+        "On a deployed host, set it in the HOST's .env.local and restart; a laptop-only edit never reaches the server.",
+    );
+  }
+
   const baseURL =
     options.baseURL ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1";
 
