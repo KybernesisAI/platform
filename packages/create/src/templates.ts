@@ -80,7 +80,15 @@ export function subagentArcanaTs(dept: string): string {
   const upper = dept.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   return `import { defineMcpClientConnection } from "eve/connections";
 
-const workspace = process.env.ARCANA_${upper}_WORKSPACE ?? "REPLACE-${dept}";
+// Same reasoning as the root brain: no placeholder. A subagent quietly
+// addressing a workspace nobody owns is amnesia that looks like a model
+// problem rather than a missing value. Set it with \`kyb arcana\`.
+const workspace = process.env.ARCANA_${upper}_WORKSPACE;
+if (!workspace) {
+  throw new Error(
+    "ARCANA_${upper}_WORKSPACE is not set — run \`kyb arcana\` to set this subagent workspace and key.",
+  );
+}
 
 export default defineMcpClientConnection({
   url: "https://mcp.arcana.kybernesis.ai/mcp",
@@ -109,7 +117,16 @@ export function rootArcanaTs(): string {
 // One brain for shared surfaces, optionally a second for DMs. Hermetic eval
 // runs override ARCANA_COMPANY_WORKSPACE to "<client>-eval", which switches
 // to the eval workspace's own key automatically.
-const COMPANY = process.env.ARCANA_COMPANY_WORKSPACE ?? "REPLACE-company";
+// No placeholder fallback. A default here does not prevent a mistake, it
+// hides one: memory silently addresses a workspace nobody owns, and the agent
+// looks like it has amnesia rather than like it is misconfigured. Set with
+// \`kyb arcana\`.
+const COMPANY = process.env.ARCANA_COMPANY_WORKSPACE;
+if (!COMPANY) {
+  throw new Error(
+    "ARCANA_COMPANY_WORKSPACE is not set — run \`kyb arcana\` to set the workspace and its key.",
+  );
+}
 const DM = process.env.ARCANA_DM_WORKSPACE ?? COMPANY;
 
 export default arcana({
@@ -572,8 +589,13 @@ export default defineAgent({
     {
       path: "agent/subagents/builder/extensions/engineer.ts",
       content: `// Engineer layer mounted LOCALLY on this subagent (eve >=0.30): screenshot,
-// deliver, and the trade-school skills belong to \`builder\` alone. The root
-// agent never gets shell or a browser.
+// deliver, and the trade-school skills belong to \`builder\` alone, so the root
+// agent has no shell.
+//
+// The root DOES get a browser and GitHub tools — the engineer layer installs
+// extension/agent-browser and extension/github-tools at the root, deliberately,
+// because reading a page is not the same blast radius as running a command.
+// This comment used to claim otherwise, which is worse than saying nothing.
 export { default } from "@kybernesis/engineer";
 `,
     },
