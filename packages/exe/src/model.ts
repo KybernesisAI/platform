@@ -33,11 +33,19 @@ export interface ExeModelOptions<TModel> {
   /**
    * Which OpenAI surface to call.
    *
-   * Defaults to "chat", because exe's LLM integration serves
-   * `/v1/chat/completions` and answers `/v1/responses` with
-   * `404 unsupported endpoint` — which reaches eve as MODEL_CALL_FAILED, with
-   * the actual cause four levels down in a log. The Responses API is available
-   * for integrations that front a provider supporting it.
+   * Defaults to "responses", which is what subscription-backed models require:
+   * models.json reports `"apis": ["openai_responses"]` for them, and
+   * chat-completions answers `Model … is not in this integration's model list`
+   * for a model that plainly is.
+   *
+   * Pass "chat" for gateway-backed models that expect chat-completions.
+   *
+   * A warning about the errors here, because they cost hours: an UNKNOWN model
+   * id on the responses surface comes back as
+   * `404 unsupported endpoint: /v1/responses` — an error about the endpoint,
+   * for a problem with the model. The endpoint is fine. Check that EXE_MODEL
+   * carries its provider prefix (`openai/gpt-5.6-sol`, not `gpt-5.6-sol`)
+   * before believing anything that 404 says.
    */
   api?: "chat" | "responses";
 }
@@ -77,7 +85,7 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
 
   // apiKey is required by the SDK but unused: exe injects the real credential.
   const provider = options.createOpenAI({ baseURL, apiKey: "exe-integration" });
-  const api = options.api ?? "chat";
+  const api = options.api ?? "responses";
   const base = (api === "responses"
     ? provider.responses(options.model)
     : provider.chat(options.model)) as Record<string, unknown> & {

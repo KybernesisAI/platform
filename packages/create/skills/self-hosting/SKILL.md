@@ -88,12 +88,16 @@ What this arrangement costs you, and it is worth saying to the client:
 
 ## The failure modes, each of which cost a real session
 
-- **The LLM integration serves chat-completions, not the Responses API.** An
-  agent pointed at `/v1/responses` gets `404 unsupported endpoint`, which
-  reaches eve as `MODEL_CALL_FAILED` with the real cause buried in a log.
-  `exeModel()` defaults to chat for this reason (≥0.5.2); pass
-  `api: "responses"` only when the integration fronts a provider that supports
-  it.
+- **Model ids carry a provider prefix**: `openai/gpt-5.6-sol`, not
+  `gpt-5.6-sol`. Get them from `curl https://llm.int.exe.xyz/models.json` on
+  the host, and note its `preferred_model`.
+- **An unknown model id on the responses surface returns**
+  `404 unsupported endpoint: /v1/responses` — an error about the ENDPOINT for
+  a problem with the MODEL. The endpoint is fine. Check the prefix before
+  believing that 404; chasing it cost hours and produced two wrong fixes.
+- **Subscription-backed models are Responses-API only.** models.json reports
+  `"apis": ["openai_responses"]`, and chat-completions answers `Model … is
+  not in this integration's model list` for a model that plainly is listed.
 - **Evals must run ON the host.** `llm.int.exe.xyz` is internal to exe.dev, so
   a laptop cannot reach it — every model call fails with a connection error to
   the cloud metadata address, which looks like a broken agent and is not.
