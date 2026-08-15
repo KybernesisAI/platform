@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/dispatch",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Agent-to-agent dispatch for eve agents: declared remote-peer edges with principal forwarding on by default, and a receiver channel that makes trusting the wrong caller hard to express.",
   "license": "Apache-2.0",
   "type": "module",

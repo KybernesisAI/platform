@@ -30,3 +30,5 @@ export {
   type DispatchChannelOptions,
   type PeerRef,
 } from "./channel.js";
+
+export { governedPeers, type GovernedPeersOptions } from "./governed-peers.js";

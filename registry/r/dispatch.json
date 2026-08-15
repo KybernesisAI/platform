@@ -2,7 +2,7 @@
   "name": "dispatch",
   "type": "registry:item",
   "title": "Kybernesis Dispatch",
-  "description": "Agent-to-agent dispatch: declared remote-peer edges with principal forwarding on by default, and a receiver channel that only trusts enumerated peer deployments.",
+  "description": "Agent-to-agent: peers discovered from the control plane as tools, plus a receiver channel that only accepts callers you have granted.",
   "dependencies": [
     "@kybernesis/dispatch"
   ],
@@ -12,6 +12,12 @@
       "type": "registry:file",
       "target": "agent/channels/eve.ts",
       "content": "import { dispatchChannel } from \"@kybernesis/dispatch\";\n\n// Agent-to-agent receiver: accepts calls — and forwarded end-user principals —\n// from exactly the peer deployments enumerated here. Fill in the REAL Vercel\n// team slug + project name of each caller (what `vercel ls` shows); a peer\n// that isn't listed gets a 403. Never widen this to a predicate.\n//\n// Caller side: drop a remotePeer() file under agent/subagents/ in the OTHER\n// agent's repo — see the connect-agents skill in .claude/skills.\n//\n// Control-plane governed agent? Keep governance in the same walk:\n//   dispatchChannel({ trustedPeers, extraAuth: [kybernesisAuth({ issuer, agent })] })\nexport default dispatchChannel({\n  trustedPeers: [\n    { teamSlug: \"your-team\", projectName: \"caller-agent\" },\n  ],\n});\n"
+    },
+    {
+      "path": "registry/dispatch-peers.ts",
+      "type": "registry:file",
+      "target": "agent/tools/peers.ts",
+      "content": "import { governedPeers } from \"@kybernesis/dispatch\";\n\n// Every agent this one is ALLOWED to call, as tools — resolved from the control\n// plane at the start of each turn.\n//\n// Granting an edge in the admin is the whole job: the tool appears on the next\n// turn and disappears when the edge is revoked, with no file to write and no\n// redeploy. Nothing here names a peer, because naming peers in code is what\n// made a granted permission useless until someone shipped a change.\n//\n// Note what this trades away. These calls carry THIS agent's identity, so the\n// peer answers as if another agent asked. Where a peer reaches personal data\n// and should answer as the human instead, declare that one with remotePeer()\n// under agent/subagents/ — it forwards the principal, and the file is worth it\n// there.\nexport default governedPeers();\n"
     }
   ],
   "$schema": "https://ui.shadcn.com/schema/registry-item.json"
