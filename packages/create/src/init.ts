@@ -267,6 +267,31 @@ export async function init(rawName: string | undefined, options: InitOptions = {
         yellow("  ! could not install scripts/eve-server.sh — copy it from node_modules/@kybernesis/exe/scripts/"),
       );
     }
+
+    /**
+     * Point the management routes at that script.
+     *
+     * The registry template ships `restartCommand` commented out next to an
+     * example path, because on Vercel there is nothing to restart. On a VM
+     * there is, and the correct value is not a guess — it is the script three
+     * lines above. Left commented, every install through Studio succeeds and
+     * then reports that a restart is still required, which reads as a broken
+     * feature rather than one line of config nobody was asked for.
+     */
+    const manageChannelFile = join(dir, "agent/channels/kyb.ts");
+    if (existsSync(manageChannelFile)) {
+      const appRoot = `/home/exedev/${name}`;
+      const wired = readFileSync(manageChannelFile, "utf8").replace(
+        /export default manageChannel\(\{[\s\S]*?\}\);/,
+        () =>
+          `export default manageChannel({\n` +
+          `  appRoot: process.env.EVE_APP_DIR ?? ${JSON.stringify(appRoot)},\n` +
+          `  restartCommand: "bash scripts/eve-server.sh restart",\n` +
+          `});`,
+      );
+      writeFileSync(manageChannelFile, wired);
+      console.log(dim("     agent/channels/kyb.ts — restart wired to that script"));
+    }
   }
 
   if (plan.file) {

@@ -38,9 +38,31 @@ export async function doctor(): Promise<void> {
   }
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
-  for (const p of ["@kybernesis/arcana", "@kybernesis/enterprise", "@kybernesis/multiplayer", "@kybernesis/evals"]) {
+  for (const p of ["@kybernesis/arcana", "@kybernesis/enterprise", "@kybernesis/evals"]) {
     if (deps[p]) add("pass", `${p} ${deps[p]}`);
     else add("warn", `${p} not installed`, `eve add @kybernesis/${p.split("/")[1]}`);
+  }
+
+  /**
+   * multiplayer is conversation mechanics for a SHARED channel — threads with
+   * per-speaker identity, the public/DM split. An agent reached only through
+   * Studio or a direct API has no such channel, so telling its operator to
+   * install it is advice that cannot be usefully acted on. A warning nobody can
+   * clear is how a checklist stops being read.
+   */
+  const channelsDir = join(cwd, "agent", "channels");
+  const sharedChannel =
+    existsSync(channelsDir) && readdirSync(channelsDir).some((f) => /^(slack|discord|telegram)\./.test(f));
+  if (deps["@kybernesis/multiplayer"]) {
+    add("pass", `@kybernesis/multiplayer ${deps["@kybernesis/multiplayer"]}`);
+  } else if (sharedChannel) {
+    add(
+      "warn",
+      "@kybernesis/multiplayer not installed",
+      "this agent has a shared channel, which needs its thread + per-speaker identity mechanics",
+    );
+  } else {
+    add("pass", "no shared channel, so multiplayer is not needed");
   }
 
   // ── env ────────────────────────────────────────────────────────────────
@@ -213,19 +235,31 @@ export async function doctor(): Promise<void> {
       add("pass", "no Vercel Connect dependencies (correct for a self-hosted agent)");
     }
 
-    // eve start does not read .env.local the way eve dev does.
-    add(
-      "warn",
-      "self-hosted: export .env.local into the server process",
-      "eve start does NOT read it; use the supervision script from @kybernesis/exe (scripts/eve-server.sh)",
-    );
-
-    // Prewarm runs in the eve CLI, not the built server.
-    add(
-      "warn",
-      "self-hosted: start via `npx eve start`, not `node .output/server/index.mjs`",
-      "sandbox templates are prewarmed by the CLI; starting the server directly skips prewarm and every sandbox tool fails with SandboxTemplateNotProvisionedError",
-    );
+    /**
+     * Both of the next two are real ways a self-hosted agent boots broken:
+     * `eve start` does not read .env.local the way `eve dev` does, and sandbox
+     * templates are prewarmed by the CLI, so launching the built server
+     * directly fails every sandbox tool with SandboxTemplateNotProvisionedError.
+     *
+     * The supervision script does both correctly. When it is present, saying so
+     * is the useful report — repeating the hazard as a warning teaches the
+     * operator that warnings here are decoration.
+     */
+    const supervisor = join(cwd, "scripts/eve-server.sh");
+    if (existsSync(supervisor)) {
+      add("pass", "scripts/eve-server.sh present (exports .env.local, starts via the eve CLI)");
+    } else {
+      add(
+        "warn",
+        "self-hosted: export .env.local into the server process",
+        "eve start does NOT read it; use the supervision script from @kybernesis/exe (scripts/eve-server.sh)",
+      );
+      add(
+        "warn",
+        "self-hosted: start via `npx eve start`, not `node .output/server/index.mjs`",
+        "sandbox templates are prewarmed by the CLI; starting the server directly skips prewarm and every sandbox tool fails with SandboxTemplateNotProvisionedError",
+      );
+    }
 
     // The exe VM sandbox backend needs a credential that cannot be scoped.
     // Surface the blast radius here, where it is still cheap to change course.
@@ -297,11 +331,22 @@ export async function doctor(): Promise<void> {
         "KYBER Studio cannot install or write routines here: the agent cannot check a grant for a name it does not know",
       );
     }
-    add(
-      "warn",
-      "management routes need a writable working copy",
-      "installing edits this repo and rebuilds; on a read-only serverless bundle the routes refuse. Set restartCommand in agent/channels/kyb.ts or an install will not take effect",
-    );
+    // Installing edits the repo and rebuilds, so it only takes effect where a
+    // restart can be triggered. With restartCommand set, that is answered; the
+    // remaining requirement (a writable working copy) is a property of the
+    // host, and on a read-only bundle the routes refuse with that reason.
+    const manageFile = join(cwd, "agent/channels/kyb.ts");
+    const restartWired =
+      existsSync(manageFile) && /^\s*restartCommand\s*:/m.test(readFileSync(manageFile, "utf8"));
+    if (restartWired) {
+      add("pass", "management routes can restart the agent after an install");
+    } else {
+      add(
+        "warn",
+        "management routes have no restartCommand",
+        "installing edits this repo and rebuilds; without a restart the response says a restart is still required. Set restartCommand in agent/channels/kyb.ts (self-hosted: \"bash scripts/eve-server.sh restart\")",
+      );
+    }
   }
 
   // ── engineer subagent (build capability scoped to a subagent) ──────────
