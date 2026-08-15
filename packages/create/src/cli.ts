@@ -23,6 +23,7 @@ import { installSkills } from "./skills.js";
 import { deploy } from "./deploy.js";
 import { register } from "./register.js";
 import { agentName, configureArcana } from "./arcana.js";
+import { credential } from "./credential.js";
 
 
 /** This build's version, so a skew can name itself instead of being guessed at. */
@@ -83,6 +84,9 @@ switch (command) {
       suggest: flag(rest, "name") ?? agentName(process.cwd(), basename(process.cwd())),
     });
     break;
+  case "credential":
+    await credential({ name: flag(rest, "name"), host: flag(rest, "host"), local: rest.includes("--local") });
+    break;
   case "register":
     await register({ name: flag(rest, "name"), url: flag(rest, "url") });
     break;
@@ -141,6 +145,8 @@ ${dim("  npm i -g @kybernesis/create@latest")}
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code
       --global          ${dim("install to ~/.claude/skills instead of this repo")}
   ${bold("kyb arcana")}          set memory workspaces + keys, and verify each pair
+  ${bold("kyb credential")}      mint this agent's control-plane credential and install it
+      --local           ${dim("write ./.env.local instead of the host")}
   ${bold("kyb register")}        register this agent with the control plane
       --name=<name>     ${dim("defaults to KYBERNESIS_AGENT in .env.local")}
       --url=<url>       ${dim("defaults to https://$EXE_VM_NAME.exe.xyz")}

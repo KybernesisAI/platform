@@ -1,0 +1,32 @@
+{
+  "name": "acme-agent",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "scripts": {
+    "build": "eve build",
+    "dev": "eve dev",
+    "start": "eve start",
+    "typecheck": "tsc",
+    "eval": "ARCANA_COMPANY_WORKSPACE=acme-agent-eval ARCANA_DM_WORKSPACE=acme-agent-eval eve eval"
+  },
+  "dependencies": {
+    "@kybernesis/arcana": "^0.2.0",
+    "@kybernesis/enterprise": "^0.4.0",
+    "@kybernesis/evals": "^0.2.1",
+    "@vercel/connect": "0.4.3",
+    "ai": "^7.0.38",
+    "eve": "^0.30.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "typescript": "7.0.2"
+  },
+  "registries": {
+    "@kybernesis": "https://registry.kybernesis.ai/r/{name}.json"
+  }
+}

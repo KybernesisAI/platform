@@ -30,7 +30,7 @@ function envOf(dir: string): Env {
 }
 
 /** Sign in with the device flow and return an identity token. */
-async function signIn(issuer: string): Promise<string | null> {
+export async function signIn(issuer: string): Promise<string | null> {
   const started = await fetch(`${issuer}/api/oauth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },

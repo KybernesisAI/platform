@@ -5,7 +5,8 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "fixtures/*"
+    "fixtures/*",
+    "packages/create/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -13,6 +14,9 @@
     "test": "npm run test --workspaces --if-present"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
+  },
+  "overrides": {
+    "ai": "^7.0.38"
   }
 }
