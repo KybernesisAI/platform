@@ -32,9 +32,11 @@ where it lives, and how to fix things. Last full update: **2026-08-08**.
 
 ## Current state snapshot (2026-08-08)
 
-- **eve pin: 0.30.8** (Kybernesis-certified; latest upstream is 0.31.0 — do NOT bump
-  without the certification flow in the certification skill; both ends of any dispatch
-  edge must move together).
+- **eve pin: 0.38.3** (Kybernesis-certified 2026-08-17; do NOT bump without the
+  certification flow in the certification skill). 0.31.0 is the migration wall: it
+  replaced continuation-token session APIs with ID-addressed handles, so anything
+  crossing it moves together. Remote-agent CALLBACKS do not work between hosts that
+  cannot reach their own public URL — use governed peers, which poll a stream instead.
 - **Package versions on npm**: enterprise 0.2.0 · arcana 0.2.0 · multiplayer 0.1.0 ·
   engineer 0.2.0 · dispatch 0.2.1 · evals 0.2.1 · create 0.3.2. All Apache-2.0, public.
   Publishing needs Ian's npm login (`kybernesis` account); `publishConfig.access=public`

@@ -185,7 +185,7 @@ something. Chase them a week out — an unprovisioned Vercel team on Day 1 costs
       `@kybernesis/arcana@0.1.1`, `@kybernesis/enterprise@0.1.2`,
       `@kybernesis/multiplayer@0.1.0`, `@kybernesis/evals@0.2.1`,
       `@kybernesis/create@0.1.4`, `@kybernesis/engineer@0.2.0`, and
-      `eve@0.30.8` (the Kybernesis-certified version). All public on npm;
+      `eve@0.38.3` (the Kybernesis-certified version). All public on npm;
       `kyb doctor` checks the wiring.
 
 ---
@@ -349,8 +349,8 @@ npx eve registry view @kybernesis/arcana
 ### 3.4 Pin your versions
 
 Before you install anything else, decide and record the versions this engagement pins.
-Put them in the repo README. Pin `eve@0.30.8` — the **Kybernesis-certified** version
-(certification run 2026-08-06: full suite green, zero code changes). Never pin blind
+Put them in the repo README. Pin `eve@0.38.3` — the **Kybernesis-certified** version
+(certification run 2026-08-17: full suite green; one schedule API change, see HANDOFF). Never pin blind
 npm-latest; `kyb upgrade` carries a client to the certified pin behind their own eval
 gate, and that upgrade is a **deliberate, eval-gated step**, never something that
 happens by accident mid-pilot.
