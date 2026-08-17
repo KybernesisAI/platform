@@ -14,9 +14,9 @@
     "eval": "ARCANA_COMPANY_WORKSPACE=acme-agent-eval ARCANA_DM_WORKSPACE=acme-agent-eval eve eval"
   },
   "dependencies": {
-    "@kybernesis/arcana": "^0.2.0",
-    "@kybernesis/enterprise": "^0.4.0",
-    "@kybernesis/evals": "^0.2.1",
+    "@kybernesis/arcana": "^0.3.0",
+    "@kybernesis/enterprise": "^0.5.0",
+    "@kybernesis/evals": "^0.3.0",
     "@vercel/connect": "0.4.3",
     "ai": "^7.0.38",
     "eve": "^0.38.3",
