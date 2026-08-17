@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/engineer",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Engineer capabilities for eve agents: a vision-verified dev loop (in-sandbox screenshots the model can see), trade-school skills for building and shipping software, and disciplined git/deploy behavior.",
   "license": "Apache-2.0",
   "type": "module",
@@ -38,13 +38,18 @@
     "./tools": {
       "types": "./dist/tools/index.d.ts",
       "default": "./dist/tools/index.mjs"
+    },
+    "./git": {
+      "types": "./dist/git.d.ts",
+      "default": "./dist/git.js"
     }
   },
   "scripts": {
-    "build": "eve extension build",
-    "prepare": "eve extension build",
+    "build": "eve extension build && tsc -p tsconfig.build.json",
+    "prepare": "eve extension build && tsc -p tsconfig.build.json",
     "typecheck": "tsc",
-    "prepublishOnly": "node ../../scripts/prepublish.mjs"
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "zod": "4.4.3",
