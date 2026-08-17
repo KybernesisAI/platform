@@ -96,11 +96,45 @@ async function discover(options: GovernedPeersOptions): Promise<Peer[]> {
   }
 }
 
+/**
+ * Who is asking, from the verified session principal.
+ *
+ * The agent's own door authenticated this; the model did not choose it and
+ * cannot set it, which is the only reason it is worth sending at all. Undefined
+ * for an unattended turn — a schedule, a webhook — where there is no person.
+ *
+ * This travels to the peer as an ASSERTION, not as authentication. The peer
+ * learns who prompted the call and can address them by name or decline work
+ * that is not theirs to do, but the call still carries this agent's authority,
+ * not the person's. A peer must never widen what it will do because of this
+ * value: the caller could claim anything, and the control plane only records
+ * the claim. Reaching a peer AS the person is a different mechanism.
+ */
+function askedBy(ctx: unknown): { id: string; label?: string } | undefined {
+  const current = (
+    ctx as {
+      session?: {
+        auth?: {
+          current?: { principalId?: string; attributes?: Record<string, unknown> } | null;
+        };
+      };
+    }
+  )?.session?.auth?.current;
+  const id = current?.principalId;
+  if (!id) return undefined;
+  const attributes = current?.attributes ?? {};
+  const label = ["email", "user_name", "name"]
+    .map((key) => attributes[key])
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+  return label ? { id, label } : { id };
+}
+
 /** Mint a short-lived token for one callee, then hold the conversation. */
 async function ask(
   options: GovernedPeersOptions,
   peer: Peer,
   message: string,
+  asker?: { id: string; label?: string },
 ): Promise<string> {
   const { issuer, credential } = config(options);
   if (!credential) throw new Error("This agent has no control-plane credential, so it cannot call another agent.");
@@ -108,7 +142,7 @@ async function ask(
   const minted = await fetch(`${issuer}/api/agent/session`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
-    body: JSON.stringify({ callee: peer.name }),
+    body: JSON.stringify({ callee: peer.name, ...(asker ? { onBehalfOf: asker } : {}) }),
     signal: AbortSignal.timeout(20_000),
   });
   if (!minted.ok) {
@@ -243,7 +277,8 @@ export function governedPeers(options: GovernedPeersOptions = {}) {
                 .string()
                 .describe("What to ask it. Write it as you would to a colleague — it has no view of this conversation."),
             }),
-            execute: (input: { message: string }) => ask(options, peer, input.message),
+            execute: (input: { message: string }, ctx: unknown) =>
+              ask(options, peer, input.message, askedBy(ctx)),
           });
         }
         return tools;

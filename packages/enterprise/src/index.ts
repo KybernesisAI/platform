@@ -1,4 +1,5 @@
 export { kybernesisAuth, type KybernesisAuthOptions } from "./kybernesis-auth.js";
+export { assertedAsker, type AssertedAsker } from "./asked-by.js";
 export {
   verifyKybernesisRequest,
   type VerifiedPrincipal,
