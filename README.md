@@ -6,19 +6,19 @@ Kybernesis. Eve is the plumbing; this is the moat.
 
 ## Packages (all Apache-2.0, published to npm)
 
-| Package | What it gives an agent |
+| Package | What it covers |
 | --- | --- |
-| [`@kybernesis/arcana`](./packages/arcana) | Durable long-term memory (Arcana): MCP connection, recall/remember/brain-note skills, recall-first instructions |
-| [`@kybernesis/enterprise`](./packages/enterprise) | Control-plane governance: offline token verification + per-agent grant enforcement (invite / grant / revoke / suspend) |
-| [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared conversations: per-speaker verified identity, attributed threads, no-re-mention continuation, dual surfaces |
-| [`@kybernesis/evals`](./packages/evals) | The baseline QA suite: memory/routing/smoke behaviors with every production hardening lesson as a default |
-| [`@kybernesis/engineer`](./packages/engineer) | The vision-verified dev loop: in-sandbox screenshots the model can SEE, trade-school build/ship skills, and the workshop sandbox template |
-| [`@kybernesis/dispatch`](./packages/dispatch) | Agent-to-agent edges: declared remote peers with principal forwarding on by default, and a receiver channel that makes trusting the wrong caller hard to express |
-| [`@kybernesis/connectors`](./packages/connectors) | The user's own SaaS accounts as tools, resolved per principal from the control plane — plus an MCP client for remote servers |
-| [`@kybernesis/local`](./packages/local) | The user's own machine: shell, files, search, and locally-running MCP servers, relayed through KYBER Studio under per-effect consent |
-| [`@kybernesis/manage`](./packages/manage) | The other direction: let Studio install capabilities and write schedules onto a running agent |
-| [`@kybernesis/exe`](./packages/exe) | Running off Vercel: exe.dev's LLM integration, a client's own ChatGPT or Grok subscription, host preflight, Photon iMessage |
-| [`@kybernesis/create`](./packages/create) | The `kyb` CLI: `init` scaffolds a full governed/remembering/multiplayer/self-testing agent in one command; `doctor` preflights an engagement; `upgrade` bumps packages behind the eval gate; `skills` installs the FDE skill suite |
+| [`@kybernesis/arcana`](./packages/arcana) | Per-brain Arcana long-term memory through an MCP connection, with recall, remember, and brain-note skills plus recall-first instructions. |
+| [`@kybernesis/connectors`](./packages/connectors) | Per-principal SaaS tools and remote MCP servers dynamically resolved through the Kybernesis control plane. |
+| [`@kybernesis/create`](./packages/create) | The `kyb` CLI for scaffolding, diagnosing, configuring, registering, deploying, upgrading, and installing FDE skills for Kybernesis agents. |
+| [`@kybernesis/dispatch`](./packages/dispatch) | Declared agent-to-agent remote-peer edges and receiver channels with principal forwarding and constrained trusted peers. |
+| [`@kybernesis/engineer`](./packages/engineer) | An eve engineering extension with screenshot-based visual verification, delivery tooling, disciplined git behavior, and build-and-ship skills. |
+| [`@kybernesis/enterprise`](./packages/enterprise) | Kybernesis identity and policy token verification with per-agent grant enforcement for governed user and agent-to-agent requests. |
+| [`@kybernesis/evals`](./packages/evals) | Composable smoke, memory, safety, routing, and optional engineer evaluation suites. |
+| [`@kybernesis/exe`](./packages/exe) | Support for running agents on exe.dev with integration- or subscription-backed models, host preflight, sandbox and preview helpers, and optional Slack and Photon bindings. |
+| [`@kybernesis/local`](./packages/local) | Shell, file, search, edit, and local-MCP work relayed to a user's machine through KYBER Studio with per-effect consent and optional guards. |
+| [`@kybernesis/manage`](./packages/manage) | Authenticated management routes and routine tools for installing capabilities, storing credentials, and creating or deleting schedules in a writable agent checkout. |
+| [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared Slack-thread conversations with per-speaker identity, attributed context, no-re-mention continuation, channel or DM surface marking, and privacy guards. |
 
 ## Also in this repo
 
