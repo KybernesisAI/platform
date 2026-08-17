@@ -63,6 +63,18 @@ On success the session principal carries `principalType: "user"`,
 `kybernesisGrants` — ready for `defineDynamic` capability gating and
 `approval` policies.
 
+## Asserted asker
+
+`assertedAsker(session)` returns `{ id: string; label?: string } | undefined`.
+The value is the calling agent's claim about who asked. The control plane signs
+or records the claim, but never verifies the claimed person's identity, and the
+caller can supply the ID.
+
+Use it to greet or address someone, attribute or log a request, or refuse an
+operation. Never use it to decide, grant, or widen access. A tool that accesses
+personal data must use the authenticated session principal instead. In an
+agent-to-agent call, that principal is the calling agent.
+
 ## Verified behavior
 
 The reference deployment exercises the full loop against a live control
