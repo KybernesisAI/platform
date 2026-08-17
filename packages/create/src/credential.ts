@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
@@ -34,6 +35,20 @@ function envOf(dir: string): Record<string, string> {
     if (m?.[1] && out[m[1]] === undefined) out[m[1]] = (m[2] ?? "").trim().replace(/^["']|["']$/g, "");
   }
   return out;
+}
+
+/**
+ * Is this machine the SSH target we were about to dial?
+ *
+ * Compared on the short name as well as the full one, because a host that
+ * answers to `box.example.xyz` usually reports itself as `box` — and the env
+ * file names whichever the person happened to type.
+ */
+function isThisHost(target: string): boolean {
+  const self = hostname().toLowerCase();
+  const short = self.split(".")[0] ?? self;
+  const wanted = target.toLowerCase();
+  return wanted === self || wanted === short || wanted.split(".")[0] === short;
 }
 
 export async function credential(options: {
@@ -97,9 +112,19 @@ export async function credential(options: {
   // a host .env.local that already exists.
   const target = options.host ?? env.EVE_SSH_HOST ?? (env.EXE_VM_NAME ? `${env.EXE_VM_NAME}.exe.xyz` : null);
 
-  if (options.local || !target) {
+  // Already ON the host it would otherwise SSH to.
+  //
+  // Naming a host is how a laptop installs the credential where the agent will
+  // read it. Run the same command on that host — the natural thing to do while
+  // setting one up over SSH — and it dialled itself, needed a key the host does
+  // not hold for itself, and failed at the last step of an otherwise complete
+  // sign-in. The file it wanted to write was already under the cursor.
+  const onTargetHost = target !== null && isThisHost(target);
+
+  if (options.local || !target || onTargetHost) {
     upsertEnv(dir, { KYBERNESIS_AGENT_CREDENTIAL: value });
     console.log(green("\n  ✓ credential written to ./.env.local"));
+    if (onTargetHost) console.log(dim(`  This IS ${target}, so there was nothing to copy.`));
     if (!target) console.log(dim("  No host known — deploy it, or re-run with --host=<ssh target>."));
     return;
   }
