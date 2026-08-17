@@ -63,13 +63,14 @@ it. The human's authenticated authority does not travel with this call. On the
 receiver, `assertedAsker(session)` from `@kybernesis/enterprise` reads the
 caller's asserted asker.
 
-The control plane signs the token containing this claim, but it does not
-authenticate or verify the named human. Use the value only for non-escalating
-purposes such as greeting or addressing someone, attribution or logging, or
-refusing work. Never use it to authorize access, widen permissions, impersonate
-a user, or permit access to personal data. A tool that reaches personal data
-must use the authenticated session principal, which on this agent-to-agent call
-is the calling agent.
+The value is asserted rather than authenticated: the control plane signs the
+token containing the claim, but does not verify the named human. Use it only for
+non-escalating purposes such as greeting or addressing someone, attribution or
+logging, tailoring a non-sensitive response, or refusing work. Never use it to
+authorize access, widen permissions, impersonate a user, select user-scoped
+credentials, or permit access to personal data. A tool that reaches personal
+data must use the authenticated session principal, which on this agent-to-agent
+call is the calling agent.
 
 ## Bidirectional edges
 
