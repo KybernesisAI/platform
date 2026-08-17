@@ -82,9 +82,10 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   same shape as eve's `experimental_chatgpt()`), `hostPreflight()`, Photon
   iMessage credentials, and a `/preview` tool. Subpaths: `/slack`, `/photon`,
   `/sandbox`, `/preview`. See the `self-hosting` skill.
-- **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing,
-  engineer? })` = smoke + 5 memory + routing per dept + optional vision-loop
-  eval. Judge model ≠ model under test. Hermetic runs force all workspaces to
+- **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing, engineer?,
+  safety? })` = smoke + 5 memory + 1 safety (quoted content is data, on by
+  default) + routing per dept + optional engineer pair (vision loop, push-to-main
+  refusal). Judge model ≠ model under test. Hermetic runs force all workspaces to
   `<name>-eval` via the npm script.
 - **create** — the `kyb` CLI, and the whole lifecycle of an agent:
   `init` (scaffold; `--host=exe` also installs the hardened restart script),

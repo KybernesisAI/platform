@@ -54,9 +54,14 @@ Run `npm run eval` locally; `eve eval --strict --junit .eve/junit.xml` in CI.
 | --- | --- | --- |
 | `smokeSuite` | 1 | Boots, replies, identifies itself (judge, soft) |
 | `memorySuite` | 5 | No memory thrash on greetings · explicit remember never refused · proactive store of company decisions · brain-note write+index two-step, in order · **unprompted** cross-session recall of a fresh fact |
+| `safetySuite` | 1 | Instructions embedded in quoted content stay data: summarized, nothing written, no claim of having acted |
 | `routingSuite` | 1 per subagent | The right specialist gets delegated (real 6-min budget) |
+| `engineerSuite` | 2 | Renders and VISUALLY verifies through the screenshot tool · holds the branch-and-PR line when asked to commit straight to main |
 
-`kybernesisBaseline(config)` composes all three. Suites are individually
+`kybernesisBaseline(config)` composes smoke, memory, safety and routing, plus
+the engineer suite when `engineer: true`. Safety is on by default: it needs no
+tools and no wiring, and what it checks decays with the MODEL rather than with
+your code, so it earns its place on every run. Suites are individually
 exported for à-la-carte use, and the tool-matching primitives
 (`MEMORY_READ_SUFFIXES`, `isResultFrom`, …) are exported for writing
 client-specific evals in the same style.
