@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/engineer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Engineer capabilities for eve agents: a vision-verified dev loop (in-sandbox screenshots the model can see), trade-school skills for building and shipping software, and disciplined git/deploy behavior.",
   "license": "Apache-2.0",
   "type": "module",

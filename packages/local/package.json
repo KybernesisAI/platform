@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/local",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Let a deployed eve agent work on the user's own machine, through KYBER Studio.",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/evals",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Baseline eval suites for Kybernesis eve agents: memory, routing, and smoke behaviors as composable factories — every hardening lesson shipped as a default.",
   "license": "Apache-2.0",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/connectors",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Connector tools for an eve agent, resolved per user from the Kybernesis control plane.",
   "type": "module",
   "main": "./dist/index.js",
