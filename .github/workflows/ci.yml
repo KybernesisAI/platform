@@ -12,7 +12,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # eve requires Node >=24, and every package here builds through it: an
+          # older runner fails inside a package's prepare script, which reads as a
+          # broken package rather than a stale pin.
+          node-version: 24
           cache: npm
       - run: npm ci
 
