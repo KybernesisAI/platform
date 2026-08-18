@@ -107,6 +107,39 @@ export async function hostPreflight(
     });
   }
 
+  // Remote-agent callbacks, and the trap in trying to fix them.
+  //
+  // eve builds the callback URL it hands a remote agent from, in order: a
+  // Vercel production URL, WORKFLOW_LOCAL_BASE_URL, then workflow metadata,
+  // which falls back to port 3000. A self-hosted host has no Vercel URL, so the
+  // remote is told to post its terminal callback to localhost:3000, delivers it
+  // to whatever is (not) listening there, and the CALLING turn parks forever
+  // with no error surfacing on either side.
+  //
+  // The obvious fix is the trap. WORKFLOW_LOCAL_BASE_URL is not only the remote
+  // callback base — it is the base for every framework workflow callback,
+  // including the host's deliveries to itself. Set it to a public URL the host
+  // cannot resolve back to itself and the agent stops processing work at all:
+  // every queue message fails with "fetch failed", which is a far worse failure
+  // than the one being fixed. Hosts commonly cannot reach their own public
+  // hostname even when every peer can.
+  //
+  // So this reports which situation the host is in rather than prescribing a
+  // value. Where the public URL is not self-reachable, prefer peer calls that
+  // poll a session stream over ones that wait for a callback.
+  const callbackBase = process.env.WORKFLOW_LOCAL_BASE_URL?.trim();
+  if (callbackBase) {
+    const self = await probe(`${callbackBase.replace(/\/$/, "")}/eve/v1/health`);
+    checks.push({
+      name: "workflow callback base is self-reachable",
+      ok: Boolean(self?.ok),
+      detail: self?.ok
+        ? `${callbackBase} answers from this host, so workflow callbacks can land`
+        : `WORKFLOW_LOCAL_BASE_URL=${callbackBase} does NOT answer from this host. Every ` +
+          `workflow queue delivery uses this base, so the agent will stop processing work. Unset it.`,
+    });
+  }
+
   const health = await probe(`${eve}/eve/v1/health`);
   checks.push({
     name: "eve server responding",

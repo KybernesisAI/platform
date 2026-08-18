@@ -75,6 +75,36 @@ in `@kybernesis/evals` pins the behavior per deployment.
   of promotion** (the ship skill enforces the posture; wrap promote-shaped
   connection tools with `approval: always()` for a hard gate).
 
+
+## Pushing without handing over a credential
+
+`@kybernesis/engineer/git` holds the pieces a host wires into its own sandbox
+and tools. The point of all three is that they decide things the model would
+otherwise be asked to get right in prose.
+
+```ts
+import { brokeredGitPolicy, httpsRemote, refuseBranch } from "@kybernesis/engineer/git";
+
+// The credential attaches to egress for one host. Nothing inside the sandbox
+// can read it, because it was never in there — no token in the environment,
+// none in the remote URL, none in anything the model writes or prints.
+const sandbox = await use({ networkPolicy: brokeredGitPolicy({ token }) });
+
+// Name the remote literally. Remote config inside a sandbox is writable, so a
+// push to `origin` can be pointed at a host the broker never authorized — and
+// the header would go with it.
+await sandbox.run({ command: `git push ${httpsRemote(repo)} ${branch}` });
+
+// And refuse before running, not after: the default branch is exactly where a
+// confused agent pushes.
+const refusal = refuseBranch(branch);
+if (refusal) return refusal;
+```
+
+`refuseBranch` also rejects `refs/heads/main` and `HEAD` — the same place
+under another name — and any branch carrying shell metacharacters, since the
+name reaches a command line.
+
 ## Composes with
 
 `@kybernesis/arcana` (the architecture-notes skill writes decisions to the

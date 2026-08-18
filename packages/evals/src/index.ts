@@ -1,5 +1,6 @@
 export {
   engineerSuite,
+  safetySuite,
   kybernesisBaseline,
   memorySuite,
   routingSuite,

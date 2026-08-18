@@ -31,6 +31,17 @@ interface AgentGrant {
   level: string;
 }
 
+/** The caller's claim about who prompted an A2A call, shaped as the mint writes it. */
+function isAssertedAsker(value: unknown): value is { id: string; label?: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const asker = value as { id?: unknown; label?: unknown };
+  return (
+    typeof asker.id === "string" &&
+    asker.id.length > 0 &&
+    (asker.label === undefined || typeof asker.label === "string")
+  );
+}
+
 export interface KybernesisAuthOptions {
   /** Control-plane issuer URL (e.g. https://agent.kybernesis.ai). Must match the token `iss`. */
   issuer: string;
@@ -126,6 +137,23 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
           callerAgent: a2a.caller,
           kind: "a2a",
           ...(typeof a2a.purpose === "string" ? { purpose: a2a.purpose } : {}),
+          // Who the CALLER says prompted this call, so a peer can address the
+          // right person and refuse work that is not theirs.
+          //
+          // The principal above is still the calling agent, and that is the only
+          // thing authenticated here. This is the caller's word: it was never
+          // verified against the control plane's users, and a caller could put
+          // any id in it. So it is safe to greet someone by, and unsafe to widen
+          // anything by — a tool that reaches personal data must check the
+          // authenticated principal, never this.
+          ...(isAssertedAsker(a2a.assertedOnBehalfOf)
+            ? {
+                assertedAskerId: a2a.assertedOnBehalfOf.id,
+                ...(a2a.assertedOnBehalfOf.label
+                  ? { assertedAskerLabel: a2a.assertedOnBehalfOf.label }
+                  : {}),
+              }
+            : {}),
         },
       };
     }

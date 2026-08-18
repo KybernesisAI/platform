@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/arcana",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Kybernesis Arcana long-term memory for eve agents: MCP connection, memory skills, and recall-first instructions. Mount once per brain.",
   "license": "Apache-2.0",
   "type": "module",
@@ -36,11 +36,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.30.8",
+    "eve": "0.38.3",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.30.0 <0.31.0"
+    "eve": ">=0.38.0 <0.39.0"
   },
   "engines": {
     "node": "24.x"

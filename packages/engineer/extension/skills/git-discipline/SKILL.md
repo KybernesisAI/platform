@@ -11,7 +11,9 @@ issues) go through the GitHub tools when the agent has them.
 ## Rules
 
 1. **Branch per task.** Never commit directly to `main`/`master` on a shared
-   repo. Branch names: `agent/<short-task-slug>`.
+   repo. Branch names: `agent/<short-task-slug>`. Where the host wires it, a
+   push to a protected branch is refused before the command runs — a refusal
+   there is the rule working, not an obstacle to route around.
 2. **Atomic commits** with real messages: what changed and why, imperative
    mood, no "fix stuff". Commit at every green point in the dev loop — small
    commits are your undo history.
