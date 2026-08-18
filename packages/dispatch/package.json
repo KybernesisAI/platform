@@ -31,6 +31,7 @@
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "devDependencies": {
+    "@kybernesis/enterprise": "^0.6.0",
     "@types/node": "24.x",
     "eve": "0.38.3",
     "typescript": "7.0.2"
