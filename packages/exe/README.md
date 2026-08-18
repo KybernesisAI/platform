@@ -27,3 +27,17 @@ Once the unit exists, restart the agent through the service instead of running
 `scripts/eve-server.sh` independently. Running both gives two supervisors
 control of the same agent and can start two servers against the same durable
 `.eve` store.
+
+## Workflow callback base preflight
+
+`hostPreflight()` checks `WORKFLOW_LOCAL_BASE_URL` when it is set: it trims the
+value, removes one trailing slash, and sends a GET to `<base>/eve/v1/health`
+from this machine. The check fails on a network error, on a 15-second timeout,
+or on any non-2xx response.
+
+The variable is the base for every workflow queue delivery, including the ones
+the host makes to itself — not only for callbacks from remote work. A URL that
+remote peers can reach but the host cannot therefore fails every queue delivery
+and stops the agent from processing workflow work at all, while looking correct
+in the environment file. The preflight exists because that failure names
+`fetch failed` and nothing else.
