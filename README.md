@@ -8,17 +8,17 @@ Kybernesis. Eve is the plumbing; this is the moat.
 
 | Package | What it gives an agent |
 | --- | --- |
-| [`@kybernesis/arcana`](./packages/arcana) | Durable long-term memory (Arcana): MCP connection, recall/remember/brain-note skills, recall-first instructions |
-| [`@kybernesis/enterprise`](./packages/enterprise) | Control-plane governance: offline token verification + per-agent grant enforcement (invite / grant / revoke / suspend) |
-| [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared conversations: per-speaker verified identity, attributed threads, no-re-mention continuation, dual surfaces |
-| [`@kybernesis/evals`](./packages/evals) | The baseline QA suite: memory/routing/smoke behaviors with every production hardening lesson as a default |
-| [`@kybernesis/engineer`](./packages/engineer) | The vision-verified dev loop: in-sandbox screenshots the model can SEE, trade-school build/ship skills, and the workshop sandbox template |
-| [`@kybernesis/dispatch`](./packages/dispatch) | Agent-to-agent edges: declared remote peers with principal forwarding on by default, and a receiver channel that makes trusting the wrong caller hard to express |
-| [`@kybernesis/connectors`](./packages/connectors) | The user's own SaaS accounts as tools, resolved per principal from the control plane — plus an MCP client for remote servers |
-| [`@kybernesis/local`](./packages/local) | The user's own machine: shell, files, search, and locally-running MCP servers, relayed through KYBER Studio under per-effect consent |
-| [`@kybernesis/manage`](./packages/manage) | The other direction: let Studio install capabilities and write schedules onto a running agent |
-| [`@kybernesis/exe`](./packages/exe) | Running off Vercel: exe.dev's LLM integration, a client's own ChatGPT or Grok subscription, host preflight, Photon iMessage |
-| [`@kybernesis/create`](./packages/create) | The `kyb` CLI: `init` scaffolds a full governed/remembering/multiplayer/self-testing agent in one command; `doctor` preflights an engagement; `upgrade` bumps packages behind the eval gate; `skills` installs the FDE skill suite |
+| [`@kybernesis/arcana`](./packages/arcana) | Durable Arcana memory through an MCP connection, recall/remember/brain-note skills, per-session workspace selection, and recall-first instructions |
+| [`@kybernesis/enterprise`](./packages/enterprise) | Control-plane identity verification and per-agent grant enforcement for governed user and agent-to-agent requests |
+| [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared Slack conversations with per-speaker identity, attributed thread context, mentionless continuation, DM resets, and verified DM/channel surface helpers |
+| [`@kybernesis/evals`](./packages/evals) | Composable smoke, memory, safety, routing, and optional engineer evaluation suites, plus tool-result helpers |
+| [`@kybernesis/engineer`](./packages/engineer) | A vision-verified engineering extension with sandbox screenshot and artifact-delivery tools, build/ship skills, and credential-safe git/branch helpers |
+| [`@kybernesis/dispatch`](./packages/dispatch) | Declared remote-agent edges and receiver channels with principal forwarding, pinned trusted peers, and optional control-plane-governed discovery and authentication |
+| [`@kybernesis/connectors`](./packages/connectors) | Per-principal SaaS and remote MCP tools resolved through the control plane, including multi-account naming and brokered execution |
+| [`@kybernesis/local`](./packages/local) | Shell, file, search, edit, and local MCP tools relayed to the user's machine through KYBER Studio with declared per-effect consent and optional guards |
+| [`@kybernesis/manage`](./packages/manage) | Authenticated management routes and routine tools for installing capabilities, storing the agent credential, and creating or removing schedules on writable agent hosts |
+| [`@kybernesis/exe`](./packages/exe) | exe.dev self-hosting with LLM integration and ChatGPT/Grok subscription models, host preflight and supervision, optional Slack/Photon bindings, VM sandboxes, and web previews |
+| [`@kybernesis/create`](./packages/create) | The `kyb` CLI for configurable agent scaffolding, Arcana setup, diagnostics, skill installation, credentialing, registration, deployment, and eval-gated upgrades |
 
 ## Also in this repo
 
