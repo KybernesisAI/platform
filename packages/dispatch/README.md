@@ -55,6 +55,23 @@ Your own project's deployments and `eve dev` keep working (current-project
 OIDC bypass + `localDev()`); production browser traffic stays rejected unless
 you pass your app's real auth via `extraAuth`.
 
+## Asserted asker on governed calls
+
+A dynamic `governedPeers()` call carries the authenticated identity of the
+calling agent, plus that agent's optional claim about the human who prompted
+it. The human's authenticated authority does not travel with this call. On the
+receiver, `assertedAsker(session)` from `@kybernesis/enterprise` reads the
+caller's asserted asker.
+
+The value is asserted rather than authenticated: the control plane signs the
+token containing the claim, but does not verify the named human. Use it only for
+non-escalating purposes such as greeting or addressing someone, attribution or
+logging, tailoring a non-sensitive response, or refusing work. Never use it to
+authorize access, widen permissions, impersonate a user, select user-scoped
+credentials, or permit access to personal data. A tool that reaches personal
+data must use the authenticated session principal, which on this agent-to-agent
+call is the calling agent.
+
 ## Bidirectional edges
 
 Answering is built into one edge — the caller parks until the peer's terminal
