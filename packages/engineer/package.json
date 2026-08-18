@@ -46,7 +46,7 @@
   },
   "scripts": {
     "build": "eve extension build && tsc -p tsconfig.build.json",
-    "prepare": "eve extension build && tsc -p tsconfig.build.json",
+    "prepack": "eve extension build && tsc -p tsconfig.build.json",
     "typecheck": "tsc",
     "prepublishOnly": "node ../../scripts/prepublish.mjs",
     "test": "node --test \"test/**/*.test.mjs\""

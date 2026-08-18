@@ -27,7 +27,7 @@
   },
   "scripts": {
     "build": "eve extension build",
-    "prepare": "eve extension build",
+    "prepack": "eve extension build",
     "typecheck": "tsc",
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },

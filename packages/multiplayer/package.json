@@ -30,7 +30,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "prepare": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },

@@ -26,11 +26,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "prepare": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "devDependencies": {
+    "@kybernesis/enterprise": "^0.6.0",
     "@types/node": "24.x",
     "eve": "0.38.3",
     "typescript": "7.0.2"
