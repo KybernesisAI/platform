@@ -1,0 +1,90 @@
+diff --git a/claude-auth-transform/src/transforms.rs b/claude-auth-transform/src/transforms.rs
+index 0a9fd07..09474e5 100644
+--- a/claude-auth-transform/src/transforms.rs
++++ b/claude-auth-transform/src/transforms.rs
+@@ -43,15 +43,27 @@ pub fn transform_body(
+         parsed.thinking.remove("effort");
+     }
+ 
+-    // Obfuscate all tool names to avoid name-based upstream validation.
++    // Obfuscate custom tool names to avoid name-based upstream validation.
++    // Anthropic provider tools carry a versioned `type` (for example
++    // `web_search_20250305`) and require their public name to remain exact
++    // (`web_search`). Renaming those makes the API reject the whole request.
++    let provider_tool_names = parsed
++        .tools
++        .iter()
++        .filter(|tool| is_provider_tool(tool))
++        .filter_map(|tool| tool.name.clone())
++        .collect::<HashSet<_>>();
+     parsed.tools.iter_mut().for_each(|tool| {
+-        if let Some(name) = tool.name.as_mut() {
++        if !is_provider_tool(tool)
++            && let Some(name) = tool.name.as_mut()
++        {
+             *name = tool_name_mapper.obfuscate(name);
+         }
+     });
+ 
+     if let Some(tool_choice) = parsed.tool_choice.as_mut()
+         && let Some(name) = tool_choice.name.as_mut()
++        && !provider_tool_names.contains(name)
+     {
+         *name = tool_name_mapper.obfuscate(name);
+     }
+@@ -77,6 +89,16 @@ pub fn transform_body(
+     serde_json::to_vec(&parsed).map_err(Error::Json)
+ }
+ 
++/// Provider-executed tools use a versioned `type`; ordinary client tools omit
++/// it (or explicitly use `custom`). Provider tool names are protocol fields,
++/// not user-controlled identifiers, and must never be rewritten.
++fn is_provider_tool(tool: &crate::bodies::Tool) -> bool {
++    tool.extra
++        .get("type")
++        .and_then(serde_json::Value::as_str)
++        .is_some_and(|tool_type| tool_type != "custom")
++}
++
+ // --- Billing header: inject as system[0] (no cache_control) ---
+ fn inject_billing_header(parsed: &mut MessageBody, config: &TransformConfig) {
+     let version = &config.cc_version;
+@@ -362,6 +384,38 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn transform_body_preserves_provider_tool_names_and_choice() {
++        let input = json!({
++            "tools": [
++                {
++                    "type": "web_search_20250305",
++                    "name": "web_search",
++                    "max_uses": 3
++                },
++                {
++                    "name": "company_board",
++                    "description": "Read the company board",
++                    "input_schema": { "type": "object", "properties": {} }
++                }
++            ],
++            "tool_choice": { "type": "tool", "name": "web_search" },
++            "messages": [{ "role": "user", "content": "Search the web." }]
++        });
++
++        let parsed = run_transform(input);
++
++        assert_eq!(parsed["tools"][0]["type"], "web_search_20250305");
++        assert_eq!(parsed["tools"][0]["name"], "web_search");
++        assert_eq!(parsed["tool_choice"]["name"], "web_search");
++        assert!(
++            parsed["tools"][1]["name"]
++                .as_str()
++                .unwrap()
++                .starts_with("t_")
++        );
++    }
++
+     #[test]
+     fn transform_body_normalizes_string_form_system_and_runs_full_pipeline() {
+         let input = json!({

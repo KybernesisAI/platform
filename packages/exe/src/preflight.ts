@@ -6,6 +6,8 @@
  * developer laptop — most checks are about the host's own environment.
  */
 
+import { claudeProxyReady, isLoopbackUrl } from "./claude.js";
+
 export interface HostCheck {
   name: string;
   ok: boolean;
@@ -28,6 +30,14 @@ export interface HostPreflightOptions {
   slackGateway?: string;
   /** Env var names the agent needs present on the host. */
   requiredEnv?: readonly string[];
+  /**
+   * Base URL of the Claude subscription proxy, when this agent uses one.
+   *
+   * Checked for being alive AND for being loopback-only, because the failure
+   * modes are opposite in cost: a stopped proxy is loud and cheap, an exposed
+   * one is silent and expensive.
+   */
+  claudeProxyUrl?: string;
 }
 
 async function probe(url: string, init?: RequestInit): Promise<Response | null> {
@@ -193,6 +203,31 @@ export async function hostPreflight(
         "to anyone: set BLOB_READ_WRITE_TOKEN, or DELIVER_DIR with DELIVER_BASE_URL. " +
         "This is usually what a platform supplied for free before the agent moved here.",
     });
+  }
+
+  /**
+   * The Claude subscription proxy, when this host uses one.
+   *
+   * @remarks
+   * The other subscription providers read a file; this one depends on a running
+   * process. When it stops, every turn fails with a connection error thrown
+   * from inside the model SDK, which reads as "the model is down" — and a
+   * person then goes looking at Anthropic's status page rather than at a
+   * container that exited overnight.
+   */
+  if (options.claudeProxyUrl) {
+    const ready = await claudeProxyReady(options.claudeProxyUrl);
+    checks.push({ name: "claude subscription proxy", ok: ready.ok, detail: ready.detail });
+    if (!isLoopbackUrl(options.claudeProxyUrl)) {
+      checks.push({
+        name: "claude proxy is loopback-only",
+        ok: false,
+        detail:
+          `${options.claudeProxyUrl} is reachable off this host. That proxy spends a paid ` +
+          `subscription and asks for no credential of its own, so anyone who finds the port ` +
+          `can spend it. Bind it to 127.0.0.1.`,
+      });
+    }
   }
 
   const health = await probe(`${eve}/eve/v1/health`);

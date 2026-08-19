@@ -26,6 +26,13 @@ export {
   type GrokSubscriptionOptions,
 } from "./grok.js";
 export {
+  CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW,
+  claudeProxyReady,
+  claudeSubscription,
+  isLoopbackUrl,
+  type ClaudeSubscriptionOptions,
+} from "./claude.js";
+export {
   hostPreflight,
   type HostPreflightResult,
   type HostCheck,
