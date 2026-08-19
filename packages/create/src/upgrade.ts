@@ -22,12 +22,42 @@ function versionLt(a: string, b: string): boolean {
   return false;
 }
 
+
+/**
+ * Warn when this CLI is itself out of date.
+ *
+ * @remarks
+ * The certified eve version is a constant compiled INTO this tool, so an old
+ * kyb reports an old pin as though it were current — and does it with total
+ * confidence, in the one command whose entire job is telling you what current
+ * means. That failure runs the wrong way round: it tells a healthy agent it is
+ * ahead of certified and in "unsupported territory", which invites someone to
+ * downgrade a fleet that was fine.
+ *
+ * Checked here rather than at install because this is the command where being
+ * stale changes the answer.
+ */
+function warnIfStale(): void {
+  const installed = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ).version as string;
+  const latest = capture("npm", ["view", "@kybernesis/create", "version"])?.trim();
+  if (!latest || latest === installed) return;
+  if (!versionLt(installed, latest)) return;
+  console.log(
+    `  ${yellow("!")} kyb ${installed} is behind ${latest}. The certified eve version is ` +
+      `compiled into this tool, so an old kyb reports an old pin as current.`,
+  );
+  console.log(`    ${dim("npm install -g @kybernesis/create@latest")}\n`);
+}
+
 export async function upgrade(skipEval: boolean): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
 
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
+  warnIfStale();
   const toUpgrade: string[] = [];
   for (const name of PACKAGES) {
     if (!deps[name]) continue;
