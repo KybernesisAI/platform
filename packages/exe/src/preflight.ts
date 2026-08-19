@@ -140,6 +140,40 @@ export async function hostPreflight(
     });
   }
 
+  /**
+   * Whether this host can hand a file back to a person.
+   *
+   * @remarks
+   * The delivery tool needs somewhere to put a file: either object storage, or
+   * a directory this host serves. On the platform that ships it, the storage
+   * credential is injected into the runtime automatically, so the requirement
+   * is invisible — nothing is written down because nothing has to be.
+   *
+   * Self-hosting is where that bites. The environment file comes across, the
+   * agent starts, every eval passes, and the capability is simply gone: the
+   * tool only fails when someone finally asks for a file, weeks later, with an
+   * error about configuration that reads like a bug. An agent that could
+   * produce reports last month and cannot today, with nothing in between that
+   * looks related, is an expensive thing to debug.
+   *
+   * So it is checked at preflight, where a missing capability is a line of
+   * output rather than an incident.
+   */
+  const delivery =
+    Boolean(process.env.BLOB_READ_WRITE_TOKEN) ||
+    Boolean(process.env.DELIVER_DIR && process.env.DELIVER_BASE_URL);
+  checks.push({
+    name: "file delivery configured",
+    ok: delivery,
+    detail: delivery
+      ? process.env.BLOB_READ_WRITE_TOKEN
+        ? "object storage token present — the agent can hand a file back as a link"
+        : `serving ${process.env.DELIVER_DIR} at ${process.env.DELIVER_BASE_URL}`
+      : "no delivery target. The agent can WRITE a file and still have no way to give it " +
+        "to anyone: set BLOB_READ_WRITE_TOKEN, or DELIVER_DIR with DELIVER_BASE_URL. " +
+        "This is usually what a platform supplied for free before the agent moved here.",
+  });
+
   const health = await probe(`${eve}/eve/v1/health`);
   checks.push({
     name: "eve server responding",
