@@ -159,20 +159,41 @@ export async function hostPreflight(
    * So it is checked at preflight, where a missing capability is a line of
    * output rather than an incident.
    */
-  const delivery =
-    Boolean(process.env.BLOB_READ_WRITE_TOKEN) ||
-    Boolean(process.env.DELIVER_DIR && process.env.DELIVER_BASE_URL);
-  checks.push({
-    name: "file delivery configured",
-    ok: delivery,
-    detail: delivery
-      ? process.env.BLOB_READ_WRITE_TOKEN
-        ? "object storage token present — the agent can hand a file back as a link"
-        : `serving ${process.env.DELIVER_DIR} at ${process.env.DELIVER_BASE_URL}`
-      : "no delivery target. The agent can WRITE a file and still have no way to give it " +
+  const blobToken = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  const deliverDir = process.env.DELIVER_DIR?.trim();
+  const deliverBase = process.env.DELIVER_BASE_URL?.trim();
+  if (blobToken) {
+    checks.push({
+      name: "file delivery configured",
+      ok: true,
+      detail: "object storage token present — the agent can hand a file back as a link",
+    });
+  } else if (deliverDir && deliverBase) {
+    // Set is not the same as served, and this is the second time that
+    // distinction has cost real time on this host: a base URL nobody serves
+    // produces a link for every delivered file, each one dead on arrival, and
+    // the agent reports success every time because writing the file worked.
+    // Being configured is the easy half.
+    const served = await probe(deliverBase.replace(/\/$/, ""));
+    checks.push({
+      name: "file delivery configured",
+      ok: Boolean(served),
+      detail: served
+        ? `serving ${deliverDir} at ${deliverBase}`
+        : `DELIVER_BASE_URL=${deliverBase} does not answer. Files will be written to ` +
+          `${deliverDir} and handed to people as links that go nowhere, while the agent ` +
+          `reports success. Serve that directory, or use BLOB_READ_WRITE_TOKEN instead.`,
+    });
+  } else {
+    checks.push({
+      name: "file delivery configured",
+      ok: false,
+      detail:
+        "no delivery target. The agent can WRITE a file and still have no way to give it " +
         "to anyone: set BLOB_READ_WRITE_TOKEN, or DELIVER_DIR with DELIVER_BASE_URL. " +
         "This is usually what a platform supplied for free before the agent moved here.",
-  });
+    });
+  }
 
   const health = await probe(`${eve}/eve/v1/health`);
   checks.push({
