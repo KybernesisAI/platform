@@ -63,7 +63,54 @@ function initOptions(rest: string[]): InitOptions {
   };
 }
 
+
+/** What each command is for, in one line, as a person would ask for it. */
+const COMMANDS: Record<string, string> = {
+  init: "Scaffold a new agent: governed, remembering, multiplayer, self-testing.",
+  doctor: "Check this machine and this project before an engagement.",
+  arcana: "Set the memory workspaces and keys this agent uses.",
+  skills: "Install the FDE skill suite (--global for every project).",
+  credential: "Write the agent credential onto a host (--local to stay here).",
+  register: "Register this agent with the control plane (--name, --url).",
+  deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
+  upgrade: "Bring @kybernesis packages and eve to the certified versions (--skip-eval).",
+  version: "Print the version of this tool.",
+};
+
+/**
+ * Print help instead of doing anything.
+ *
+ * Given a command, describe that command; otherwise list them. Either way this
+ * function's only effect is output — which is the entire point of it existing.
+ */
+function usage(command?: string): void {
+  if (command && COMMANDS[command]) {
+    console.log(`\n  ${bold(`kyb ${command}`)} — ${COMMANDS[command]}\n`);
+    return;
+  }
+  console.log(`\n  ${bold("kyb")} ${dim(VERSION)} — the Kybernesis agent CLI\n`);
+  for (const [name, description] of Object.entries(COMMANDS)) {
+    console.log(`  ${bold(name.padEnd(12))}${description}`);
+  }
+  console.log(`\n  ${dim("kyb <command> --help for one command.")}\n`);
+}
+
 const [, , command, ...rest] = process.argv;
+
+/**
+ * `--help` asks what a command does. It must never be the thing that does it.
+ *
+ * Checked before dispatch rather than inside each command, because "the flag
+ * was ignored" is not a failure anyone verifies per command — and the one time
+ * it mattered, `kyb upgrade --help` ran a real upgrade against a live agent's
+ * dependencies. Nothing broke, which is the wrong kind of luck: the same
+ * mistake on a command that writes credentials or deploys would not have been
+ * survivable.
+ */
+if (rest.includes("--help") || rest.includes("-h")) {
+  usage(command);
+  process.exit(0);
+}
 
 switch (command) {
   case "init":

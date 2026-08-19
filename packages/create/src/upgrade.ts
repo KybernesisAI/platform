@@ -3,14 +3,25 @@ import { join } from "node:path";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
-const PACKAGES = [
-  "@kybernesis/arcana",
-  "@kybernesis/enterprise",
-  "@kybernesis/multiplayer",
-  "@kybernesis/engineer",
-  "@kybernesis/dispatch",
-  "@kybernesis/evals",
-];
+/**
+ * Which packages to upgrade: every `@kybernesis/*` this agent depends on.
+ *
+ * @remarks
+ * This was a fixed list of six, written when there were six. Four more shipped
+ * afterwards — connectors, local, manage and exe — and an agent using them was
+ * told "everything is at latest certified versions" while holding versions from
+ * months earlier. A hardcoded list does not fail loudly when it falls behind;
+ * it just quietly stops covering things, and the command that reports it is the
+ * same one that is wrong.
+ *
+ * Reading the manifest cannot fall behind. A package added tomorrow is covered
+ * by an upgrade run today.
+ */
+function kybernesisPackages(deps: Record<string, string>): string[] {
+  return Object.keys(deps)
+    .filter((name) => name.startsWith("@kybernesis/"))
+    .sort();
+}
 
 function versionLt(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
@@ -59,12 +70,14 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
   const toUpgrade: string[] = [];
-  for (const name of PACKAGES) {
+  const unresolved: string[] = [];
+  for (const name of kybernesisPackages(deps)) {
     if (!deps[name]) continue;
     const installed = capture("node", ["-p", `require('${name}/package.json').version`], cwd)?.trim();
     const latest = capture("npm", ["view", name, "version"])?.trim();
     if (!installed || !latest) {
       console.log(`  ${yellow("!")} ${name}: could not resolve versions`);
+      unresolved.push(name);
       continue;
     }
     if (installed === latest) console.log(`  ${green("✓")} ${name}@${installed} ${dim("(latest)")}`);
@@ -96,6 +109,19 @@ export async function upgrade(skipEval: boolean): Promise<void> {
         dim(`    note: eve@${eveLatest} exists upstream; ${EVE_VERSION} is the newest Kybernesis-certified version.`),
       );
     }
+  }
+
+  if (toUpgrade.length === 0 && unresolved.length > 0) {
+    // Saying everything is current, having just failed to check several
+    // packages, is the worst available answer: it is the sentence someone
+    // repeats to a client. Usually the dependencies are simply not installed
+    // here, which is worth naming rather than hiding behind a green tick.
+    console.log(
+      `\n${yellow(`Checked what could be read. ${unresolved.length} package(s) could not be ` +
+        `resolved, so this is not a clean bill of health.`)}\n` +
+        `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
+    );
+    return;
   }
 
   if (toUpgrade.length === 0) {
