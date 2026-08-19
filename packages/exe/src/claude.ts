@@ -48,8 +48,48 @@
  * maintain the proxy, keep that carve-out and keep it tested.
  */
 
-/** Context window for Claude on a subscription, for `modelContextWindowTokens`. */
-export const CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW = 200_000;
+/**
+ * Input window for `claude-opus-5`, for `modelContextWindowTokens`.
+ *
+ * @remarks
+ * Read from the API rather than remembered: `GET /v1/models/claude-opus-5`
+ * reports `max_input_tokens`, and it is the only authority worth trusting.
+ * Two hundred thousand is the number most people carry in their heads from
+ * earlier Claude models, and using it here would make eve compact at a fifth of
+ * the real capacity — every long session paying for summarisation it did not
+ * need, and losing detail nobody asked it to drop.
+ *
+ * Other Claude models differ. Ask the models endpoint before assuming this one
+ * applies, and see {@link claudeInputWindow}.
+ */
+export const CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW = 1_000_000;
+
+/**
+ * The model's real input window, from the API.
+ *
+ * @remarks
+ * For preflight and for scripts, not for boot: an agent that cannot start until
+ * a proxy answers is worse than one that starts with a declared number. Compare
+ * what it returns against what the agent declares — a mismatch is silent in
+ * both directions, wasting capacity when too low and overflowing when too high.
+ */
+export async function claudeInputWindow(
+  model: string,
+  baseURL = "http://127.0.0.1:3333/v1",
+  timeoutMs = 4000,
+): Promise<number | undefined> {
+  try {
+    const response = await fetch(`${baseURL.replace(/\/$/, "")}/models/${model}`, {
+      headers: { "x-api-key": "claude-subscription-local-proxy", "anthropic-version": "2023-06-01" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { max_input_tokens?: number };
+    return typeof body.max_input_tokens === "number" ? body.max_input_tokens : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface ClaudeSubscriptionOptions<TModel> {
   /** Model id, e.g. `"claude-opus-5"`. Bare Anthropic ids, not gateway-prefixed. */

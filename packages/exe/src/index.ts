@@ -27,6 +27,7 @@ export {
 } from "./grok.js";
 export {
   CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW,
+  claudeInputWindow,
   claudeProxyReady,
   claudeSubscription,
   isLoopbackUrl,
