@@ -1,22 +1,26 @@
 {
-  "name": "@kybernesis/enterprise",
-  "version": "0.7.0",
-  "description": "Kybernesis enterprise governance for eve agents: control-plane token verification and per-agent grant enforcement (kybernesisAuth).",
+  "name": "@kybernesis/buzz",
+  "version": "0.1.0",
+  "description": "Put an eve agent in a Buzz workspace as a member: per-speaker verified identity resolved through the control plane, self-service identity linking, presence, typing and seen signals.",
   "license": "Apache-2.0",
   "type": "module",
   "homepage": "https://kybernesis.ai",
   "keywords": [
     "eve",
     "kybernesis",
-    "enterprise",
-    "auth",
-    "governance",
-    "agent"
+    "buzz",
+    "nostr",
+    "agent",
+    "channel",
+    "multiplayer"
   ],
   "files": [
     "dist",
     "NOTICE"
   ],
+  "bin": {
+    "kybernesis-buzz": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -32,7 +36,8 @@
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "jose": "^5.9.6"
+    "@kybernesis/enterprise": "^0.7.0",
+    "nostr-tools": "^2.10.0"
   },
   "devDependencies": {
     "@types/node": "24.x",
@@ -48,6 +53,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/KybernesisAI/platform.git",
-    "directory": "packages/enterprise"
+    "directory": "packages/buzz"
   }
 }
