@@ -222,7 +222,9 @@ table below live.
   (Photon), Telegram, Discord, Teams, SMS/phone (Twilio), GitHub, Linear, and
   a web chat — the agent can live on several at once (§4.3c has the table and
   install commands). Slack gets the richest treatment (our multiplayer group
-  semantics); the rest are 1:1 surfaces today. Pick with the client, then ask
+  semantics); Buzz gets the strongest identity story (§4.3c — the agent is a
+  workspace MEMBER and every turn runs as the person who sent it); the rest are
+  1:1 surfaces today. Pick with the client, then ask
   the Slack questions below only if Slack made the list.
 
 ### 2.3a Slack specifics
@@ -706,6 +708,7 @@ re-teaching the agent. What ships:
 | GitHub @mentions, PR review | GitHub | `eve add channel/github` |
 | Linear issue delegation | Linear | `eve add channel/linear-agent` |
 | Web app / browser chat | eve HTTP + `useEveAgent` | built-in (route auth via enterprise) |
+| **Buzz** (agent as a workspace member) | our `@kybernesis/buzz` (§4.3c) | not an eve channel — a bridge process beside the agent |
 
 Every channel's doc page (`node_modules/eve/docs/channels/<name>.mdx`) carries
 its **complete** setup: the file to write, the env vars, the webhook/app
@@ -755,6 +758,48 @@ Two honest caveats to state to the client: **multiplayer's group semantics
 other surfaces are stock channels, excellent for 1:1; and each surface has its
 own provider terms and data flow — sensitive-data review (§2.5) is per
 channel, not per agent.
+
+#### Buzz — the agent as a workspace member
+
+Buzz is not an eve channel and does not go in `agent/channels/`. The agent joins
+the workspace as a **member** with its own key, and a small bridge process runs
+beside it. That shape buys the thing no other surface has today: every message is
+signed by its sender, so each turn runs as **that person** — their memory, their
+connections, their grants — instead of the whole room sharing one identity.
+
+**What you do (the client never touches a terminal):**
+
+```bash
+eve add @kybernesis/buzz          # deps + the workspace-behaviour instructions
+npx kybernesis-buzz init          # prints the npub to invite — do NOT regenerate later
+```
+
+Give that npub to a workspace admin to invite. Then set `BUZZ_RELAY` (the
+workspace relay, `wss://…`), `KYBERNESIS_ISSUER` and `KYBERNESIS_AGENT_CREDENTIAL`,
+and run it as a service:
+
+```bash
+npx kybernesis-buzz service /tmp/agent-buzz.service   # writes a systemd unit
+sudo mv /tmp/agent-buzz.service /etc/systemd/system/ && sudo systemctl enable --now agent-buzz
+npx kybernesis-buzz run                               # or, to watch it in the foreground
+```
+
+**What the client's people do:** tag the agent → get a sign-in link **by direct
+message** → click it, sign in, confirm. Done, once, per person. Their admin's
+only job is in the control plane: the person must be a **user in the org first**
+(invited or SSO), and must hold a grant on this agent unless its access tier is
+`org`/`public`. Link-then-grant and grant-then-link both work, and a grant takes
+effect on their next message.
+
+**Failure modes worth knowing before a client sees them:**
+
+- A stranger with no control-plane account gets a link that dead-ends at the
+  sign-in wall. The bridge cannot know in advance whether an unknown key belongs
+  to anyone, so this is by design — but say it out loud during setup.
+- The key file IS the agent. Losing it means being invited again as a stranger
+  with no history; back it up with the rest of the agent's secrets.
+- A bridge that is not running looks like an agent that is offline and ignoring
+  people, not like an error. The unit above is not optional.
 
 ### 4.3d Connections — wire the client's actual systems
 

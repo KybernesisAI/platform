@@ -60,6 +60,19 @@ export type RelayOptions = {
   onLog?: (message: string) => void;
 };
 
+/**
+ * The payload out of a command acknowledgement.
+ *
+ * @remarks
+ * A command's answer arrives as `response:{…}` rather than as bare JSON, and the prefix is easy
+ * to miss because the request itself succeeds: the server accepts the command, does the work,
+ * and reports it — and a parser that chokes on the prefix reports the whole thing as a failure.
+ * The visible symptom is a feature that silently never happens.
+ */
+function stripAckPrefix(message: string): string {
+  return message.startsWith("response:") ? message.slice("response:".length) : message;
+}
+
 export class BuzzRelay {
   private socket: WebSocket | null = null;
   private authenticated = false;
@@ -296,9 +309,10 @@ export class BuzzRelay {
       return null;
     }
     try {
-      const ack = JSON.parse(result.message) as { channel_id?: unknown };
+      const ack = JSON.parse(stripAckPrefix(result.message)) as { channel_id?: unknown };
       return typeof ack.channel_id === "string" ? ack.channel_id : null;
     } catch {
+      this.log(`could not read the reply to opening a direct message: ${result.message.slice(0, 120)}`);
       return null;
     }
   }

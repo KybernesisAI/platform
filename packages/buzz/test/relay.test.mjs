@@ -184,13 +184,22 @@ test("opening a direct conversation answers with the channel it created", async 
   authenticate(socket);
 
   const previousFetch = globalThis.fetch;
+  // The server answers a command with `response:{…}`, not with bare JSON. The request succeeds
+  // either way, so a parser that chokes on the prefix turns a working feature into a silent one.
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ accepted: true, message: `response:${JSON.stringify({ channel_id: "dm-42", created: false })}` }),
+  });
+  const channel = await relay.openDirectMessage("b".repeat(64));
+  assert.equal(channel, "dm-42");
+
   globalThis.fetch = async () => ({
     ok: true,
     status: 200,
     text: async () => JSON.stringify({ accepted: true, message: JSON.stringify({ channel_id: "dm-42" }) }),
   });
-  const channel = await relay.openDirectMessage("b".repeat(64));
-  assert.equal(channel, "dm-42");
+  assert.equal(await relay.openDirectMessage("b".repeat(64)), "dm-42", "an unprefixed answer must still work");
 
   globalThis.fetch = async () => ({ ok: false, status: 403, text: async () => "denied" });
   assert.equal(await relay.openDirectMessage("b".repeat(64)), null, "a refusal must not look like a channel");
