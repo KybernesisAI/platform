@@ -19,6 +19,7 @@ import { bold, dim, red } from "./util.js";
 import { init, type InitOptions } from "./init.js";
 import { doctor } from "./doctor.js";
 import { upgrade } from "./upgrade.js";
+import { tui } from "./tui.js";
 import { installSkills } from "./skills.js";
 import { deploy } from "./deploy.js";
 import { register } from "./register.js";
@@ -74,6 +75,7 @@ const COMMANDS: Record<string, string> = {
   register: "Register this agent with the control plane (--name, --url).",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
   upgrade: "Bring @kybernesis packages and eve to the certified versions (--skip-eval).",
+  tui: "Talk to your agents in the terminal.",
   version: "Print the version of this tool.",
 };
 
@@ -139,6 +141,9 @@ switch (command) {
     break;
   case "deploy":
     await deploy({ host: flag(rest, "host"), noEnv: rest.includes("--no-env") });
+    break;
+  case "tui":
+    tui(rest);
     break;
   case "upgrade":
     await upgrade(rest.includes("--skip-eval"));

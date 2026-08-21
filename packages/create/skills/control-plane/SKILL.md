@@ -24,8 +24,32 @@ credentials; 403 `agent_not_granted` = valid user, no grant for THIS agent.
 
 Register the agent under Agents (runtime: ▲ eve + deployment URL — the row
 shows a health probe). Grant users under their profile (grants resolve at
-MINT time). Users page also links/revokes chat identities (Slack ↔ user).
+MINT time). Users page also links/revokes chat identities (platform id ↔ user) — the
+manual/bulk path; see "Chat identity" below for the self-service one.
 Sign-in for humans is RFC 8628 device flow (user code, e.g. ABCD-EFGH).
+
+## Chat identity (how a room full of people becomes people)
+
+`POST /api/agent/identity` — the door a channel bridge knocks on. Agent
+authenticates with its OWN credential (`KYBERNESIS_AGENT_CREDENTIAL`), passes
+`{provider, externalId}`, gets back `{token, bundle}` minted FOR THAT PERSON.
+Client side is `channelIdentity()` in `@kybernesis/enterprise`.
+
+- **Unlinked → 404 `{error:"not_linked", link}`**, not an error to show: the
+  bridge delivers that link to the sender **privately** on the platform they
+  used. Delivery IS the proof of control — a link posted in a room lets anyone
+  in that room claim to be that person. Single-use, 15 min, org-scoped.
+- The person claims it at `/link/<code>`: they sign in as themselves, confirm,
+  and `external_identity` is written. **They must already be a user in the org**
+  (invited or SSO) or the link dead-ends at the sign-in wall — this is the
+  most likely "it didn't work" report.
+- Linked but ungranted → 403 `agent_not_granted`; the bridge tells them so.
+  Refusals are NOT cached, so granting takes effect on their next message.
+- Tokens are 5 min here (`CHANNEL_IDENTITY_TTL_SECONDS`), not the 1h default:
+  a bridge re-mints per turn, so revocation lands in minutes and the host holds
+  nothing durable for anybody.
+
+Order is free: link-then-grant and grant-then-link both work.
 
 ## Timing semantics (the support-ticket section)
 
@@ -41,6 +65,12 @@ appetite and tell them the number.
 3. Grant the user in the admin → re-mint → call → expect 200/202.
 4. Revoke the grant → old token still works until TTL; re-mint refused.
 5. Suspend the user → mint refused immediately; restore → mint works.
+
+For an agent on a chat surface, the same check has a channel form, verified
+against production 2026-08-20: unlinked sender → gets a link privately (and
+nothing in the room); claims it → next message answers as them (the bridge log
+names their EMAIL, not their platform id); ungranted → "no access yet"; grant →
+works on the next message.
 
 This exact sequence was verified against production 2026-08-05. The demo
 moment for clients is step 3→4 — access appearing and disappearing from the

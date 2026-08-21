@@ -12,3 +12,12 @@ export {
  * over a network blip.
  */
 export { VERIFICATION_UNAVAILABLE, VERIFICATION_UNAVAILABLE_CODE } from "./jwks-failure.js";
+export {
+  channelIdentity,
+  type ChannelIdentity,
+  type ChannelIdentityOptions,
+  type ResolvedSpeaker,
+  type UnlinkedSpeaker,
+  type RefusedSpeaker,
+  type SpeakerResolution,
+} from "./channel-identity.js";

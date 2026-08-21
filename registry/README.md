@@ -49,6 +49,25 @@ eve add @kybernesis/multiplayer
 
 Package: [`@kybernesis/multiplayer`](https://www.npmjs.com/package/@kybernesis/multiplayer)
 
+### buzz — the agent as a workspace member
+
+An agent inside a [Buzz](https://buzz.xyz) workspace as a member rather than a
+shared service account: each turn runs as the person who sent the message, with
+their own memory, connections and access. Unknown senders are sent a sign-in
+link privately and linked to their control-plane identity self-service. Presence,
+typing and 👀 come with it.
+
+Installs a workspace-behaviour instructions fragment; the bridge itself runs
+beside the agent:
+
+```bash
+eve add @kybernesis/buzz
+npx kybernesis-buzz init     # prints the key to invite to the workspace
+npx kybernesis-buzz run
+```
+
+Package: [`@kybernesis/buzz`](https://www.npmjs.com/package/@kybernesis/buzz)
+
 ### evals — the baseline QA suite
 
 Smoke, memory, and routing eval suites as composable factories, with every

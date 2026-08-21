@@ -1,10 +1,10 @@
 ---
-description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), engineer (build+ship), dispatch (agent-to-agent), connectors (Gmail/Calendar/remote MCP), local (the user's own machine), manage (Studio→agent), exe (off-Vercel hosting), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
+description: Use when installing, configuring, or debugging any @kybernesis package — arcana (memory), enterprise (governance), multiplayer (Slack), buzz (workspace member), engineer (build+ship), dispatch (agent-to-agent), connectors (Gmail/Calendar/remote MCP), local (the user's own machine), manage (Studio→agent), exe (off-Vercel hosting), evals (QA), create (kyb CLI) — or the Kybernesis registry. Includes every production-learned gotcha.
 ---
 
 # The Kybernesis packages
 
-Eleven packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
+Twelve packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
 `KybernesisAI/platform`. Registry: `https://registry.kybernesis.ai`
 (`eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json`,
 then `eve add @kybernesis/<item>`). Each covers one axis:
@@ -20,7 +20,11 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   extension). `kybernesisAuth()` admits only control-plane IdentitySessions
   WITH a grant for this agent (`authorization: Bearer` + `x-kybernesis-bundle`
   headers; 401 no-creds, 403 agent_not_granted). Lazy JWKS — compiles without
-  KYBERNESIS_ISSUER. See the `control-plane` skill.
+  KYBERNESIS_ISSUER. Also `channelIdentity({ issuer, credential })` — resolves a
+  chat sender (provider + platform id) to a session minted FOR THAT PERSON, per
+  turn, so a bridge never holds durable credentials for anybody. THROWS when the
+  control plane is unreachable rather than refusing: a 500 read as "not allowed"
+  locks a whole room out over a deploy. See the `control-plane` skill.
 - **multiplayer** — Slack conversation mechanics. `multiplayerSlackChannel()`
   from `/slack` subpath: thread = shared session with per-speaker verified
   identity, no-re-mention continuation, dual surface (verified
@@ -82,6 +86,18 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   same shape as eve's `experimental_chatgpt()`), `hostPreflight()`, Photon
   iMessage credentials, and a `/preview` tool. Subpaths: `/slack`, `/photon`,
   `/sandbox`, `/preview`. See the `self-hosting` skill.
+- **buzz** — the agent as a MEMBER of a Buzz workspace (not a bot bolted on).
+  `buzzBridge()` + a `kybernesis-buzz` CLI (`init` prints the key to invite ·
+  `run` · `service` writes a systemd unit · `id` converts npub↔hex). Each turn
+  runs as the sender, resolved via `channelIdentity`; an unknown sender is sent
+  a sign-in link **privately** — holding it is what proves control of the
+  account, so a link posted in a room lets anyone there claim to be that person.
+  Publishes presence (20001, 60s heartbeat), typing (20002, every 3s) and 👀
+  (kind 7). Wire gotchas: reactions and dm-open go over HTTP with NIP-98 auth,
+  NOT the socket (a socket reaction is accepted and then never appears), and
+  command acks come back as `response:{…}` — parse without stripping that prefix
+  and a working call reads as a failure.
+
 - **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing, engineer?,
   safety? })` = smoke + 5 memory + 1 safety (quoted content is data, on by
   default) + routing per dept + optional engineer pair (vision loop, push-to-main
