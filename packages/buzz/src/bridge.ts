@@ -48,15 +48,35 @@ export type BuzzBridgeOptions = {
   onLog?: (message: string) => void;
 };
 
-type Session = { send: (text: string) => Promise<{ result: () => Promise<{ message?: string }> }> };
-
 export function buzzBridge(options: BuzzBridgeOptions) {
   const key: AgentKey = loadKey(options.keyFile);
   const identity = channelIdentity({ issuer: options.issuer, credential: options.credential });
   const log = options.onLog ?? ((message: string) => console.log(new Date().toISOString().slice(11, 19), message));
 
-  /** One conversation per channel, which is how a channel already behaves. */
-  const sessions = new Map<string, Session>();
+  /**
+   * One conversation per channel — the SESSION ID, not a handle to it.
+   *
+   * @remarks
+   * This distinction is the difference between multiplayer working and quietly
+   * not. A session handle carries the client that made it, and that client
+   * carries one person's bearer token. Cache the handle and every later turn in
+   * the channel runs as whoever spoke first: a second person asks about their
+   * own mail and is shown the first person's, with nothing anywhere reporting
+   * an error.
+   *
+   * So the id is shared and the credentials are not. Each turn attaches to the
+   * same conversation through a client built for the person sending it, which
+   * is what the runtime reads to decide whose memory and whose connections the
+   * turn may touch.
+   *
+   * The stream position is kept beside the id for a reason that cost an
+   * afternoon: attaching defaults to index 0, so a turn reads the conversation
+   * from its beginning and reports the FIRST completed message it finds — the
+   * previous person's answer. The turn itself runs correctly, as the right
+   * person, against the right connections; only the text posted back is
+   * somebody else's, which is the most convincing way to look broken.
+   */
+  const sessions = new Map<string, { id: string; streamIndex: number }>();
   /** Who has already been sent a link, so a room full of strangers is not a room full of spam. */
   const invited = new Map<string, number>();
 
@@ -70,11 +90,18 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     });
 
   async function ask(channel: string, text: string, token: string, bundle: string): Promise<string> {
+    // Built per turn, for the person whose turn it is.
+    const client = clientFor(token, bundle);
+
     const existing = sessions.get(channel);
     if (existing) {
       try {
-        const response = await existing.send(text);
-        return (await response.result()).message ?? "";
+        const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
+        const response = await session.send(text);
+        const result = await response.result();
+        // Where this turn left the conversation, so the next one starts after it.
+        sessions.set(channel, { id: existing.id, streamIndex: session.state.streamIndex });
+        return result.message ?? "";
       } catch (error) {
         // A session the agent no longer holds cannot be resumed. Starting a new one loses the
         // thread but keeps the conversation alive, which is the better of the two failures.
@@ -82,10 +109,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         sessions.delete(channel);
       }
     }
-    const client = clientFor(token, bundle);
     const created = await client.sessions.create({ message: text });
-    sessions.set(channel, created.session as unknown as Session);
-    return (await created.response.result()).message ?? "";
+    const message = (await created.response.result()).message ?? "";
+    sessions.set(channel, {
+      id: created.session.state.sessionId,
+      streamIndex: created.session.state.streamIndex,
+    });
+    return message;
   }
 
   /**
