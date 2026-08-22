@@ -40,11 +40,24 @@ A member that only ever speaks looks offline between sentences, so the bridge al
 what a person's client publishes: presence on a heartbeat, a typing indicator while a turn is
 running, and 👀 on a message the moment it is picked up.
 
+## More than one community
+
+One agent, one identity, many communities. Membership is each workspace's to
+grant, so being in two is two connections rather than two agents — invite the
+same public key to each and list both relays:
+
+```bash
+BUZZ_RELAY="wss://one.communities.buzz.xyz,wss://two.communities.buzz.xyz"
+```
+
+Conversations never mix: a channel belongs to exactly one community, and
+sessions are keyed by channel.
+
 ## Configuration
 
 | Variable | Meaning |
 | --- | --- |
-| `BUZZ_RELAY` | The workspace relay (`wss://…`) |
+| `BUZZ_RELAY` | The workspace relay (`wss://…`) — or several, comma-separated |
 | `BUZZ_AGENT_URL` | Where the agent listens (default `http://127.0.0.1:8000`) |
 | `BUZZ_KEYFILE` | The agent's key (default `~/.kybernesis/buzz-agent.json`) |
 | `KYBERNESIS_ISSUER` | The control plane |

@@ -25,8 +25,17 @@ const PROVIDER = "buzz";
 const SEEN = "👀";
 
 export type BuzzBridgeOptions = {
-  /** The workspace relay, e.g. `wss://example.communities.buzz.xyz`. */
-  relay: string;
+  /**
+   * The workspace relay, or several of them.
+   *
+   * @remarks
+   * One agent, one identity, many communities. A workspace's membership is the
+   * relay's to grant, so being in two of them is two connections rather than
+   * two agents — and the same public key is invited to each. Sessions stay
+   * keyed by channel, and a channel belongs to exactly one community, so the
+   * conversations never mix.
+   */
+  relay: string | readonly string[];
   /** Where the agent is listening, e.g. `http://127.0.0.1:8000`. */
   agentUrl: string;
   /** The agent's own key file. Its public half is what the workspace invited. */
@@ -115,17 +124,32 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     log(`refused ${npubEncode(sender).slice(0, 16)}…: ${reason}`);
   }
 
-  const relay = new BuzzRelay({
-    url: options.relay,
-    key,
-    pollMs: options.pollMs,
-    onLog: log,
-    onMessage: (event) => {
-      void handle(event);
-    },
-  });
+  const urls = (typeof options.relay === "string" ? [options.relay] : [...options.relay])
+    .map((url) => url.trim())
+    .filter(Boolean);
+  if (urls.length === 0) throw new Error("a workspace relay is required");
 
-  async function handle(event: NostrEvent): Promise<void> {
+  /** Which connection a message arrived on, so the reply goes back the same way. */
+  const relays = new Map<string, BuzzRelay>();
+  for (const url of urls) {
+    relays.set(
+      url,
+      new BuzzRelay({
+        url,
+        key,
+        pollMs: options.pollMs,
+        // Which community is speaking matters once there is more than one.
+        onLog: (message) => log(urls.length > 1 ? `${label(url)} ${message}` : message),
+        onMessage: (event) => {
+          void handle(event, url);
+        },
+      }),
+    );
+  }
+
+  async function handle(event: NostrEvent, from: string): Promise<void> {
+    const relay = relays.get(from);
+    if (!relay) return;
     const channel = event.tags.find((t) => t[0] === "h")?.[1];
     // Addressed by TAG, not by text. A name in prose is a string anyone can type; a p tag is what
     // the client emits when someone actually picks this member out of a mention list.
@@ -173,16 +197,33 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     /** The key the workspace has to invite for any of this to happen. */
     npub: key.npub,
     pubkey: key.publicKey,
+    /** The communities this agent is a member of. */
+    relays: urls,
     start(): void {
-      relay.connect();
-      log("listening — turns run as whoever sent them");
+      for (const relay of relays.values()) relay.connect();
+      log(
+        urls.length > 1
+          ? `listening on ${urls.length} communities — turns run as whoever sent them`
+          : "listening — turns run as whoever sent them",
+      );
     },
     /** Say goodbye rather than letting presence lapse: a stopped agent should not look online. */
     stop(): void {
-      relay.setPresence("offline");
-      setTimeout(() => relay.close(), 250);
+      for (const relay of relays.values()) relay.setPresence("offline");
+      setTimeout(() => {
+        for (const relay of relays.values()) relay.close();
+      }, 250);
     },
   };
 }
 
 export type BuzzBridge = ReturnType<typeof buzzBridge>;
+
+/** A relay's host, short enough to prefix a log line with. */
+function label(url: string): string {
+  try {
+    return `[${new URL(url).hostname.split(".")[0]}]`;
+  } catch {
+    return "[relay]";
+  }
+}

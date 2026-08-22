@@ -39,7 +39,9 @@ function init(): void {
 
 function run(): void {
   const bridge = buzzBridge({
-    relay: env("BUZZ_RELAY"),
+    // Comma-separated: one agent can be a member of several communities, and
+    // each is a connection rather than another process to supervise.
+    relay: env("BUZZ_RELAY").split(",").map((url) => url.trim()).filter(Boolean),
     agentUrl: process.env.BUZZ_AGENT_URL ?? "http://127.0.0.1:8000",
     keyFile: KEY_FILE,
     issuer: env("KYBERNESIS_ISSUER", "https://agent.kybernesis.ai"),
@@ -117,7 +119,8 @@ else if (command === "id") {
 
   Environment:
 
-    BUZZ_RELAY                     the workspace relay (wss://…)
+    BUZZ_RELAY                     the workspace relay (wss://…), or several,
+                                   comma-separated
     BUZZ_AGENT_URL                 where the agent listens (default http://127.0.0.1:8000)
     BUZZ_KEYFILE                   this agent's key (default ~/.kybernesis/buzz-agent.json)
     KYBERNESIS_ISSUER              the control plane
