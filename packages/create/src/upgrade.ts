@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { upsertEnv } from "./envfile.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -62,6 +64,40 @@ function warnIfStale(): void {
   console.log(`    ${dim("npm install -g @kybernesis/create@latest")}\n`);
 }
 
+/**
+ * Raise the local queue's delivery timeouts on an agent that already exists.
+ *
+ * @remarks
+ * Written as a repair rather than a warning because of what the bug looks like
+ * from outside: the agent answers the same question twice, in two different
+ * wordings, and no error appears in any log. Nobody reports that as a transport
+ * problem, so a warning would be read past — and the correct value is not a
+ * judgement call, it is "longer than a turn".
+ *
+ * Only for self-hosted agents. Hosted ones use real queue infrastructure and
+ * never touch this transport, so the variables would be noise in their
+ * environment.
+ */
+function repairLocalQueueTimeouts(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/exe"]) return;
+  const path = join(cwd, ".env.local");
+  if (!existsSync(path)) return;
+
+  const text = readFileSync(path, "utf8");
+  const missing = ["WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS", "WORKFLOW_LOCAL_BODY_TIMEOUT_MS"].filter(
+    (name) => !new RegExp(`^${name}=`, "m").test(text),
+  );
+  if (missing.length === 0) return;
+
+  upsertEnv(cwd, Object.fromEntries(missing.map((name) => [name, "900000"])));
+  console.log(
+    `  ${green("+")} raised the local queue delivery timeout in .env.local ${dim("(was 30s)")}\n` +
+      `    ${dim("A delivery holds one connection open for the whole turn. Below this, any turn")}\n` +
+      `    ${dim("slower than 30s was redelivered and its steps re-run — the agent answered twice.")}\n` +
+      `    ${dim("Takes effect on the next server restart.")}\n`,
+  );
+}
+
 export async function upgrade(skipEval: boolean): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -69,6 +105,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
 
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
+  repairLocalQueueTimeouts(cwd, deps);
   const toUpgrade: string[] = [];
   const unresolved: string[] = [];
   for (const name of kybernesisPackages(deps)) {
