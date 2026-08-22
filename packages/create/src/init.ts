@@ -238,6 +238,22 @@ export async function init(rawName: string | undefined, options: InitOptions = {
      * curl https://llm.int.exe.xyz/models.json
      */
     known.EXE_MODEL = "";
+
+    /**
+     * Longer than any turn, because the alternative is answering twice.
+     *
+     * The local queue delivers a turn by POSTing it to this same server and
+     * holds the connection open until the turn finishes, but its client gives
+     * up after 30 seconds by default. Any turn slower than that is redelivered
+     * and its steps re-run, so the person gets two differently-worded answers
+     * to one question with nothing in any log that looks like a fault.
+     *
+     * Written at scaffold rather than documented: it only affects self-hosted
+     * agents, it has one sensible value, and the failure it prevents is one
+     * nobody recognises in time.
+     */
+    known.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS = "900000";
+    known.WORKFLOW_LOCAL_BODY_TIMEOUT_MS = "900000";
   }
   upsertEnv(dir, known);
   if (!options.yes) await configureArcana({ dir, suggest: name, depts });

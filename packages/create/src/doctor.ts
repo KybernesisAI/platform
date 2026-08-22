@@ -261,6 +261,35 @@ export async function doctor(): Promise<void> {
       );
     }
 
+    /**
+     * A self-hosted agent answering everything twice.
+     *
+     * The local queue delivers a turn by POSTing it to this same server and
+     * holds that connection open for the whole turn, but its client gives up
+     * after 30 seconds by default. Every turn slower than that is redelivered,
+     * and the workflow re-executes steps that already ran — so the person gets
+     * two differently-worded answers to one question, and the log says only
+     * that a retry recovered. It is reported as the model being odd, which
+     * sends the search nowhere near the transport.
+     *
+     * Hosted agents never see it; real queue infrastructure runs there. This is
+     * a cost of self-hosting that nothing in the environment announces.
+     */
+    const QUEUE_TIMEOUT_FLOOR_MS = 120_000;
+    const shortQueueTimeouts = [
+      "WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS",
+      "WORKFLOW_LOCAL_BODY_TIMEOUT_MS",
+    ].filter((name) => Number(env[name] ?? 30_000) < QUEUE_TIMEOUT_FLOOR_MS);
+    if (shortQueueTimeouts.length === 0) {
+      add("pass", "local queue delivery survives turns longer than 30s");
+    } else {
+      add(
+        "fail",
+        `self-hosted: ${shortQueueTimeouts.join(" and ")} left at the 30s default`,
+        "one queue delivery holds a connection open for the entire turn, so any turn slower than the timeout is redelivered and its steps re-run — the agent answers the same question twice, with two different answers, and nothing reports an error. Set both to 900000 in .env.local and restart the server",
+      );
+    }
+
     // The exe VM sandbox backend needs a credential that cannot be scoped.
     // Surface the blast radius here, where it is still cheap to change course.
     const sandboxFile = join(cwd, "agent/sandbox/sandbox.ts");

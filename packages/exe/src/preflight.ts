@@ -151,6 +151,47 @@ export async function hostPreflight(
   }
 
   /**
+   * How long one local queue delivery may take before the transport gives up.
+   *
+   * @remarks
+   * Off-platform, the framework's queue delivers a turn by POSTing it to this
+   * same server and holding that connection open for the WHOLE turn. Its HTTP
+   * client defaults to a 30-second headers/body timeout — generous for a
+   * request, far too short for a turn. Any turn that runs longer than that (a
+   * tool call, a subagent, a long answer) fails at the transport, is
+   * redelivered, and the workflow re-executes the inline steps the previous
+   * delivery had already run.
+   *
+   * The symptom is not an error. It is the agent answering the same question
+   * twice, in two different wordings, in whatever channel the person is using —
+   * while the log records only a retry that says it recovered. People report it
+   * as the model behaving strangely, which sends the investigation to the one
+   * place the cause is not.
+   *
+   * On the platform this never happens, because real queue infrastructure runs
+   * there. Self-hosting creates it, and nothing in the environment says so.
+   */
+  const QUEUE_TIMEOUT_FLOOR_MS = 120_000;
+  const QUEUE_TIMEOUTS = [
+    "WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS",
+    "WORKFLOW_LOCAL_BODY_TIMEOUT_MS",
+  ] as const;
+  const tooShort = QUEUE_TIMEOUTS.filter(
+    (name) => Number(process.env[name] ?? 30_000) < QUEUE_TIMEOUT_FLOOR_MS,
+  );
+  checks.push({
+    name: "local queue delivery timeout",
+    ok: tooShort.length === 0,
+    detail:
+      tooShort.length === 0
+        ? `${QUEUE_TIMEOUTS.map((n) => `${n}=${process.env[n]}`).join(", ")} — turns longer than 30s survive delivery`
+        : `${tooShort.join(" and ")} ${tooShort.length > 1 ? "are" : "is"} under ${QUEUE_TIMEOUT_FLOOR_MS}ms. ` +
+          `A queue delivery holds one connection open for the entire turn, so every turn slower than the ` +
+          `timeout is redelivered and its steps re-run: the agent answers twice, with two different answers, ` +
+          `and no error surfaces anywhere. Set both to 900000 in the environment the server starts with.`,
+  });
+
+  /**
    * Whether this host can hand a file back to a person.
    *
    * @remarks
