@@ -79,6 +79,9 @@ export class BuzzRelay {
   private presenceTimer: ReturnType<typeof setInterval> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  /** How long to wait before the next attempt, and what was last refused. */
+  private backoff = 5_000;
+  private refusal: string | null = null;
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
   private cursor = now();
@@ -134,8 +137,14 @@ export class BuzzRelay {
 
   private reconnect(): void {
     if (this.closed) return;
-    this.log("disconnected; reconnecting in 5s");
-    setTimeout(() => this.connect(), 5_000);
+    // Backs off rather than hammering. A membership refusal is the common case
+    // here — an agent whose invite has not happened yet — and it is not
+    // something a retry a second from now can fix, though a retry eventually
+    // can, which is why this slows down instead of giving up.
+    const wait = this.backoff;
+    this.backoff = Math.min(this.backoff * 2, 60_000);
+    this.log(`disconnected; reconnecting in ${Math.round(wait / 1000)}s`);
+    setTimeout(() => this.connect(), wait);
   }
 
   private receive(data: string): void {
@@ -168,10 +177,23 @@ export class BuzzRelay {
 
     if (type === "OK" && !this.authenticated) {
       if (frame[2] !== true) {
-        this.log(`the relay refused this identity: ${String(frame[3] ?? "")}`);
+        // Said once. Repeating it every few seconds buries everything else in
+        // the log while somebody works out who has to send the invite.
+        const reason = String(frame[3] ?? "");
+        if (this.refusal !== reason) {
+          this.refusal = reason;
+          this.log(
+            reason.includes("not a relay member")
+              ? `not a member of this community yet — invite ${this.key.npub}`
+              : `the relay refused this identity: ${reason}`,
+          );
+        }
         return;
       }
       this.authenticated = true;
+      // A connection that works resets both.
+      this.backoff = 5_000;
+      this.refusal = null;
       this.log(`authenticated as ${this.key.publicKey.slice(0, 12)}…`);
       this.keepPresent();
       this.poll();

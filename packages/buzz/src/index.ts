@@ -11,3 +11,5 @@ export {
   KIND_DM_OPEN,
 } from "./relay.js";
 export { asHexPubkey, loadKey, loadOrCreateKey, npubEncode, type AgentKey } from "./keys.js";
+export * as profile from "./profile.js";
+export type { Profile } from "./profile.js";

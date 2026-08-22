@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { buzzBridge } from "./bridge.js";
-import { asHexPubkey, loadOrCreateKey, npubEncode } from "./keys.js";
+import { asHexPubkey, loadKey, loadOrCreateKey, npubEncode } from "./keys.js";
+import * as profile from "./profile.js";
 
 /**
  * Setup and operation for an agent that lives in a workspace.
@@ -37,11 +38,114 @@ function init(): void {
   console.log("  their turns run as them.\n");
 }
 
+function relayList(): string[] {
+  return env("BUZZ_RELAY")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+/** Take a `--flag value` off the argument list. */
+function flag(name: string): string | undefined {
+  const at = process.argv.indexOf(`--${name}`);
+  return at === -1 ? undefined : process.argv[at + 1];
+}
+
+/**
+ * Say who this agent is, in every community it belongs to.
+ *
+ * A member with no profile shows as a truncated public key. Each community
+ * stores its own copy, so joining a second one means publishing again — which
+ * is what `--copy-from` is for.
+ */
+async function setProfile(): Promise<void> {
+  const key = loadKey(KEY_FILE);
+  const urls = relayList();
+
+  const source = flag("copy-from");
+  if (source) {
+    const copied = await profile.copy(source, urls, key);
+    console.log(`\n  Copied ${copied.display_name ?? copied.name ?? "the profile"} from ${source} to:\n`);
+    for (const url of urls.filter((url) => url !== source)) console.log(`    ${url}`);
+    console.log();
+    return;
+  }
+
+  const name = flag("name");
+  if (!name) {
+    console.error("usage: kybernesis-buzz profile --name <name> [--about …] [--picture <file|url>]");
+    console.error("   or: kybernesis-buzz profile --copy-from <wss://…>");
+    process.exit(1);
+  }
+
+  // A local file is uploaded to the community and becomes a URL; a URL is used
+  // as given. Nobody should need storage of their own to give an agent a face.
+  let picture = flag("picture");
+  if (picture && !/^https?:\/\//.test(picture)) {
+    const path = picture.startsWith("~/")
+      ? join(homedir(), picture.slice(2))
+      : picture;
+    if (!existsSync(path)) {
+      console.error(`\n  No such image: ${path}\n`);
+      process.exit(1);
+    }
+    const bytes = readFileSync(path);
+    let uploaded: string | undefined;
+    for (const url of urls) {
+      try {
+        uploaded = await profile.uploadImage(url, key, bytes, profile.mediaTypeOf(path));
+        console.log(`  uploaded ${path.split("/").pop()} to ${url}`);
+        break;
+      } catch (error) {
+        console.log(`  · ${url} — ${(error as Error).message}`);
+      }
+    }
+    if (!uploaded) {
+      console.error("\n  Could not upload the image to any community.\n");
+      process.exit(1);
+    }
+    picture = uploaded;
+  }
+
+  const wanted: profile.Profile = {
+    name: name.toLowerCase().replace(/\s+/g, "-"),
+    display_name: name,
+    ...(flag("about") ? { about: flag("about") } : {}),
+    ...(picture ? { picture } : {}),
+    // Said plainly rather than left for people to work out.
+    bot: true,
+  };
+
+  // Each community is asked separately, and one refusal does not stop the
+  // others. Membership is per community, so being in one and not another is
+  // the ordinary case rather than an error worth aborting on.
+  let published = 0;
+  for (const url of urls) {
+    try {
+      await profile.write(url, key, wanted);
+      console.log(`  ✓ ${url}`);
+      published += 1;
+    } catch (error) {
+      const why = (error as Error).message;
+      console.log(
+        why.includes("not a relay member")
+          ? `  · ${url} — not a member yet, so nothing to be known as there`
+          : `  ✕ ${url} — ${why}`,
+      );
+    }
+  }
+  console.log(
+    published > 0
+      ? `\n  ${name} is ${key.npub.slice(0, 20)}…\n`
+      : "\n  Nothing published — invite this key to a community first.\n",
+  );
+}
+
 function run(): void {
   const bridge = buzzBridge({
     // Comma-separated: one agent can be a member of several communities, and
     // each is a connection rather than another process to supervise.
-    relay: env("BUZZ_RELAY").split(",").map((url) => url.trim()).filter(Boolean),
+    relay: relayList(),
     agentUrl: process.env.BUZZ_AGENT_URL ?? "http://127.0.0.1:8000",
     keyFile: KEY_FILE,
     issuer: env("KYBERNESIS_ISSUER", "https://agent.kybernesis.ai"),
@@ -97,7 +201,12 @@ WantedBy=multi-user.target
 }
 
 const command = process.argv[2];
-if (command === "init") init();
+if (command === "profile") {
+  setProfile().catch((error: Error) => {
+    console.error(`\n  ${error.message}\n`);
+    process.exit(1);
+  });
+} else if (command === "init") init();
 else if (command === "run") run();
 else if (command === "service") service();
 else if (command === "id") {
@@ -113,6 +222,7 @@ else if (command === "id") {
   kybernesis-buzz — put an agent in a workspace
 
     init              create or show this agent's identity, and what to invite
+    profile           say who this agent is, in every community it belongs to
     run               run the bridge
     service [path]    print (or write) a systemd unit for it
     id <npub|hex>     show a public key in both forms
