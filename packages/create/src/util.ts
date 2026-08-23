@@ -31,8 +31,17 @@ export function run(
   return ok;
 }
 
-export function capture(command: string, args: string[], cwd?: string): string | null {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", env: process.env });
+export function capture(
+  command: string,
+  args: string[],
+  cwd?: string,
+  extraEnv?: Record<string, string>,
+): string | null {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+  });
   return result.status === 0 ? result.stdout : null;
 }
 

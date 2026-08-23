@@ -50,12 +50,36 @@ PORT="${CLAUDE_PROXY_PORT:-3333}"
 # Pinned to the revision our patch targets, never a floating tag. Upstream
 # publishes `main` and per-commit `sha-*` tags; `main` moving under a fleet of
 # client hosts is a fleet that changes behaviour on a restart nobody ordered.
-IMAGE="${CLAUDE_PROXY_IMAGE:-ghcr.io/ansg191/claude-auth-proxy:sha-a62318f}"
+PATCHED_TAG="${CLAUDE_PROXY_PATCHED_TAG:-claude-auth-proxy:a62318f-provider-tools}"
+STOCK_IMAGE="ghcr.io/ansg191/claude-auth-proxy:sha-a62318f"
+
+# Prefer a patched image that has already been built on this host. Whether an
+# agent needs one is NOT something you can tell by reading its source: the
+# provider-defined tools come from extensions, so an agent with no mention of
+# web_search anywhere in its own code still sends one. That was learned by
+# putting a real agent on the stock image and watching every turn fail.
+pick_image() {
+  if [ -n "${CLAUDE_PROXY_IMAGE:-}" ]; then echo "$CLAUDE_PROXY_IMAGE"; return; fi
+  if docker image inspect "$PATCHED_TAG" >/dev/null 2>&1; then echo "$PATCHED_TAG"; return; fi
+  echo "$STOCK_IMAGE"
+}
 
 die() { echo "  ✗ $*" >&2; exit 1; }
 
 require_docker() {
   command -v docker >/dev/null 2>&1 || die "docker is not installed on this host."
+}
+
+# Whether a sign-in exists in the volume, regardless of whether the running
+# process has read it. Needs root to read a docker volume, so it answers
+# "unknown" rather than "no" when it cannot look — a guess here would send
+# somebody back through a browser flow they already completed.
+credentials_on_disk() {
+  local mount
+  mount=$(docker volume inspect -f '{{.Mountpoint}}' "$VOLUME" 2>/dev/null) || return 2
+  sudo -n test -f "${mount}/.claude/.credentials.json" 2>/dev/null && return 0
+  sudo -n true 2>/dev/null && return 1
+  return 2
 }
 
 ready_state() {
@@ -78,6 +102,7 @@ case "${1:-}" in
       # published port is an open gateway to someone's Claude account for
       # anyone who finds it. claudeSubscription() refuses a non-loopback URL
       # for the same reason.
+      IMAGE="$(pick_image)"
       docker run -d \
         --name "$NAME" \
         --restart unless-stopped \
@@ -85,6 +110,12 @@ case "${1:-}" in
         -p "127.0.0.1:${PORT}:3000" \
         "$IMAGE" >/dev/null
       echo "  ✓ ${NAME} created from ${IMAGE}"
+      if [ "$IMAGE" = "$STOCK_IMAGE" ]; then
+        echo "  ! stock image: provider-defined tool names are rewritten. If this agent has"
+        echo "    web search — including from an extension, which its own source will not"
+        echo "    show — every such turn fails with 'Input should be web_search'."
+        echo "    Fix ahead of time:  bash scripts/claude-subscription.sh build-patched"
+      fi
     fi
     sleep 2
     if [ "$(ready_state)" = "200" ]; then
@@ -112,14 +143,36 @@ case "${1:-}" in
       || echo "  ✗ still no credential. Re-run login and complete the browser step."
     ;;
 
+  reload)
+    # The proxy reads credentials ONCE, at startup. Sign in while it is running
+    # — through this script's `login`, or by hand with `docker exec` — and it
+    # keeps serving 503 with a perfectly good credential sitting in its volume,
+    # while `status` tells you to go and sign in again. That happened on the
+    # first real deployment and sent someone back through the browser flow they
+    # had just completed.
+    require_docker
+    docker restart "$NAME" >/dev/null
+    sleep 4
+    [ "$(ready_state)" = "200" ] \
+      && echo "  ✓ ${NAME}: credentials reloaded, ready on 127.0.0.1:${PORT}" \
+      || echo "  ✗ still not ready. Run 'login' — there may be no sign-in in ${VOLUME} yet."
+    ;;
+
   status)
     require_docker
     state=$(ready_state)
     running=$(docker ps -q -f "name=^${NAME}$")
     [ -n "$running" ] || die "${NAME} is not running. Every turn will fail looking like a model outage."
-    [ "$state" = "200" ] \
-      && echo "  ✓ ${NAME}: signed in, answering on 127.0.0.1:${PORT}" \
-      || echo "  ✗ ${NAME}: running but NOT signed in (/ready → ${state}). Run 'login'."
+    if [ "$state" = "200" ]; then
+      echo "  ✓ ${NAME}: signed in, answering on 127.0.0.1:${PORT}"
+    else
+      credentials_on_disk
+      case $? in
+        0) echo "  ! ${NAME}: signed in, but this process has not loaded it (/ready → ${state}). Run 'reload'." ;;
+        1) echo "  ✗ ${NAME}: running but NOT signed in (/ready → ${state}). Run 'login'." ;;
+        *) echo "  ✗ ${NAME}: not ready (/ready → ${state}). Run 'reload' first; if that does not fix it, 'login'." ;;
+      esac
+    fi
     # A port published on 0.0.0.0 is the failure that costs money rather than
     # uptime, so it is checked here and not left to a code review.
     docker port "$NAME" 3000 | grep -q '^127\.0\.0\.1:' \
@@ -140,8 +193,19 @@ case "${1:-}" in
     command -v git >/dev/null 2>&1 || die "git is not installed on this host."
     REV="a62318f9"
     TAG="${CLAUDE_PROXY_PATCHED_TAG:-claude-auth-proxy:${REV:0:7}-provider-tools}"
-    PATCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches/claude-auth-proxy-provider-tools.patch"
-    [ -f "$PATCH" ] || die "patch not found at ${PATCH} (is @kybernesis/exe installed?)"
+    # Looked for in both places this script legitimately runs from: inside the
+    # installed package, and copied into an agent's own scripts/ — which is
+    # where `kyb init` puts it, so resolving only relative to the script found
+    # nothing in the common case.
+    HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PATCH=""
+    for candidate in \
+      "${HERE}/../patches/claude-auth-proxy-provider-tools.patch" \
+      "${HERE}/../node_modules/@kybernesis/exe/patches/claude-auth-proxy-provider-tools.patch" \
+      "${PWD}/node_modules/@kybernesis/exe/patches/claude-auth-proxy-provider-tools.patch"; do
+      [ -f "$candidate" ] && { PATCH="$candidate"; break; }
+    done
+    [ -n "$PATCH" ] || die "patch not found. Install @kybernesis/exe, or run this from the agent directory."
 
     SRC="${CLAUDE_PROXY_SRC:-${HOME}/.cache/kybernesis/claude-auth-proxy}"
     mkdir -p "$(dirname "$SRC")"
@@ -163,7 +227,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "usage: bash scripts/claude-subscription.sh {up|login|status|down|build-patched}"
+    echo "usage: bash scripts/claude-subscription.sh {up|login|reload|status|down|build-patched}"
     exit 1
     ;;
 esac

@@ -413,8 +413,27 @@ export async function doctor(): Promise<void> {
   }
 
   // ── eve discovery + local port ─────────────────────────────────────────
-  const info = capture("npx", ["eve", "info"], cwd);
-  if (info === null) add("fail", "eve info failed", "run npx eve info for details");
+  /**
+   * Discovery, run with the environment the SERVER runs with.
+   *
+   * `eve info` compiles the agent, and an agent that reads a variable at module
+   * scope — a model id, a required credential — throws without it. eve does not
+   * load .env.local itself, so running this with a bare environment reported a
+   * healthy agent as a failed discovery, on a host where the service starts it
+   * correctly every time. That red is the one thing a person is told must be
+   * green before going further, so it stopped a deployment that was fine.
+   *
+   * `env` here is the same merged view every other check reads: .env.local
+   * underneath, the real environment on top.
+   */
+  const info = capture("npx", ["eve", "info"], cwd, env);
+  if (info === null) {
+    add(
+      "fail",
+      "eve info failed",
+      "run: set -a && . ./.env.local && set +a && npx eve info — the agent's own error is in that output",
+    );
+  }
   else {
     const diag = /Diagnostics\s+(\d+) errors?, (\d+) warnings?/.exec(info);
     if (diag && diag[1] === "0") add("pass", `eve discovery clean (${diag[2]} warnings)`);
