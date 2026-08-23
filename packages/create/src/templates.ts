@@ -392,8 +392,85 @@ export default discordChannel({ botToken: process.env.DISCORD_BOT_TOKEN! });
 
 export type HostKind = "vercel" | "exe";
 
-export function hostAgentTs(host: HostKind, model: string): string {
+/**
+ * Which provider binding an exe-hosted agent uses.
+ *
+ * This is a THIRD axis, independent of host and of model id, and it decides
+ * which SDK factory and therefore which HTTP surface the agent calls:
+ *
+ * - `openai`             exeModel() + createOpenAI  -> /v1/responses
+ * - `claude`             createAnthropic            -> /v1/messages
+ * - `claude-subscription` claudeSubscription()      -> the local OAuth proxy
+ *
+ * It exists because the three are NOT interchangeable by changing a model id.
+ * exeModel is OpenAI-only by construction, so pairing it with an `anthropic/*`
+ * model produces `unsupported endpoint: /v1/responses` on the first turn — a
+ * 404 in the agent log, with typecheck, discovery, doctor and health all green.
+ */
+export type ModelProvider = "openai" | "claude" | "claude-subscription";
+
+/** The model id that actually works for each provider, when none is given. */
+export const DEFAULT_MODEL_FOR: Record<ModelProvider, string> = {
+  openai: "gpt-5.6-sol",
+  claude: "claude-sonnet-5",
+  "claude-subscription": "claude-opus-5",
+};
+
+export function hostAgentTs(
+  host: HostKind,
+  model: string,
+  provider: ModelProvider = "openai",
+): string {
   if (host === "exe") {
+    if (provider === "claude") {
+      return `import { defineAgent } from "eve";
+import { createAnthropic } from "@ai-sdk/anthropic";
+
+// Claude through the exe.dev LLM integration.
+//
+// NOT exeModel(): that helper requires a \`createOpenAI\` factory and calls
+// /v1/responses, which the gateway answers with \`unsupported endpoint\` for
+// anthropic models. Claude is served on the Messages API instead.
+//
+// apiKey is the literal "implicit" — exe.dev injects the real credential
+// server-side, so no provider key lands on the host. This is METERED by
+// exe.dev; use \`kyb model set claude-subscription\` to bill a Claude plan.
+const anthropic = createAnthropic({
+  baseURL: process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1",
+  apiKey: "implicit",
+});
+
+export default defineAgent({
+  model: anthropic(process.env.EXE_MODEL ?? ${JSON.stringify(model)}),
+  modelContextWindowTokens: 200_000,
+});
+`;
+    }
+    if (provider === "claude-subscription") {
+      return `import { defineAgent } from "eve";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { claudeSubscription, CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW } from "@kybernesis/exe";
+
+// Claude billed to a subscription, not to metered API usage.
+//
+// The subscription is a PROCESS, not a config file: claudeSubscription() talks
+// to a local OAuth proxy on 127.0.0.1:3333 that owns the token exchange. If
+// that proxy stops, every turn fails looking like a model outage.
+//
+// Setup (proxy image + the required provider-tools patch):
+//   node_modules/@kybernesis/exe/patches/README.md
+// Verify before trusting it:
+//   await hostPreflight({ claudeProxyUrl: "http://127.0.0.1:3333/v1" })
+//
+// Never set ANTHROPIC_API_KEY on the host — it bills metered usage and
+// silently defeats the arrangement. Never hardcode the context window either;
+// the wrong number makes eve compact at a fraction of the real limit.
+export default defineAgent({
+  model: claudeSubscription({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createAnthropic }),
+  modelContextWindowTokens: CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW,
+});
+`;
+    }
     return `import { defineAgent } from "eve";
 import { createOpenAI } from "@ai-sdk/openai";
 import { exeModel } from "@kybernesis/exe";
@@ -401,6 +478,9 @@ import { exeModel } from "@kybernesis/exe";
 // Model served by the exe.dev LLM integration — no provider key on the host.
 // exe injects the credential (managed gateway, your API key, or a connected
 // ChatGPT subscription) server-side.
+//
+// exeModel is OpenAI-only: it calls /v1/responses. For Claude, run
+// \`kyb model set claude\` — changing EXE_MODEL alone will NOT work.
 export default defineAgent({
   model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
   modelContextWindowTokens: 200_000,

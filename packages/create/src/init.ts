@@ -25,6 +25,7 @@ import {
   exeEvalConfigTs,
   evalScript,
   hostAgentTs,
+  DEFAULT_MODEL_FOR,
   hostSteps,
   identityMd,
   rootArcanaTs,
@@ -48,7 +49,14 @@ const CORE_ITEMS = ["enterprise", "arcana", "evals"] as const;
 const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
 const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
+// The provider binding decides the HTTP surface, so the default model MUST
+// match the default provider. This previously read "anthropic/claude-sonnet-5"
+// while hostAgentTs emitted exeModel + createOpenAI — an OpenAI-only helper —
+// so every --host=exe scaffold failed its first turn with
+// `unsupported endpoint: /v1/responses`, while typecheck, discovery, doctor
+// and health all reported clean. Switch providers with `kyb model set`.
+const DEFAULT_PROVIDER = "openai" as const;
+const DEFAULT_MODEL = DEFAULT_MODEL_FOR[DEFAULT_PROVIDER];
 
 export interface InitOptions {
   engineer?: boolean;
@@ -205,7 +213,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   try {
     unlinkSync(join(dir, "agent/instructions.md"));
   } catch {}
-  writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL));
+  writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL, DEFAULT_PROVIDER));
   writeFileSync(join(dir, "agent/extensions/arcana.ts"), rootArcanaTs());
   writeFileSync(join(dir, "evals/kybernesis.eval.ts"), evalFileTs(displayName, depts));
   // A self-hosted agent judges through its own integration; the default

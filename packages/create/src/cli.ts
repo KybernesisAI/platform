@@ -27,6 +27,7 @@ import { register } from "./register.js";
 import { agentName, configureArcana } from "./arcana.js";
 import { credential } from "./credential.js";
 import { ps } from "./ps.js";
+import { model } from "./model.js";
 
 
 /** This build's version, so a skew can name itself instead of being guessed at. */
@@ -76,6 +77,7 @@ const COMMANDS: Record<string, string> = {
   credential: "Write the agent credential onto a host (--local to stay here).",
   register: "Register this agent with the control plane (--name, --url).",
   ps: "What is registered, against what is actually listening.",
+  model: "Which provider binding this agent uses (set <openai|claude|claude-subscription>).",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
   upgrade: "Bring @kybernesis packages and eve to the certified versions (--skip-eval).",
   tui: "Talk to your agents in the terminal.",
@@ -144,6 +146,15 @@ switch (command) {
     break;
   case "ps":
     await ps();
+    break;
+  case "model":
+    // `kyb model` reports; `kyb model set <provider>` changes the binding.
+    // The provider is CODE, not config — see model.ts for why this is a
+    // command rather than an env var.
+    await model({
+      set: rest[0] === "set" ? rest[1] : undefined,
+      model: flag(rest, "model"),
+    });
     break;
   case "deploy":
     await deploy({ host: flag(rest, "host"), noEnv: rest.includes("--no-env") });
