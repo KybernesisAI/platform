@@ -232,6 +232,26 @@
           "target": "agent/tools/connectors.ts"
         }
       ]
+    },
+    {
+      "name": "exe",
+      "type": "registry:item",
+      "title": "Kybernesis exe host",
+      "description": "Self-host an eve agent on an exe.dev VM: subscription-backed models (Claude, ChatGPT, Grok) instead of metered gateway tokens, a host preflight that catches the ways a self-hosted agent boots broken, service supervision, and an optional Slack socket binding.",
+      "dependencies": [
+        "@kybernesis/exe"
+      ],
+      "envVars": {
+        "EXE_VM_NAME": "",
+        "EXE_MODEL": ""
+      },
+      "files": [
+        {
+          "path": "registry/exe-preflight.mjs",
+          "type": "registry:file",
+          "target": "scripts/host-preflight.mjs"
+        }
+      ]
     }
   ]
 }

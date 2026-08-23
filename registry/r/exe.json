@@ -1,0 +1,22 @@
+{
+  "name": "exe",
+  "type": "registry:item",
+  "title": "Kybernesis exe host",
+  "description": "Self-host an eve agent on an exe.dev VM: subscription-backed models (Claude, ChatGPT, Grok) instead of metered gateway tokens, a host preflight that catches the ways a self-hosted agent boots broken, service supervision, and an optional Slack socket binding.",
+  "dependencies": [
+    "@kybernesis/exe"
+  ],
+  "envVars": {
+    "EXE_VM_NAME": "",
+    "EXE_MODEL": ""
+  },
+  "files": [
+    {
+      "path": "registry/exe-preflight.mjs",
+      "type": "registry:file",
+      "target": "scripts/host-preflight.mjs",
+      "content": "#!/usr/bin/env node\n/**\n * Ask this host whether it can actually run the agent.\n *\n * Run it ON the VM, not from a laptop: most of what it checks is about the\n * host's own environment \u2014 whether the model integration is attached, whether\n * the variables `eve start` needs are exported into the process (it does NOT\n * read .env.local the way `eve dev` does), whether file delivery has anywhere\n * to put a file, and whether the local queue's delivery timeout is long enough\n * that a slow turn is not redelivered and answered twice.\n *\n *   node scripts/host-preflight.mjs\n *\n * Every check here exists because its absence cost a real debugging session.\n */\nimport { hostPreflight } from \"@kybernesis/exe\";\n\nconst result = await hostPreflight({\n  appDir: process.cwd(),\n  // Name what this agent cannot start without. Anything missing is reported as\n  // a variable the service did not export, which is the usual cause.\n  requiredEnv: [\"KYBERNESIS_ISSUER\", \"KYBERNESIS_AGENT_CREDENTIAL\"],\n});\n\nfor (const check of result.checks) {\n  console.log(`${check.ok ? \"\\u2713\" : \"\\u2717\"} ${check.name}\\n    ${check.detail}`);\n}\nprocess.exit(result.ok ? 0 : 1);\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}
