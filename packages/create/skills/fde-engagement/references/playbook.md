@@ -1968,6 +1968,53 @@ nowhere in its context. Verify from the host — the configured model id and the
 credential in use — never by asking the agent. Expect a client to ask it in a
 demo, and have the real answer ready.
 
+**Claude, on a Claude Max / Pro / Claude Code subscription.** The one that is
+a process rather than a file. Anthropic's billing validator accepts an OAuth
+bearer *instead of* an API key, and that bearer expires — so something has to
+own the refresh. A small proxy holds Claude Code's own credentials, refreshes
+them, and swaps them in; the agent speaks ordinary Anthropic API to loopback and
+never holds a long-lived secret.
+
+```bash
+# on the host, installed by kyb init for an exe host
+bash scripts/claude-subscription.sh up
+bash scripts/claude-subscription.sh login     # "Sign in with Claude", never an API key
+bash scripts/claude-subscription.sh status    # signed in? bound to loopback?
+```
+
+```ts title="agent/agent.ts"
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { claudeSubscription, CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW } from "@kybernesis/exe";
+
+export default defineAgent({
+  model: claudeSubscription({ model: "claude-opus-5", createAnthropic }),
+  modelContextWindowTokens: CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW,
+});
+```
+
+Four things to know before you promise it:
+
+- **The exe LLM integration also serves `anthropic/*` ids, and that is NOT this.**
+  It reaches Anthropic through a gateway, which bills metered usage. Same model,
+  entirely different invoice. If the point is that the client pays nothing
+  incremental, it has to be the proxy.
+- **If the agent searches the web, build the patched image** —
+  `scripts/claude-subscription.sh build-patched`. The published proxy renames
+  provider-defined tools, which Anthropic validates by name, and the failure
+  (`tools.N.web_search_20250305.name: Input should be 'web_search'`) reads like
+  a bug in the agent's own tool definitions.
+- **The sign-in is per host and interactive** — a browser step, once, in the
+  container. It survives restarts because it lives in a named volume, but a new
+  VM needs its own.
+- **It is a process to keep alive.** If the container stops, every turn fails
+  with a connection error from inside the model SDK, which reads like the model
+  being down. `hostPreflight({ claudeProxyUrl })` asks about it at boot; the
+  restart policy keeps it up.
+
+Scope it honestly with the client: this is their own subscription, on their own
+infrastructure, for their own agent. It is not a shared gateway or a resale of
+Anthropic access, and it should not be built as one.
+
 ### 11.5 Third-party APIs: broker the credential, pin the version
 
 Do not put a client's API token on the agent host. Put it in an exe.dev

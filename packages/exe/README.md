@@ -79,8 +79,37 @@ liveness and exposure:
 await hostPreflight({ claudeProxyUrl: "http://127.0.0.1:3333/v1" });
 ```
 
-Setting up the proxy, including a required patch that keeps Anthropic's
-provider-defined tool names intact, is documented in [`patches/`](./patches).
+### Standing the proxy up
+
+One script, on the host the agent runs on. `kyb init` installs it for an exe
+host; otherwise copy it from this package's `scripts/`.
+
+```bash
+bash scripts/claude-subscription.sh up      # pull + run, bound to 127.0.0.1
+bash scripts/claude-subscription.sh login   # "Sign in with Claude" — never an API key
+bash scripts/claude-subscription.sh status  # signed in? exposed off-host?
+```
+
+`up` is idempotent and the sign-in survives it: credentials live in a named
+volume, so a restarted or recreated container does not send anyone back through
+a browser. `status` distinguishes *running* from *signed in* — the proxy answers
+`/health` as soon as it listens but `/ready` only once it holds a credential,
+and conflating those is how a proxy looks healthy and answers nothing.
+
+**If the agent uses web search, build the patched image first:**
+
+```bash
+bash scripts/claude-subscription.sh build-patched
+CLAUDE_PROXY_IMAGE=claude-auth-proxy:a62318f-provider-tools bash scripts/claude-subscription.sh up
+```
+
+The published image renames provider-defined tools, which Anthropic validates
+by name, so `web_search` fails with `tools.N.web_search_20250305.name: Input
+should be 'web_search'` — an error naming a tool index and a schema, pointing
+nowhere near a proxy in the middle. The fix is in [`patches/`](./patches) and is
+not upstream. `build-patched` applies it from a pinned revision so it cannot be
+lost in a rebuild, which is exactly how it was lost once before, when it lived
+only inside a Docker image tag.
 Selecting between providers at boot — one env var, one stable context window per
 process — is the pattern to copy; switching per turn would change the context
 window under a running session.

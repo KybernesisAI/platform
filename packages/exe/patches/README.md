@@ -40,6 +40,21 @@ A patch file in version control is the minimum. Better still is upstreaming it
 
 ### Applying it
 
+Do not do this by hand, and never hand these steps to a client:
+
+```bash
+bash scripts/claude-subscription.sh build-patched
+```
+
+That is the same clone, revision and build, done by the script from the pinned
+revision with the patch that ships beside this file. It exists because these
+instructions used to be the only record, so following them by hand was the
+documented procedure — which meant the way to give an agent a Claude
+subscription was to walk somebody through a third-party git checkout.
+
+The mechanical steps, for reference when the script cannot run (no Docker, no
+network, a different revision):
+
 ```bash
 git clone https://github.com/ansg191/claude-auth-proxy.git
 cd claude-auth-proxy
@@ -48,8 +63,9 @@ git apply /path/to/claude-auth-proxy-provider-tools.patch
 docker build -t claude-auth-proxy:a62318f-provider-tools .
 ```
 
-Run it bound to loopback only — the proxy spends a paid subscription and
-requires no credential of its own:
+Run it with `scripts/claude-subscription.sh up` (which binds to loopback and
+sets a restart policy), or by hand — the proxy spends a paid subscription and
+requires no credential of its own, so the binding is not optional:
 
 ```bash
 docker run -d --name claude-subscription \

@@ -285,6 +285,32 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
 
     /**
+     * The Claude subscription, as a script rather than a procedure.
+     *
+     * Same reasoning as the restart script above, and the same history: the
+     * provider (`claudeSubscription()`) was generalised into @kybernesis/exe
+     * after the first agent used it, but STANDING THE PROXY UP stayed a thing
+     * someone did by hand on one VM. So the capability was in every agent's
+     * packages while the only written procedure was a patch README telling the
+     * next person to clone a third-party repository — which is how a client
+     * ends up being walked through a git checkout by their consultant.
+     *
+     * Installed unconditionally for an exe host: it costs one file, and the
+     * alternative is rediscovering the procedure per deployment.
+     */
+    try {
+      const proxySource = join(dir, "node_modules/@kybernesis/exe/scripts/claude-subscription.sh");
+      const proxyTarget = join(dir, "scripts/claude-subscription.sh");
+      copyFileSync(proxySource, proxyTarget);
+      chmodSync(proxyTarget, 0o755);
+      console.log(dim("     scripts/claude-subscription.sh — put this agent on a Claude subscription, no API key"));
+    } catch {
+      console.log(
+        yellow("  ! could not install scripts/claude-subscription.sh — copy it from node_modules/@kybernesis/exe/scripts/"),
+      );
+    }
+
+    /**
      * Point the management routes at that script.
      *
      * The registry template ships `restartCommand` commented out next to an
