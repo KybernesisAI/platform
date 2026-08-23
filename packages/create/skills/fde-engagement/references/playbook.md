@@ -178,9 +178,12 @@ something. Chase them a week out — an unprovisioned Vercel team on Day 1 costs
 - [ ] **Confirm who at ACME is the Slack workspace admin.** Creating the Slack connector
       requires someone who can approve a Slack app install. If that person is on holiday
       your Day 2 is Slack-less.
-- [ ] **Read the reference implementation.** `~/kyber` is our own production agent and
-      the canonical example of everything in Phase 4. Skim `agent/agent.ts`,
-      `agent/instructions/`, `agent/subagents/finance/`, and `evals/`.
+- [ ] **Know the shape you are aiming for** before writing any of it: one
+      `agent/agent.ts` that picks a model and mounts extensions, instructions
+      split into identity and per-surface, one subagent per department that owns
+      its own tools and skills, and an `evals/` suite that gates the deploy.
+      Every later phase adds to that skeleton; building it in a different shape
+      is what makes the eval suite and the routing evals fight you.
 - [ ] **Confirm package versions you will pin.** As of 2026-08-06:
       `@kybernesis/arcana@0.1.1`, `@kybernesis/enterprise@0.1.2`,
       `@kybernesis/multiplayer@0.1.0`, `@kybernesis/evals@0.2.1`,
@@ -436,9 +439,9 @@ What to know when choosing:
   principal). Prefer `session.started` over per-turn switching: prompt caches
   are per model, and every switch re-ingests the conversation at uncached
   prices. Resolver failures degrade to the fallback, never fail the turn.
-- Kyber runs `anthropic/claude-opus-4.8` via the gateway; our eval judges are
-  configured separately in `evals/evals.config.ts` and must **never** be the
-  model under test.
+- Whatever the agent runs, eval judges are configured separately in
+  `evals/evals.config.ts` and must **never** be the model under test — a model
+  grading its own output measures agreement, not correctness.
 
 ### 4.1 Install `@kybernesis/enterprise` (governance) — do this FIRST
 
@@ -532,16 +535,11 @@ npx eve add @kybernesis/multiplayer
 This writes `agent/channels/slack.ts` and `agent/instructions/multiplayer.md`, and
 declares the `SLACK_CONNECTOR_UID` env var.
 
-> **Status as of 2026-08-05:** the registry item is **live** (`eve add` resolves and
-> writes both files), and the package is dogfooded in `~/kyber` — but
-> `@kybernesis/multiplayer@0.1.0` is **not yet published to npm**, so the dependency
-> install step will fail until it is. Check first:
+> Published and installable — `eve add` resolves the registry item and writes both
+> files. Confirm what you are pinning before you promise a version to a client:
 > ```bash
-> npm view @kybernesis/multiplayer version   # E404 means the publish hasn't landed
+> npm view @kybernesis/multiplayer version
 > ```
-> If it 404s, install from the workspace checkout at `~/kyber/packages/multiplayer` (or
-> vendor the two files by hand — they are shown below and in
-> `agent/instructions/multiplayer.md`) and revisit once the publish lands.
 
 The whole Slack integration is one file:
 
@@ -968,7 +966,7 @@ token minted per edge; the callee URL comes from the registry (discovery), env
 var still wins. THE DEMO: revoke the edge in the admin → the caller is refused
 (edge_not_granted) within 5 minutes, no redeploy; re-grant → restored. Run it
 for the client — it's the whole governance story in one minute. Full lifecycle
-proven live 2026-08-07 (kyber ↔ eve-gtm). Budget note: the deployed agent and
+proven live 2026-08-07 between two governed agents. Budget note: the deployed agent and
 local eval runs share the project's AI Gateway budget — size it for both.
 
 ### 4.4 Author the agent's identity and instructions
@@ -982,8 +980,7 @@ surface.ts example below). Keep always-on instructions to identity, tone, and
 standing rules; procedures belong in skills (§4.3e) — the model loads those on
 demand instead of paying for them every turn.
 
-Crib the structure from `~/kyber/agent/instructions/identity.md`, which has
-three sections worth copying:
+Give `agent/instructions/identity.md` three sections:
 
 1. **Identity** — who the agent is, and *how to write for Slack*: short paragraphs,
    bullets, no headings unless the answer is genuinely long. Slack is a chat surface, not
@@ -996,9 +993,9 @@ three sections worth copying:
    asks for something personal in a channel.
 
 For per-session context, `defineDynamic` on `session.started` lets you inject
-surface-specific instructions. `~/kyber/agent/instructions/surface.ts` is a working
-example: it greets a DM session by the caller's verified name and reminds a channel
-session that everything it posts is public.
+surface-specific instructions — greeting a DM session by the caller's verified
+name, and reminding a channel session that everything it posts is public. The
+same agent should not talk to a room the way it talks to one person.
 
 **Author these with Claude Code (§4.0), and judge drafts by test, not by
 reading** — paste the discovery notes, have it draft identity.md and the
@@ -1077,7 +1074,7 @@ export default defineAgent({
    workspace })` mount with that department's scoped key) and only that
    subagent gets the connection + skills + instructions. This is the default
    pattern now. The plain-connection alternative below still works (it's what
-   pre-0.30 required, and what you'll find in older kyber subagents) when you
+   pre-0.30 required, and what you'll find in subagents written before it) when you
    want the connection without the shipped skills:
 
    ```ts
@@ -1107,9 +1104,9 @@ export default defineAgent({
 
 `agent/schedules/*.ts` for anything recurring — a Monday pipeline summary, a Friday
 financial report. **Schedules live on the root agent only**; a scheduled root turn
-delegates to the subagent that owns the work. `~/kyber/agent/schedules/friday-financials.ts`
-is the working example: it fires Friday 02:00 UTC, delegates to `finance`, and DMs the
-result to a configured Slack user. Note that DMing a user from a schedule needs the
+delegates to the subagent that owns the work. A worked example: fire at 02:00 UTC
+on Friday, delegate to a `finance` subagent, and DM the result to a configured
+Slack user. Note that DMing a user from a schedule needs the
 `im:write` scope on the Slack connector — add it during Phase 5 or the first run fails
 silently at the last step.
 
@@ -1147,8 +1144,8 @@ rate, delegation mix, p50/p95 duration.
 userId by default, so PostHog sees one anonymous actor named after the service. To
 attribute turns to the verified speaker, add a sibling hook that stamps the
 per-message-authenticated principal via evlog's `useLogger` — on `step.started`, not
-`turn.started`, so evlog's turn state exists regardless of hook ordering (crib
-`~/kyber/agent/hooks/attribution.ts`). Then a one-time $identify per person maps ids
+`turn.started`, so evlog's turn state exists regardless of hook ordering. Then a
+one-time $identify per person maps ids
 to names. Per-employee telemetry must be a deliberate, disclosed choice at a client.
 
 ### 4.7 Environment variables
@@ -1931,8 +1928,8 @@ conversation — it changes the shape of the deal.
 
 **Grok, on a SuperGrok or X Premium+ subscription.** Same arrangement, without
 the broker: xAI's Grok Build CLI does a device login and writes a credential
-that is a valid bearer for `https://api.x.ai/v1`. Proven in production on Sid —
-twelve evals, twenty-nine gates, green on the subscription.
+that is a valid bearer for `https://api.x.ai/v1`. Proven in production on a
+self-hosted agent — twelve evals, twenty-nine gates, green on the subscription.
 
 ```bash
 # on the host, as the unix user the agent runs as
@@ -1962,8 +1959,8 @@ Three things to know before you promise it to a client:
   host for a week, it is an open question, and it would present to the client as
   the agent breaking for no reason.
 
-**The model will lie about which model it is.** Sid, running Grok, stated it was
-"Claude Opus 4.6, Anthropic" and attributed it to an instruction that exists
+**The model will lie about which model it is.** A self-hosted agent running Grok
+stated it was "Claude Opus 4.6, Anthropic" and attributed it to an instruction that exists
 nowhere in its context. Verify from the host — the configured model id and the
 credential in use — never by asking the agent. Expect a client to ask it in a
 demo, and have the real answer ready.
