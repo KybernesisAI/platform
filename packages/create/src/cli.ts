@@ -8,6 +8,7 @@
  *   kyb skills [--global] install/refresh the FDE Claude Code skill suite
  *   kyb arcana            set memory workspaces + keys, and verify them
  *   kyb register          register this agent with the control plane (device flow)
+ *   kyb ps                what is registered, vs what is actually listening
  *   kyb deploy            put this repo on its host and restart it, with proof
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
  *     --skip-eval           skip the eval gate (not for production changes)
@@ -25,6 +26,7 @@ import { deploy } from "./deploy.js";
 import { register } from "./register.js";
 import { agentName, configureArcana } from "./arcana.js";
 import { credential } from "./credential.js";
+import { ps } from "./ps.js";
 
 
 /** This build's version, so a skew can name itself instead of being guessed at. */
@@ -73,6 +75,7 @@ const COMMANDS: Record<string, string> = {
   skills: "Install the FDE skill suite (--global for every project).",
   credential: "Write the agent credential onto a host (--local to stay here).",
   register: "Register this agent with the control plane (--name, --url).",
+  ps: "What is registered, against what is actually listening.",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
   upgrade: "Bring @kybernesis packages and eve to the certified versions (--skip-eval).",
   tui: "Talk to your agents in the terminal.",
@@ -138,6 +141,9 @@ switch (command) {
     break;
   case "register":
     await register({ name: flag(rest, "name"), url: flag(rest, "url") });
+    break;
+  case "ps":
+    await ps();
     break;
   case "deploy":
     await deploy({ host: flag(rest, "host"), noEnv: rest.includes("--no-env") });
