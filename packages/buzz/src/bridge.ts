@@ -89,6 +89,22 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       headers: bundle ? { "x-kybernesis-bundle": bundle } : {},
     });
 
+  /**
+   * One turn at a time per channel.
+   *
+   * Two people asking at once used to interleave: both turns read and wrote the
+   * same stored stream position, so one of them read the other's boundary and
+   * came back with the wrong answer or none. A channel is a conversation; its
+   * turns are ordered whether or not the people in it take turns.
+   */
+  const inFlight = new Map<string, Promise<unknown>>();
+  function serialize<T>(channel: string, work: () => Promise<T>): Promise<T> {
+    const queued = (inFlight.get(channel) ?? Promise.resolve()).then(work, work);
+    // Kept only while it matters: the chain holds the LAST promise, not a history.
+    inFlight.set(channel, queued.catch(() => {}));
+    return queued;
+  }
+
   async function ask(channel: string, text: string, token: string, bundle: string): Promise<string> {
     // Built per turn, for the person whose turn it is.
     const client = clientFor(token, bundle);
@@ -97,6 +113,35 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     if (existing) {
       try {
         const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
+
+        /**
+         * Move to the true end of the conversation before speaking.
+         *
+         * `send()` opens its response stream at the position the handle already
+         * holds and stops at the FIRST turn boundary it meets. If anything is
+         * still unread there — the tail of a turn that outlived its reader, a
+         * turn that was running when the bridge restarted — that boundary
+         * belongs to the older turn. The read ends on it, this turn's answer is
+         * never collected, and the stored position stays one turn behind.
+         *
+         * Which makes it permanent: every later turn reads the previous turn's
+         * tail. The channel answers nothing, then answers a question from ten
+         * minutes ago, and a fresh conversation elsewhere works perfectly —
+         * because a fresh conversation has nothing left over to trip on.
+         *
+         * Draining first costs one bounded read of only what is unread, and it
+         * repairs a position that has already drifted rather than requiring
+         * anyone to notice. Non-following, so it ends at the tail instead of
+         * waiting for the future.
+         */
+        let unread = 0;
+        for await (const _ of session.stream({ follow: false, startIndex: existing.streamIndex })) {
+          unread += 1;
+        }
+        if (unread > 0) {
+          log(`caught up on ${unread} unread event(s) in ${channel.slice(0, 8)} before answering`);
+        }
+
         const response = await session.send(text);
         const result = await response.result();
         // Where this turn left the conversation, so the next one starts after it.
@@ -209,9 +254,22 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await ask(channel, text, speaker.token, speaker.bundle);
+      const reply = await serialize(channel, () => ask(channel, text, speaker.token, speaker.bundle));
       if (!reply) {
-        log("the agent produced no text");
+        /**
+         * Silence is the worst answer available.
+         *
+         * An empty result used to end here, with a line in a log nobody was
+         * reading. In a room that is indistinguishable from the agent ignoring
+         * you — so people ask again, which is how one unanswered question
+         * became five, none of which looked like a fault to anyone watching.
+         */
+        log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
+        relay.reply(
+          channel,
+          "I didn't get an answer back for that one — ask me again and I'll retry.",
+          event,
+        );
         return;
       }
       relay.reply(channel, reply, event);
