@@ -1,4 +1,5 @@
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
+import { speakerCredentials } from "./credentials.js";
 import { Client } from "eve/client";
 import { BuzzRelay, type NostrEvent } from "./relay.js";
 import { loadKey, npubEncode, type AgentKey } from "./keys.js";
@@ -80,14 +81,36 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   /** Who has already been sent a link, so a room full of strangers is not a room full of spam. */
   const invited = new Map<string, number>();
 
-  const clientFor = (token: string, bundle: string) =>
+  /**
+   * A client whose credentials are resolved per request, not captured once.
+   *
+   * The identity token a turn starts with lives about five minutes. That was
+   * invisible while turns ended early — and became a failure the moment they
+   * were allowed to run to completion: a turn doing real work for six minutes
+   * reconnected its stream with the token it began with, the agent answered
+   * "Authorization is required for this route", and the reply was lost after
+   * all the work had been done. In a channel that reads as the agent typing
+   * for five minutes and then saying nothing.
+   *
+   * Resolving per request costs nothing in the normal case — the resolver
+   * caches and re-mints only near expiry — and it keeps the property the short
+   * lifetime exists for: a person whose access is revoked mid-turn stops being
+   * able to act on the next request rather than at the end of the turn.
+   */
+  const credentialsFor = speakerCredentials((externalId) =>
+    identity.resolve(PROVIDER, externalId, npubEncode(externalId)),
+  );
+
+  const clientFor = (pubkey: string) => {
+    const credentials = credentialsFor(pubkey);
     // `host`, not `baseUrl`: a wrong key is ignored rather than rejected, and the client then
     // builds a nonsense URL — an error about a malformed URL rather than about a mistyped option.
-    new Client({
+    return new Client({
       host: options.agentUrl,
-      auth: { bearer: token },
-      headers: bundle ? { "x-kybernesis-bundle": bundle } : {},
+      auth: { bearer: credentials.bearer },
+      headers: credentials.headers,
     });
+  };
 
   /**
    * One turn at a time per channel.
@@ -105,9 +128,10 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     return queued;
   }
 
-  async function ask(channel: string, text: string, token: string, bundle: string): Promise<string> {
-    // Built per turn, for the person whose turn it is.
-    const client = clientFor(token, bundle);
+  async function ask(channel: string, text: string, pubkey: string): Promise<string> {
+    // Built per turn, for the person whose turn it is — and kept current for as
+    // long as that turn runs.
+    const client = clientFor(pubkey);
 
     const existing = sessions.get(channel);
     if (existing) {
@@ -254,7 +278,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () => ask(channel, text, speaker.token, speaker.bundle));
+      const reply = await serialize(channel, () => ask(channel, text, event.pubkey));
       if (!reply) {
         /**
          * Silence is the worst answer available.
