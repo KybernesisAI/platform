@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { finalizeEvent } from "nostr-tools/pure";
 import type { AgentKey } from "./keys.js";
 
@@ -275,6 +275,13 @@ export class BuzzRelay {
         tags: [
           ["u", url],
           ["method", "POST"],
+          // A nonce, because the relay rejects a repeated auth event as a replay.
+          // Without it two identical requests — the same query twice, the same
+          // reaction twice — sign byte-identically and the second is refused. The
+          // refusal does not always look like one either: a duplicated read came
+          // back as an empty list, so an agent reported an empty workspace instead
+          // of a rejected request.
+          ["nonce", randomUUID()],
           ["payload", createHash("sha256").update(body).digest("hex")],
         ],
         content: "",

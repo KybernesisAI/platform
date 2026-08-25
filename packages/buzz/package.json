@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/buzz",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "description": "Put an eve agent in a Buzz workspace as a member: per-speaker verified identity resolved through the control plane, self-service identity linking, presence, typing and seen signals.",
   "license": "Apache-2.0",
   "type": "module",

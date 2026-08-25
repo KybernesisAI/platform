@@ -128,7 +128,17 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     return queued;
   }
 
-  async function ask(channel: string, text: string, pubkey: string): Promise<string> {
+  /**
+   * Where this conversation is happening, handed to the agent with the turn.
+   *
+   * An agent in two communities was asked "what projects exist in this relay?"
+   * and could not know which relay "this" was — so it reached for a
+   * human-in-the-loop question, which parks a turn until somebody answers it.
+   * In a channel nobody does, so the turn never finished and the room got
+   * nothing. The bridge knew the answer the whole time: it is the connection
+   * the message arrived on.
+   */
+  async function ask(channel: string, text: string, pubkey: string, community: string): Promise<string> {
     // Built per turn, for the person whose turn it is — and kept current for as
     // long as that turn runs.
     const client = clientFor(pubkey);
@@ -166,7 +176,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           log(`caught up on ${unread} unread event(s) in ${channel.slice(0, 8)} before answering`);
         }
 
-        const response = await session.send(text);
+        const response = await session.send(text, { clientContext: { buzzCommunity: community, buzzChannel: channel } });
         const result = await response.result();
         // Where this turn left the conversation, so the next one starts after it.
         sessions.set(channel, { id: existing.id, streamIndex: session.state.streamIndex });
@@ -178,7 +188,10 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         sessions.delete(channel);
       }
     }
-    const created = await client.sessions.create({ message: text });
+    const created = await client.sessions.create({
+      message: text,
+      clientContext: { buzzCommunity: community, buzzChannel: channel },
+    });
     const message = (await created.response.result()).message ?? "";
     sessions.set(channel, {
       id: created.session.state.sessionId,
@@ -278,7 +291,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () => ask(channel, text, event.pubkey));
+      const reply = await serialize(channel, () => ask(channel, text, event.pubkey, from));
       if (!reply) {
         /**
          * Silence is the worst answer available.

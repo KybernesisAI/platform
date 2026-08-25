@@ -53,7 +53,7 @@ function secretKeyHex(keyFile: string): string {
 
 export default defineTool({
   description:
-    "Act in the Buzz workspace: projects, issues, pull requests, patches, repos, long-form notes, channel canvases, workflows, the activity feed, media, emoji, moderation. Pass the command as a list of arguments, e.g. [\"projects\",\"list\"] or [\"issues\",\"create\",\"--repo\",\"acme/api\",\"--title\",\"Login fails on Safari\"]. Use [\"help\"] or [\"<group>\",\"--help\"] to see what a group takes instead of guessing at flags. Actions are signed as THIS AGENT and appear under its name.",
+    "Act in the Buzz workspace: projects, issues, pull requests, patches, repos, long-form notes, channel canvases, workflows, the activity feed, media, emoji, moderation. Pass the command as a list of arguments, e.g. [\"projects\",\"list\"] or [\"issues\",\"create\",\"--repo\",\"acme/api\",\"--title\",\"Login fails on Safari\"]. Use [\"help\"] or [\"<group>\",\"--help\"] to see what a group takes instead of guessing at flags. Actions are signed as THIS AGENT and appear under its name. Do NOT use it to answer the message you are currently answering — returning your reply for the turn does that, threaded and marked; sending as well posts the same answer twice. Use messages/dms only for a DIFFERENT channel, an unprompted message, or a later follow-up.",
   inputSchema: z.object({
     args: z
       .array(z.string())
