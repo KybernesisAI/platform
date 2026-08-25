@@ -10,7 +10,8 @@
     "BUZZ_RELAY": "",
     "KYBERNESIS_ISSUER": "",
     "KYBERNESIS_AGENT_CREDENTIAL": "",
-    "BUZZ_KEYFILE": ""
+    "BUZZ_KEYFILE": "",
+    "BUZZ_AUTH_TAG": ""
   },
   "files": [
     {

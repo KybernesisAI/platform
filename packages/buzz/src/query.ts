@@ -53,11 +53,24 @@ export async function queryRelay(
   // than the one that signed it can arrive unauthenticated — which this relay
   // answers with an empty list rather than a refusal, so it reads as "nothing
   // here" instead of "you are not who you said you were".
+  /**
+   * The owner-attestation tag, when the workspace issues one.
+   *
+   * @remarks
+   * NIP-98 proves which key made the request; this proves the workspace agreed
+   * that key may act on someone's behalf. Some operations — owner-reviewed
+   * agent drafts among them — are refused without it, and the refusal names
+   * neither the tag nor the header, so it reads as a permissions problem with
+   * no obvious cause. Optional, because most of the surface never asks.
+   */
+  const authTag = process.env.BUZZ_AUTH_TAG?.trim();
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
       authorization: `Nostr ${Buffer.from(JSON.stringify(auth)).toString("base64")}`,
       "content-type": "application/json",
+      ...(authTag ? { "x-auth-tag": authTag } : {}),
     },
     body,
   });

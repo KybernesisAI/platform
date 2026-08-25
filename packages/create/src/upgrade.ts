@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
@@ -98,6 +98,107 @@ function repairLocalQueueTimeouts(cwd: string, deps: Record<string, string>): vo
   );
 }
 
+/**
+ * Finish a Buzz install that a version bump alone leaves half-done.
+ *
+ * @remarks
+ * A capability that arrives in a package but needs four manual steps to switch
+ * on has not really shipped. That is what happened here: `kyb upgrade` moved an
+ * agent to a version whose whole point was acting in a workspace, and the agent
+ * went on being unable to, because the extension was not mounted, the process
+ * had none of the environment the bridge had, and the CLI was not on the host.
+ * Everything looked upgraded and nothing was different.
+ *
+ * The person who hit it was an engineer with a terminal, and it still took a
+ * hand-written prompt to sort out. A client would not have got there at all —
+ * they would have concluded the feature did not work.
+ *
+ * So each of those is repaired here, from what the host can already tell us:
+ * the bridge's own service file holds the relay and the identity, and the rest
+ * is a file and a binary.
+ */
+function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/buzz"]) return;
+
+  const done: string[] = [];
+
+  // 1. The extension mount. Without it the tools do not exist, and nothing says so.
+  const mount = join(cwd, "agent/extensions/buzz.ts");
+  if (!existsSync(mount)) {
+    mkdirSync(join(cwd, "agent/extensions"), { recursive: true });
+    writeFileSync(
+      mount,
+      `// The agent's hands in Buzz: projects, issues, pull requests, patches, repos,
+` +
+        `// long-form notes, channel canvases, workflows, the feed, media — everything the
+` +
+        `// workspace has beyond talking, which the bridge alone does not provide.
+` +
+        `//
+` +
+        `// Actions are signed with THIS AGENT's key and appear under its name.
+` +
+        `export { default } from "@kybernesis/buzz/extension";
+`,
+    );
+    done.push("mounted the Buzz extension (agent/extensions/buzz.ts)");
+  }
+
+  /**
+   * 2. The environment. The bridge runs with the relay and the key; the AGENT
+   * process runs with neither, because nothing ever needed it to until the
+   * tools existed. Read from the service file rather than asked for, because
+   * the answer is already on the host and a person retyping it will eventually
+   * mistype it.
+   */
+  const envPath = join(cwd, ".env.local");
+  const env = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+  if (!/^BUZZ_RELAY=/m.test(env)) {
+    const unit = capture("sh", [
+      "-c",
+      "grep -ohE 'BUZZ_(RELAY|KEYFILE)=[^ \"]+' /etc/systemd/system/*buzz-bridge.service 2>/dev/null | head -2",
+    ]);
+    const values: Record<string, string> = {};
+    for (const line of (unit ?? "").split("\n")) {
+      const [name, ...rest] = line.trim().split("=");
+      if (name && rest.length) values[name] = rest.join("=").replace(/^"|"$/g, "");
+    }
+    if (values.BUZZ_RELAY) {
+      upsertEnv(cwd, {
+        BUZZ_RELAY: values.BUZZ_RELAY,
+        ...(values.BUZZ_KEYFILE ? { BUZZ_KEYFILE: values.BUZZ_KEYFILE } : {}),
+      });
+      done.push("gave the agent process the relay and identity its bridge already had");
+    } else {
+      console.log(
+        `  ${yellow("!")} Buzz tools need BUZZ_RELAY and BUZZ_KEYFILE in .env.local — the same ` +
+          `values the bridge service uses. Could not read them from this host.`,
+      );
+    }
+  }
+
+  // 3. The CLI itself. Built once, in a container, because no binary is published.
+  if (!existsSync(join(cwd, ".buzz/bin/buzz"))) {
+    const hasDocker = capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes";
+    if (hasDocker) {
+      console.log(dim("  building the Buzz CLI for this host (first time only, a few minutes) …"));
+      const ok = run("npx", ["kybernesis-buzz", "install-cli"], { cwd, allowFail: true, quiet: true });
+      done.push(ok ? "installed the Buzz CLI (.buzz/bin/buzz)" : "could NOT install the Buzz CLI — run: npx kybernesis-buzz install-cli");
+    } else {
+      console.log(
+        `  ${yellow("!")} No docker here, so the Buzz CLI cannot be built. Without it the agent ` +
+          `can read the workspace but not act in it. Install docker, or set BUZZ_CLI_URL to a ` +
+          `binary built for this platform, then: npx kybernesis-buzz install-cli`,
+      );
+    }
+  }
+
+  if (done.length > 0) {
+    console.log(`  ${green("+")} Buzz: ${done.join("; ")}`);
+    console.log(`    ${dim("Takes effect after the next build and restart.")}\n`);
+  }
+}
+
 export async function upgrade(skipEval: boolean): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -106,6 +207,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
   repairLocalQueueTimeouts(cwd, deps);
+  repairBuzzSetup(cwd, deps);
   const toUpgrade: string[] = [];
   const unresolved: string[] = [];
   for (const name of kybernesisPackages(deps)) {

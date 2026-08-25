@@ -119,6 +119,10 @@ export default defineTool({
     try {
       const { stdout } = await run(binary, args, {
         env: {
+          // BUZZ_AUTH_TAG rides along in process.env when the workspace issues
+          // one: the CLI reads it itself and sends it as x-auth-tag. Owner-
+          // reviewed agent drafts are refused without it, in terms that mention
+          // neither the tag nor the header.
           ...process.env,
           BUZZ_RELAY_URL: relay,
           BUZZ_PRIVATE_KEY: secretKeyHex(keyFile),
