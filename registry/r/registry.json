@@ -72,20 +72,26 @@
       "name": "buzz",
       "type": "registry:item",
       "title": "Kybernesis Buzz",
-      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence, typing and seen signals.",
+      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals \u2014 and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
       "dependencies": [
         "@kybernesis/buzz"
       ],
       "envVars": {
         "BUZZ_RELAY": "",
         "KYBERNESIS_ISSUER": "",
-        "KYBERNESIS_AGENT_CREDENTIAL": ""
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "BUZZ_KEYFILE": ""
       },
       "files": [
         {
           "path": "registry/buzz-instructions.md",
           "type": "registry:file",
           "target": "agent/instructions/buzz.md"
+        },
+        {
+          "path": "registry/buzz-extension.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/buzz.ts"
         }
       ]
     },

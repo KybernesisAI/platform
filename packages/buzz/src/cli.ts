@@ -200,6 +200,83 @@ WantedBy=multi-user.target
   process.stdout.write(unit);
 }
 
+/**
+ * Put the Buzz CLI on this host, so the agent can act in the workspace.
+ *
+ * @remarks
+ * The bridge gives an agent a voice; the CLI is how Buzz expects an agent to
+ * DO anything — projects, issues, pull requests, notes, canvases. Its own
+ * README is explicit: the harness prompts the agent, "and the agent replies
+ * using the Buzz CLI".
+ *
+ * There is no published binary — the project releases desktop apps only — so
+ * this builds one, from a pinned revision, in a container, and puts it where
+ * the tool looks. That is a script's job and not a person's: the alternative
+ * is a client being walked through a git checkout and a Rust toolchain, which
+ * is not an answer anyone should give a customer.
+ *
+ * `BUZZ_CLI_URL` short-circuits the build for hosts that have no Docker: point
+ * it at a binary built once for the same platform.
+ */
+async function installCli(): Promise<void> {
+  const { execFileSync } = await import("node:child_process");
+  const { chmodSync, existsSync, mkdirSync } = await import("node:fs");
+  const { dirname, resolve } = await import("node:path");
+
+  const target = resolve(process.env.BUZZ_CLI_PATH ?? ".buzz/bin/buzz");
+  mkdirSync(dirname(target), { recursive: true });
+
+  const url = process.env.BUZZ_CLI_URL;
+  if (url) {
+    console.log(`  downloading ${url}`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`could not download the CLI (HTTP ${response.status})`);
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(target, Buffer.from(await response.arrayBuffer()));
+    chmodSync(target, 0o755);
+    console.log(`  ✓ ${target}`);
+    return;
+  }
+
+  try {
+    execFileSync("docker", ["--version"], { stdio: "ignore" });
+  } catch {
+    throw new Error(
+      "no docker on this host, and no BUZZ_CLI_URL set. Build the CLI once elsewhere for this " +
+        "platform and point BUZZ_CLI_URL at it, or install docker.",
+    );
+  }
+
+  // Pinned. A CLI that changes under a fleet on an unrelated restart is a
+  // fleet whose behaviour changed for reasons nobody can reconstruct.
+  const source = resolve(process.env.BUZZ_CLI_SRC ?? ".buzz/src");
+  if (!existsSync(source)) {
+    console.log("  fetching the CLI source (once)…");
+    execFileSync("git", ["clone", "--depth", "1", "https://github.com/block/buzz.git", source], {
+      stdio: "inherit",
+    });
+  }
+  console.log("  building — a few minutes the first time, then cached…");
+  execFileSync(
+    "docker",
+    [
+      "run", "--rm",
+      "-v", `${source}:/src`,
+      "-w", "/src",
+      "rust:1-slim",
+      "sh", "-c",
+      "apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev >/dev/null 2>&1; cargo build --release -p buzz-cli",
+    ],
+    { stdio: "inherit" },
+  );
+
+  const { copyFileSync } = await import("node:fs");
+  copyFileSync(`${source}/target/release/buzz`, target);
+  chmodSync(target, 0o755);
+  console.log(`\n  ✓ ${target}`);
+  console.log("    The agent finds it there automatically; set BUZZ_CLI_PATH to move it.");
+}
+
 const command = process.argv[2];
 if (command === "profile") {
   setProfile().catch((error: Error) => {
@@ -209,6 +286,12 @@ if (command === "profile") {
 } else if (command === "init") init();
 else if (command === "run") run();
 else if (command === "service") service();
+else if (command === "install-cli") {
+  installCli().catch((error: Error) => {
+    console.error(`\n  ${error.message}\n`);
+    process.exit(1);
+  });
+}
 else if (command === "id") {
   const hex = asHexPubkey(process.argv[3]);
   if (!hex) {
@@ -221,7 +304,7 @@ else if (command === "id") {
   console.log(`
   kybernesis-buzz — put an agent in a workspace
 
-    init              create or show this agent's identity, and what to invite
+    init              create or show this agent's identity, and what to invite\n    install-cli       install the Buzz CLI, so the agent can act as well as talk
     profile           say who this agent is, in every community it belongs to
     run               run the bridge
     service [path]    print (or write) a systemd unit for it
