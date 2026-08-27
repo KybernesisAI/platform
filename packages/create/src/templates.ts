@@ -587,15 +587,36 @@ export default defineAgent({
 `,
     },
     {
+      path: "agent/tools/deliver.ts",
+      content: `// Handing a file to the person you are talking to.
+//
+// The engineer layer mounts on \`builder\`, so building stays there — but
+// DELIVERING is not building. It reads one file from this agent's own sandbox
+// and copies it to storage, runs no commands and writes nothing back, and the
+// agent that needs it is the one talking to the user.
+//
+// Without this the root is told (by its instructions, and by our own playbook)
+// to deliver files and has no such tool. It cannot detect the mismatch, so it
+// promises a file and then quietly puts the contents somewhere nobody can
+// reach — a memory note, or an apology with no cause given.
+export { deliver as default } from "@kybernesis/engineer/tools";
+`,
+    },
+    {
       path: "agent/subagents/builder/extensions/engineer.ts",
       content: `// Engineer layer mounted LOCALLY on this subagent (eve >=0.30): screenshot,
 // deliver, and the trade-school skills belong to \`builder\` alone, so the root
-// agent has no shell.
+// gets no shell ON THE HOST and none of the build loop.
+//
+// Not "the root has no shell" — every eve agent has a sandbox with bash,
+// read_file, write_file, glob and grep, and this app builds two templates
+// (root and builder). The root's shell is its own container. The distinction
+// that matters is host access, and the old wording blurred exactly the line
+// people read this comment to understand.
 //
 // The root DOES get a browser and GitHub tools — the engineer layer installs
 // extension/agent-browser and extension/github-tools at the root, deliberately,
 // because reading a page is not the same blast radius as running a command.
-// This comment used to claim otherwise, which is worse than saying nothing.
 export { default } from "@kybernesis/engineer";
 `,
     },

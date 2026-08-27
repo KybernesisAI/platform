@@ -290,6 +290,37 @@ export async function doctor(): Promise<void> {
       );
     }
 
+    /**
+     * Instructions that name a tool the agent does not have.
+     *
+     * `deliver` mounts with the engineer layer, which is mounted on the builder
+     * subagent — so an agent whose ROOT is told to hand over files (by its own
+     * instructions, or by our playbook, which says to) promises a file it
+     * cannot send. It cannot see the mismatch either: it writes the contents to
+     * a memory note, or apologises without a cause, and the delivery
+     * infrastructure passes every check while nobody can receive anything.
+     */
+    const rootDeliver = existsSync(join(cwd, "agent/tools/deliver.ts"));
+    const instructionsMentionDeliver = (() => {
+      try {
+        const dir = join(cwd, "agent/instructions");
+        return readdirSync(dir).some((file) =>
+          readFileSync(join(dir, file), "utf8").includes("deliver"),
+        );
+      } catch {
+        return false;
+      }
+    })();
+    if (instructionsMentionDeliver && !rootDeliver) {
+      add(
+        "fail",
+        "instructions tell this agent to deliver files, but the root has no deliver tool",
+        'add agent/tools/deliver.ts: export { deliver as default } from "@kybernesis/engineer/tools" — the engineer layer mounts it on the builder subagent only',
+      );
+    } else if (rootDeliver) {
+      add("pass", "the agent that talks to people can also hand them a file");
+    }
+
     // The exe VM sandbox backend needs a credential that cannot be scoped.
     // Surface the blast radius here, where it is still cheap to change course.
     const sandboxFile = join(cwd, "agent/sandbox/sandbox.ts");
@@ -394,7 +425,11 @@ export async function doctor(): Promise<void> {
       );
     }
     if (existsSync(join(builderDir, "extensions/engineer.ts"))) {
-      add("pass", "engineer mounted locally on the subagent (root keeps no shell)");
+      // Not "the root keeps no shell": every eve agent has a sandbox with bash,
+      // read_file, write_file, glob and grep. What the local mount withholds is
+      // the build loop and any shell ON THE HOST. This sentence is one people
+      // reason about security boundaries from, so it says the true thing.
+      add("pass", "engineer mounted locally on the subagent (root gets no host shell, no build loop)");
     } else {
       add("warn", "engineer extension not mounted on the subagent", "agent/subagents/builder/extensions/engineer.ts");
     }

@@ -1,5 +1,20 @@
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
+import { fetchMedia, isImage, parseMedia, type MediaRef } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
+
+/**
+ * What one turn can carry: prose, or prose with the things attached to it.
+ *
+ * Narrower than the client's own union on purpose — this is what a chat message
+ * can actually contain, and a wider type here would invite parts the bridge has
+ * no way to produce.
+ */
+type TurnMessage =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image"; image: Uint8Array; mediaType: string }
+    >;
 import { Client } from "eve/client";
 import { BuzzRelay, type NostrEvent } from "./relay.js";
 import { loadKey, npubEncode, type AgentKey } from "./keys.js";
@@ -138,7 +153,48 @@ export function buzzBridge(options: BuzzBridgeOptions) {
    * nothing. The bridge knew the answer the whole time: it is the connection
    * the message arrived on.
    */
-  async function ask(channel: string, text: string, pubkey: string, community: string): Promise<string> {
+  /**
+   * One inbound message, as the parts a turn can carry.
+   *
+   * @remarks
+   * Returns a plain string when there is nothing but text, so the common case
+   * stays exactly as it was — a change in the shape of every ordinary turn is
+   * not worth paying for the rare one.
+   *
+   * A failed fetch does NOT throw. The person is owed an answer either way, and
+   * an agent told "there was an attachment I could not retrieve" can say so;
+   * an agent told nothing answers the caption and looks like it ignored the
+   * picture, which is the bug being fixed.
+   */
+  async function composeMessage(text: string, attachments: MediaRef[]): Promise<TurnMessage> {
+    if (attachments.length === 0) return text;
+
+    const parts: Exclude<TurnMessage, string> = [];
+    if (text) parts.push({ type: "text", text });
+
+    for (const ref of attachments) {
+      try {
+        const media = await fetchMedia(key, ref);
+        if (isImage(media.mediaType)) {
+          parts.push({ type: "image", image: media.bytes, mediaType: media.mediaType });
+        } else {
+          parts.push({
+            type: "text",
+            text: `[The sender attached a ${media.mediaType} file, which cannot be read as an image. Tell them what you received and ask for it in a readable form if you need it.]`,
+          });
+        }
+      } catch (error) {
+        log(`could not fetch an attachment: ${(error as Error).message}`);
+        parts.push({
+          type: "text",
+          text: `[The sender attached a file, and it could not be retrieved (${(error as Error).message}). Say so rather than answering as if there were no attachment.]`,
+        });
+      }
+    }
+    return parts;
+  }
+
+  async function ask(channel: string, message: TurnMessage, pubkey: string, community: string): Promise<string> {
     // Built per turn, for the person whose turn it is — and kept current for as
     // long as that turn runs.
     const client = clientFor(pubkey);
@@ -176,7 +232,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           log(`caught up on ${unread} unread event(s) in ${channel.slice(0, 8)} before answering`);
         }
 
-        const response = await session.send(text, { clientContext: { buzzCommunity: community, buzzChannel: channel } });
+        const response = await session.send(message, { clientContext: { buzzCommunity: community, buzzChannel: channel } });
         const result = await response.result();
         // Where this turn left the conversation, so the next one starts after it.
         sessions.set(channel, { id: existing.id, streamIndex: session.state.streamIndex });
@@ -189,15 +245,15 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       }
     }
     const created = await client.sessions.create({
-      message: text,
+      message,
       clientContext: { buzzCommunity: community, buzzChannel: channel },
     });
-    const message = (await created.response.result()).message ?? "";
+    const reply = (await created.response.result()).message ?? "";
     sessions.set(channel, {
       id: created.session.state.sessionId,
       streamIndex: created.session.state.streamIndex,
     });
-    return message;
+    return reply;
   }
 
   /**
@@ -269,7 +325,22 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     if (!channel || !addressed) return;
 
     const text = String(event.content ?? "").trim();
-    if (!text) return;
+    const attachments = parseMedia(event);
+
+    /**
+     * Drop only a message with NOTHING in it — and say so when we do.
+     *
+     * This guard used to test the text alone, and sat above the log line, so an
+     * image sent without a caption was discarded before anything was written
+     * down. From the outside the agent had simply ignored someone; from the
+     * inside there was no record that a message had ever arrived. The reply
+     * path was hardened against exactly this failure — an empty answer now
+     * says so out loud — and the receiving path was left as it was.
+     */
+    if (!text && attachments.length === 0) {
+      log(`nothing to answer in ${channel.slice(0, 8)} from ${event.pubkey.slice(0, 8)} — no text, no attachments`);
+      return;
+    }
 
     let speaker: SpeakerResolution;
     try {
@@ -287,11 +358,26 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       return;
     }
 
-    log(`asked in ${channel.slice(0, 8)} by ${speaker.user.email}: ${text.slice(0, 60)}`);
+    log(
+      `asked in ${channel.slice(0, 8)} by ${speaker.user.email}: ${text.slice(0, 60)}` +
+        (attachments.length ? ` [+${attachments.length} attachment(s)]` : ""),
+    );
+
+    /**
+     * Attachments become parts of the turn, or become words about themselves.
+     *
+     * An image the model can see goes in as bytes. Anything else — a zip, a
+     * PDF the model cannot read, a fetch that failed — goes in as a sentence
+     * saying so, because the alternative is an agent that answers the caption
+     * while the person waits for a reply about the file they sent. Being told
+     * "I got a file I cannot read" is a worse answer than the truth only if
+     * you never wanted the truth.
+     */
+    const message = await composeMessage(text, attachments);
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () => ask(channel, text, event.pubkey, from));
+      const reply = await serialize(channel, () => ask(channel, message, event.pubkey, from));
       if (!reply) {
         /**
          * Silence is the worst answer available.

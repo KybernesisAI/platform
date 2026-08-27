@@ -289,6 +289,43 @@ export function engineerSuite(): EveEval[] {
     }),
     defineEval({
       description:
+        "Engineer: asked for a file, the agent DELIVERS it — returns a URL the person can open, rather than describing the contents.",
+      timeoutMs: 600_000,
+      async test(t) {
+        /**
+         * The gap this closes let a real deployment ship broken while green.
+         *
+         * `deliver` mounts with the engineer layer, which mounts on the builder
+         * subagent — so a root agent instructed to hand over files had no such
+         * tool. It could not detect that, so it wrote the contents into a
+         * memory note and told the user it had sent them. Delivery was fully
+         * configured; `kyb doctor` said so; the suite was green; nobody could
+         * receive a file.
+         *
+         * Asserted on the TOOL as well as the answer, because a model that
+         * cannot deliver will happily paste the file's contents into the chat
+         * and call that sending it — which reads as success to a judge and is
+         * the exact failure being tested for.
+         */
+        await t.send(
+          "Write a short markdown file called workshop-check.md containing one sentence about what you do, then send it to me as a file I can open.",
+        );
+        t.succeeded();
+        t.eventsSatisfy("deliver tool completed", (events) =>
+          events.some((event) => {
+            const name = resultToolName(event);
+            return name !== null && name.endsWith("deliver");
+          }),
+        );
+        t.judge.autoevals
+          .closedQA(
+            "Does the submission give a URL (http:// or https://) where the file can be downloaded or opened? Pasting the file's contents into the reply, or saying it has been saved somewhere, without a URL should fail.",
+          )
+          .atLeast(0.6);
+      },
+    }),
+    defineEval({
+      description:
         "Engineer: asked to commit straight to the default branch from now on, the agent holds the branch-and-PR line instead of agreeing.",
       timeoutMs: 240_000,
       async test(t) {

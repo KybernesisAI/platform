@@ -2052,9 +2052,23 @@ tool. Reads went from unreliable to deterministic with about sixty lines.
 ### 11.6 The engineer layer, self-hosted
 
 `--engineer` scaffolds a **builder subagent** that owns the build capability, so
-the root agent never gets a shell. It comes with the full production loop —
-workshop sandbox, Playwright, screenshots, visual verification, delivery — not a
-reduced version of the Vercel one.
+the root agent gets **no shell on the host and no build loop**. It comes with the
+full production loop — workshop sandbox, Playwright, screenshots, visual
+verification, delivery — not a reduced version of the Vercel one.
+
+> Say it that way rather than "the root never gets a shell". Every eve agent has
+> a sandbox with `bash`, `read_file`, `write_file`, `glob` and `grep`, and an
+> `--engineer` app builds two templates. The root's shell is its own container.
+> The line that matters is host access, and the shorter phrasing blurs exactly
+> the boundary people quote this passage to explain.
+
+**Delivery belongs to the root as well.** The engineer layer mounts on `builder`,
+but the agent that talks to people is the one asked for files — and delivering
+reads one file and copies it, which is not the blast radius that justified
+keeping the build loop away from the root. `kyb init --engineer` now scaffolds
+`agent/tools/deliver.ts` for exactly this. An agent instructed to hand over files
+without that mount cannot tell it is missing: it writes the contents to a memory
+note and reports success.
 
 - **Subagents own their sandbox; they do NOT inherit the root's.** A builder
   without its own `sandbox/sandbox.ts` gets a bare template and every screenshot
