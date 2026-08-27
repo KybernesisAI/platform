@@ -23,7 +23,6 @@
 set -u
 
 CUTOFF_HOURS="${KYB_PRUNE_SESSION_HOURS:-24}"
-KEEP_IMAGE_HOURS="${KYB_PRUNE_IMAGE_HOURS:-48}"
 
 command -v docker >/dev/null 2>&1 || exit 0
 
@@ -54,9 +53,49 @@ docker container prune -f
 # 3. Build cache — nothing depends on it, and a Rust or browser build leaves GBs.
 docker builder prune -af
 
-# 4. Unused images past the keep window. In-use images are protected by docker
-#    itself, so a warm sandbox template in active use survives this.
-docker image prune -af --filter "until=${KEEP_IMAGE_HOURS}h"
+# 4. Sandbox templates: keep the current set, drop superseded ones.
+#
+#    NOT "unused images older than N hours". Docker protects an image a
+#    container is USING, but a warm template with no session running is not in
+#    use — so a blanket age prune deletes the very template the agent needs for
+#    its next turn, and the rebuild lands on whoever asked next. Observed: an
+#    age prune took every template on four agents, and each rebuilt its whole
+#    set on the following restart.
+#
+#    Nor is a fixed count right: one agent here has THIRTEEN current templates,
+#    one per subagent plus the root, so "keep the newest 10" would delete three
+#    live ones.
+#
+#    eve prewarms every template together, so the current set shares a build
+#    time — twelve of Kyber's were committed in the same second. Keep everything
+#    from the most recent batch (with an hour either side, since a large
+#    template like the browser one lags the rest), plus anything built in the
+#    last two days, and remove what came before. That is exactly the pile-up
+#    this job exists for: forty images built in a week, superseded within hours.
+GRACE_HOURS="${KYB_PRUNE_TEMPLATE_GRACE_HOURS:-48}"
+newest=$(docker images --filter 'reference=eve-sandbox-template' --format '{{.CreatedAt}}' 2>/dev/null |
+  sort -r | head -1 | awk '{print $1" "$2}')
+if [ -n "$newest" ]; then
+  newest_epoch=$(date -u -d "$newest" +%s 2>/dev/null || echo 0)
+  cutoff_epoch=$(date -u -d "${GRACE_HOURS} hours ago" +%s 2>/dev/null || echo 0)
+  batch_epoch=$((newest_epoch - 3600))
+  # Whichever window is more generous wins: the current batch is never at risk.
+  [ "$batch_epoch" -lt "$cutoff_epoch" ] && cutoff_epoch=$batch_epoch
+  docker images --filter 'reference=eve-sandbox-template' --format '{{.CreatedAt}}\t{{.ID}}' 2>/dev/null |
+    while IFS="$(printf '\t')" read -r created image; do
+      [ -z "$image" ] && continue
+      when=$(echo "$created" | awk '{print $1" "$2}')
+      when_epoch=$(date -u -d "$when" +%s 2>/dev/null || echo 0)
+      if [ "$when_epoch" -lt "$cutoff_epoch" ]; then
+        # An image a container still references refuses to go, which is correct:
+        # never break a live session to reclaim space.
+        docker rmi "$image" >/dev/null 2>&1 && echo "removed superseded sandbox template ${image} (${when})"
+      fi
+    done
+fi
+
+# 5. Dangling layers — untagged, unreferenced, and nothing will ever want them.
+docker image prune -f
 
 df -h / | tail -1
 echo "=== done ==="
