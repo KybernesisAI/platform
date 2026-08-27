@@ -1,6 +1,7 @@
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, isImage, parseMedia, type MediaRef } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
+import { SessionStore } from "./sessions.js";
 
 /**
  * What one turn can carry: prose, or prose with the things attached to it.
@@ -91,8 +92,17 @@ export function buzzBridge(options: BuzzBridgeOptions) {
    * previous person's answer. The turn itself runs correctly, as the right
    * person, against the right connections; only the text posted back is
    * somebody else's, which is the most convincing way to look broken.
+   *
+   * Kept on DISK, not in memory. The eve session is durable; the knowledge of
+   * which session belongs to a channel was not, so a restart orphaned every
+   * conversation — the next message opened a new session and the agent said it
+   * had no context, while the old session sat intact holding a reply nobody was
+   * left to read.
    */
-  const sessions = new Map<string, { id: string; streamIndex: number }>();
+  const sessions = new SessionStore(
+    process.env.BUZZ_SESSIONS_FILE ?? ".buzz-sessions.json",
+  );
+  if (sessions.size > 0) log(`resumed ${sessions.size} conversation(s) from the last run`);
   /** Who has already been sent a link, so a room full of strangers is not a room full of spam. */
   const invited = new Map<string, number>();
 
@@ -199,7 +209,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     // long as that turn runs.
     const client = clientFor(pubkey);
 
-    const existing = sessions.get(channel);
+    const existing = sessions.get(community, channel);
     if (existing) {
       try {
         const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
@@ -235,13 +245,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         const response = await session.send(message, { clientContext: { buzzCommunity: community, buzzChannel: channel } });
         const result = await response.result();
         // Where this turn left the conversation, so the next one starts after it.
-        sessions.set(channel, { id: existing.id, streamIndex: session.state.streamIndex });
+        sessions.set(community, channel, { id: existing.id, streamIndex: session.state.streamIndex });
         return result.message ?? "";
       } catch (error) {
         // A session the agent no longer holds cannot be resumed. Starting a new one loses the
         // thread but keeps the conversation alive, which is the better of the two failures.
         log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
-        sessions.delete(channel);
+        sessions.delete(community, channel);
       }
     }
     const created = await client.sessions.create({
@@ -249,7 +259,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       clientContext: { buzzCommunity: community, buzzChannel: channel },
     });
     const reply = (await created.response.result()).message ?? "";
-    sessions.set(channel, {
+    sessions.set(community, channel, {
       id: created.session.state.sessionId,
       streamIndex: created.session.state.streamIndex,
     });
