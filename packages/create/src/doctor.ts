@@ -291,6 +291,34 @@ export async function doctor(): Promise<void> {
     }
 
     /**
+     * Disk, on a host whose runtime does not clean up after itself.
+     *
+     * eve builds a sandbox template per session configuration and keeps every
+     * one, and leaves session containers running long after their turn ended.
+     * The result is gigabytes a day on a working agent, and the failure it
+     * eventually produces looks like anything except a full disk.
+     */
+    if (capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes") {
+      const job = capture("sh", ["-c", "test -x /etc/cron.daily/kyb-docker-prune && echo yes"])?.trim();
+      const percent = Number(capture("sh", ["-c", "df / | awk 'NR==2{print $5}' | tr -d '%'"])?.trim() ?? 0);
+      if (job !== "yes") {
+        add(
+          "warn",
+          "no daily docker reclaim on this host",
+          "sandbox images and abandoned session containers accumulate by the gigabyte; `kyb upgrade` installs /etc/cron.daily/kyb-docker-prune",
+        );
+      } else if (percent >= 80) {
+        add(
+          "fail",
+          `disk ${percent}% full despite the reclaim job`,
+          "run it now: sudo /etc/cron.daily/kyb-docker-prune, and check what else is on this host",
+        );
+      } else {
+        add("pass", `daily docker reclaim installed (disk ${percent}% used)`);
+      }
+    }
+
+    /**
      * Instructions that name a tool the agent does not have.
      *
      * `deliver` mounts with the engineer layer, which is mounted on the builder

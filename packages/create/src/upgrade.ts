@@ -199,6 +199,63 @@ function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
   }
 }
 
+/**
+ * Keep the agent host from filling up with what the runtime leaves behind.
+ *
+ * @remarks
+ * eve builds a sandbox template image per session configuration and never
+ * collects the old ones, and it leaves session CONTAINERS running — a turn that
+ * took four minutes can still own a container, and its writable layer, eight
+ * days later. Forty stale images accumulated on one agent in a week; another
+ * reached 94% full and began failing in ways that looked like anything but a
+ * disk problem. Every self-hosted agent hits this; it is a property of the
+ * runtime, not of any one deployment.
+ *
+ * Installed rather than documented, and DAILY rather than weekly, because the
+ * accumulation is measured in gigabytes per day on an agent doing real work.
+ * The first version of this ran weekly and was already too slow.
+ */
+function repairDockerPrune(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/exe"]) return;
+  if (capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() !== "yes") return;
+
+  const installed = capture("sh", ["-c", "test -x /etc/cron.daily/kyb-docker-prune && echo yes"]);
+  if (installed?.trim() === "yes") return;
+
+  const source = join(cwd, "node_modules/@kybernesis/exe/scripts/docker-prune.sh");
+  if (!existsSync(source)) return;
+
+  // `sudo -n`: this runs inside an upgrade, and an upgrade that stops to ask
+  // for a password in the middle of an unattended run is worse than one that
+  // says what it could not do.
+  const ok = run(
+    "sh",
+    [
+      "-c",
+      // The weekly predecessor is removed in the same breath: two jobs pruning
+      // the same host is not twice as safe, it is one more thing to reason
+      // about when something unexpected disappears.
+      `sudo -n cp ${JSON.stringify(source)} /etc/cron.daily/kyb-docker-prune && ` +
+        `sudo -n chmod 755 /etc/cron.daily/kyb-docker-prune && ` +
+        `sudo -n rm -f /etc/cron.weekly/docker-prune`,
+    ],
+    { cwd, allowFail: true, quiet: true },
+  );
+
+  if (ok) {
+    console.log(`  ${green("+")} installed the daily docker reclaim (/etc/cron.daily/kyb-docker-prune)`);
+    console.log(
+      `    ${dim("eve leaves sandbox images and running session containers behind; this collects them.")}\n`,
+    );
+  } else {
+    console.log(
+      `  ${yellow("!")} could not install the docker reclaim job (needs sudo). Without it this host ` +
+        `fills with stale sandbox images. Run:\n` +
+        `    ${dim("sudo cp node_modules/@kybernesis/exe/scripts/docker-prune.sh /etc/cron.daily/kyb-docker-prune && sudo chmod 755 /etc/cron.daily/kyb-docker-prune")}`,
+    );
+  }
+}
+
 export async function upgrade(skipEval: boolean): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -206,8 +263,8 @@ export async function upgrade(skipEval: boolean): Promise<void> {
 
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
+  // Env-only, so it is safe before anything is installed.
   repairLocalQueueTimeouts(cwd, deps);
-  repairBuzzSetup(cwd, deps);
   const toUpgrade: string[] = [];
   const unresolved: string[] = [];
   for (const name of kybernesisPackages(deps)) {
@@ -265,11 +322,28 @@ export async function upgrade(skipEval: boolean): Promise<void> {
 
   if (toUpgrade.length === 0) {
     console.log(`\n${green("Everything is at latest certified versions.")}\n`);
+    // Still repair: being on the right versions is not the same as being set
+    // up. An agent can sit at latest for weeks with a capability switched off.
+    repairBuzzSetup(cwd, deps);
+    repairDockerPrune(cwd, deps);
     return;
   }
 
   console.log(bold(`\nInstalling: ${toUpgrade.join(", ")}\n`));
   run("npm", ["install", ...toUpgrade], { cwd });
+
+  /**
+   * Repairs run AFTER the install, not before.
+   *
+   * Both of these copy files out of packages that the install has just put
+   * there — a proxy script, a cron job, a CLI. Running them first meant looking
+   * for a file the older installed version did not ship: the repair found
+   * nothing, said nothing, and only worked on the NEXT upgrade. Which is a
+   * bug that hides itself, because by then it looks like it always worked.
+   */
+  repairBuzzSetup(cwd, deps);
+  repairDockerPrune(cwd, deps);
+
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {
     // A framework bump must also pass discovery/compile, not just types.
