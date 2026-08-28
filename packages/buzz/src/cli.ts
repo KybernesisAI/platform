@@ -316,6 +316,7 @@ else if (command === "id") {
                                    comma-separated
     BUZZ_AGENT_URL                 where the agent listens (default http://127.0.0.1:8000)
     BUZZ_KEYFILE                   this agent's key (default ~/.kybernesis/buzz-agent.json)
+    BUZZ_SESSIONS_FILE             channel-to-session continuity store
     KYBERNESIS_ISSUER              the control plane
     KYBERNESIS_AGENT_CREDENTIAL    this agent's credential
 `);

@@ -52,11 +52,26 @@ test("a session the agent no longer holds can be forgotten, and stays forgotten"
 test("a corrupt store costs history, not the agent", () => {
   const file = join(dir(), "sessions.json");
   writeFileSync(file, "{ this is not json");
+  const errors = [];
   // Refusing to start would turn a lost mapping into a dead bridge.
-  const store = new SessionStore(file);
+  const store = new SessionStore(file, { onError: (message) => errors.push(message) });
   assert.equal(store.size, 0);
+  assert.match(errors[0], /could not load Buzz session store/);
   store.set("relay-a", "channel-1", { id: "wrun_new", streamIndex: 0 });
   assert.equal(new SessionStore(file).get("relay-a", "channel-1")?.id, "wrun_new");
+});
+
+test("an unwritable store is reported while the bridge remains usable", () => {
+  const blocker = join(dir(), "not-a-directory");
+  writeFileSync(blocker, "file");
+  const errors = [];
+  const store = new SessionStore(join(blocker, "sessions.json"), {
+    onError: (message) => errors.push(message),
+  });
+  store.set("relay-a", "channel-1", { id: "wrun_memory_only", streamIndex: 1 });
+
+  assert.equal(store.get("relay-a", "channel-1")?.id, "wrun_memory_only");
+  assert.match(errors[0], /could not write Buzz session store/);
 });
 
 test("conversations nobody has touched for a month are not carried forever", () => {
