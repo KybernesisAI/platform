@@ -96,10 +96,20 @@ export default defineMcpClientConnection({
     "The ${dept} team's long-term memory (Arcana): remember, recall, search, timeline, and brain notes.",
   auth: {
     getToken: async () => {
+      // The eval brain is a DIFFERENT workspace, so it needs its own key —
+      // Arcana keys answer 403 outside the workspace they were minted for.
+      // Recognised by name rather than by suffix: an eval workspace does not
+      // have to be called "<agent>-eval", and matching on the suffix sends a
+      // custom one through the company key, where every memory eval fails with
+      // a 403 that reads as the agent's memory being broken.
+      // Falls back to the old suffix rule when nothing names the eval brain, so
+      // an agent written before this variable existed keeps working untouched.
+      const evalWorkspace = process.env.ARCANA_EVAL_WORKSPACE;
+      const isEval = evalWorkspace
+        ? workspace === evalWorkspace
+        : workspace.endsWith("-eval");
       const token =
-        (workspace.endsWith("-eval")
-          ? process.env.ARCANA_EVAL_API_KEY
-          : undefined) ??
+        (isEval ? process.env.ARCANA_EVAL_API_KEY : undefined) ??
         process.env.ARCANA_${upper}_API_KEY ??
         process.env.ARCANA_API_KEY;
       if (!token) throw new Error("ARCANA_${upper}_API_KEY is not set.");
@@ -129,9 +139,16 @@ if (!COMPANY) {
 }
 const DM = process.env.ARCANA_DM_WORKSPACE ?? COMPANY;
 
+// Same rule as the department connections: the eval brain is named, not
+// guessed from a suffix.
+// Falls back to the old suffix rule when nothing names the eval brain, so an
+// agent written before this variable existed keeps working untouched.
+const EVAL = process.env.ARCANA_EVAL_WORKSPACE;
+const IS_EVAL = EVAL ? COMPANY === EVAL : COMPANY.endsWith("-eval");
+
 export default arcana({
   apiKey:
-    (COMPANY.endsWith("-eval") ? process.env.ARCANA_EVAL_API_KEY : undefined) ??
+    (IS_EVAL ? process.env.ARCANA_EVAL_API_KEY : undefined) ??
     process.env.ARCANA_API_KEY!,
   workspace: COMPANY,
   // DM sessions carry surface:"dm" via @kybernesis/multiplayer.

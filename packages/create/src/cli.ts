@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bold, dim, red } from "./util.js";
+import { add } from "./add.js";
 import { init, type InitOptions } from "./init.js";
 import { doctor } from "./doctor.js";
 import { upgrade } from "./upgrade.js";
@@ -69,6 +70,7 @@ function initOptions(rest: string[]): InitOptions {
 /** What each command is for, in one line, as a person would ask for it. */
 const COMMANDS: Record<string, string> = {
   init: "Scaffold a new agent: governed, remembering, multiplayer, self-testing.",
+  add: "Add a chat surface to an agent that already exists.",
   doctor: "Check this machine and this project before an engagement.",
   arcana: "Set the memory workspaces and keys this agent uses.",
   skills: "Install the FDE skill suite (--global for every project).",
@@ -118,6 +120,9 @@ if (rest.includes("--help") || rest.includes("-h")) {
 switch (command) {
   case "init":
     await init(rest.find((a) => !a.startsWith("-")), initOptions(rest));
+    break;
+  case "add":
+    await add(rest.find((a) => !a.startsWith("-")), rest.slice(1));
     break;
   case "doctor":
     await doctor();
@@ -195,6 +200,8 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}
+  ${bold("kyb add channel <kind>")}
+      ${dim("slack|imessage|telegram|discord|web — writes the channel, deps and env")}
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code
       --global          ${dim("install to ~/.claude/skills instead of this repo")}
