@@ -692,7 +692,10 @@ const exe = createAnthropic({
 
 export default defineEvalConfig({
   // A different provider from the agent under test, on purpose.
-  judge: { model: exe(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-4-6") },
+  // Verified against the exe integration rather than assumed: it validates model
+  // names and refuses one it does not carry, so a stale default here fails the
+  // whole suite at the judge rather than at anything the agent did.
+  judge: { model: exe(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-5") },
   // Real model and real memory on every turn: generous timeout, gentle concurrency.
   timeoutMs: 300_000,
   maxConcurrency: 1,
