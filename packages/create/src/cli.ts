@@ -59,6 +59,7 @@ function initOptions(rest: string[]): InitOptions {
     studio: rest.includes('--studio'),
     channel: flag(rest, "channel") as InitOptions["channel"],
     host: flag(rest, "host") as InitOptions["host"],
+    model: flag(rest, "model"),
     subagents: subs === undefined ? undefined : subs.split(',').map((s) => s.trim()).filter(Boolean),
     yes: rest.includes('--yes') || rest.includes('-y'),
   };
@@ -190,6 +191,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --channel=<kind>  ${dim("none|slack|imessage|telegram|discord|web  (default: none)")}
       --host=<kind>     ${dim("vercel|exe                                (default: vercel)")}
       --subagents=a,b   ${dim("department subagents                      (default: none)")}
+      --model=<id>      ${dim("provider/model-id                         (default: sonnet 5)")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}

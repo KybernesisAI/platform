@@ -12,6 +12,7 @@ import {
   green,
   run,
   slug,
+  red,
   yellow,
 } from "./util.js";
 import {
@@ -65,6 +66,18 @@ export interface InitOptions {
   channel?: ChannelKind;
   /** Where the agent runs. Default "vercel". */
   host?: HostKind;
+  /**
+   * The model, as provider/model-id.
+   *
+   * @remarks
+   * Passed straight through to `eve init`, and that is why it exists: without
+   * it eve ends its scaffold by opening its interactive model picker, which
+   * needs a terminal UI. On a laptop that is a prompt; on a headless machine
+   * it is `--input requires the interactive UI` and a scaffold that stops
+   * after step one having already written the project — so `--yes` was never
+   * actually non-interactive.
+   */
+  model?: string;
   /** Department subagents. Default NONE. */
   subagents?: string[];
   /** Skip prompts and take the flags/defaults as given. */
@@ -123,8 +136,28 @@ export async function init(rawName: string | undefined, options: InitOptions = {
 
   const plan = channelPlan(channel, name, host);
 
+  const model = options.model ?? DEFAULT_MODEL;
+
   console.log(bold(`\n1/6  Scaffolding eve agent (eve@${EVE_VERSION}) …`));
-  run("npx", [`eve@${EVE_VERSION}`, "init", name]);
+  // eve's scaffold ends by opening its interactive model picker
+  // (`eve dev --input /model`), which exits non-zero wherever there is no
+  // terminal UI — AFTER the project is fully created and its dependencies
+  // installed. Treating that as a failure makes headless scaffolding
+  // impossible, which is what a machine building itself has to do.
+  //
+  // Nothing is lost by ignoring it: agent.ts is overwritten below with our own
+  // template carrying the chosen model, so eve's pick would not have survived
+  // this function either. `--model` is deliberately NOT passed through — eve
+  // refuses an id it cannot find in the AI Gateway catalog and then creates
+  // nothing at all, and an exe-hosted agent takes its model from EXE_MODEL,
+  // not from the gateway.
+  run("npx", [`eve@${EVE_VERSION}`, "init", name], { allowFail: true });
+
+  // The real test of that step, since its exit code cannot be trusted.
+  if (!existsSync(join(dir, "package.json"))) {
+    console.error(red(`\n  eve did not create a project in ${dir}. Nothing else can run.`));
+    process.exit(1);
+  }
 
   console.log(bold("\n2/6  Adding the Kybernesis registry + core packages …"));
   run("npx", ["eve", "registry", "add", `@kybernesis=${REGISTRY_URL}`], { cwd: dir });
@@ -181,7 +214,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
   }
 
-  const engPlan = engineer ? engineerPlan(host, DEFAULT_MODEL) : null;
+  const engPlan = engineer ? engineerPlan(host, model) : null;
   if (engPlan) {
     console.log(bold("\n2c   Engineer subagent: workshop sandbox + vision dev loop …"));
     run("npm", ["install", ...engPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
@@ -205,7 +238,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   try {
     unlinkSync(join(dir, "agent/instructions.md"));
   } catch {}
-  writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, DEFAULT_MODEL));
+  writeFileSync(join(dir, "agent/agent.ts"), hostAgentTs(host, model));
   writeFileSync(join(dir, "agent/extensions/arcana.ts"), rootArcanaTs());
   writeFileSync(join(dir, "evals/kybernesis.eval.ts"), evalFileTs(displayName, depts));
   // A self-hosted agent judges through its own integration; the default
@@ -370,7 +403,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   }
 
   console.log(bold("\n5/6  Env template + hermetic eval script …"));
-  writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env, host, DEFAULT_MODEL));
+  writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env, host, model));
   const pkgPath = join(dir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   pkg.scripts = { ...pkg.scripts, eval: evalScript(name, depts) };
