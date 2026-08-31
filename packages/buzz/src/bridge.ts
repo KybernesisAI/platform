@@ -1,23 +1,11 @@
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
-import { fetchMedia, isImage, parseMedia, type MediaRef } from "./media.js";
+import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
+import { answerTurn, composeMessage } from "./turn.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-/**
- * What one turn can carry: prose, or prose with the things attached to it.
- *
- * Narrower than the client's own union on purpose — this is what a chat message
- * can actually contain, and a wider type here would invite parts the bridge has
- * no way to produce.
- */
-type TurnMessage =
-  | string
-  | Array<
-      | { type: "text"; text: string }
-      | { type: "image"; image: Uint8Array; mediaType: string }
-    >;
 import { Client } from "eve/client";
 import { BuzzRelay, type NostrEvent } from "./relay.js";
 import { loadKey, npubEncode, type AgentKey } from "./keys.js";
@@ -170,109 +158,6 @@ export function buzzBridge(options: BuzzBridgeOptions) {
    * the message arrived on.
    */
   /**
-   * One inbound message, as the parts a turn can carry.
-   *
-   * @remarks
-   * Returns a plain string when there is nothing but text, so the common case
-   * stays exactly as it was — a change in the shape of every ordinary turn is
-   * not worth paying for the rare one.
-   *
-   * A failed fetch does NOT throw. The person is owed an answer either way, and
-   * an agent told "there was an attachment I could not retrieve" can say so;
-   * an agent told nothing answers the caption and looks like it ignored the
-   * picture, which is the bug being fixed.
-   */
-  async function composeMessage(text: string, attachments: MediaRef[]): Promise<TurnMessage> {
-    if (attachments.length === 0) return text;
-
-    const parts: Exclude<TurnMessage, string> = [];
-    if (text) parts.push({ type: "text", text });
-
-    for (const ref of attachments) {
-      try {
-        const media = await fetchMedia(key, ref);
-        if (isImage(media.mediaType)) {
-          parts.push({ type: "image", image: media.bytes, mediaType: media.mediaType });
-        } else {
-          parts.push({
-            type: "text",
-            text: `[The sender attached a ${media.mediaType} file, which cannot be read as an image. Tell them what you received and ask for it in a readable form if you need it.]`,
-          });
-        }
-      } catch (error) {
-        log(`could not fetch an attachment: ${(error as Error).message}`);
-        parts.push({
-          type: "text",
-          text: `[The sender attached a file, and it could not be retrieved (${(error as Error).message}). Say so rather than answering as if there were no attachment.]`,
-        });
-      }
-    }
-    return parts;
-  }
-
-  async function ask(channel: string, message: TurnMessage, pubkey: string, community: string): Promise<string> {
-    // Built per turn, for the person whose turn it is — and kept current for as
-    // long as that turn runs.
-    const client = clientFor(pubkey);
-
-    const existing = sessions.get(community, channel);
-    if (existing) {
-      try {
-        const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
-
-        /**
-         * Move to the true end of the conversation before speaking.
-         *
-         * `send()` opens its response stream at the position the handle already
-         * holds and stops at the FIRST turn boundary it meets. If anything is
-         * still unread there — the tail of a turn that outlived its reader, a
-         * turn that was running when the bridge restarted — that boundary
-         * belongs to the older turn. The read ends on it, this turn's answer is
-         * never collected, and the stored position stays one turn behind.
-         *
-         * Which makes it permanent: every later turn reads the previous turn's
-         * tail. The channel answers nothing, then answers a question from ten
-         * minutes ago, and a fresh conversation elsewhere works perfectly —
-         * because a fresh conversation has nothing left over to trip on.
-         *
-         * Draining first costs one bounded read of only what is unread, and it
-         * repairs a position that has already drifted rather than requiring
-         * anyone to notice. Non-following, so it ends at the tail instead of
-         * waiting for the future.
-         */
-        let unread = 0;
-        for await (const _ of session.stream({ follow: false, startIndex: existing.streamIndex })) {
-          unread += 1;
-        }
-        if (unread > 0) {
-          log(`caught up on ${unread} unread event(s) in ${channel.slice(0, 8)} before answering`);
-        }
-
-        const response = await session.send(message, { clientContext: { buzzCommunity: community, buzzChannel: channel } });
-        const result = await response.result();
-        // Where this turn left the conversation, so the next one starts after it.
-        sessions.set(community, channel, { id: existing.id, streamIndex: session.state.streamIndex });
-        return result.message ?? "";
-      } catch (error) {
-        // A session the agent no longer holds cannot be resumed. Starting a new one loses the
-        // thread but keeps the conversation alive, which is the better of the two failures.
-        log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
-        sessions.delete(community, channel);
-      }
-    }
-    const created = await client.sessions.create({
-      message,
-      clientContext: { buzzCommunity: community, buzzChannel: channel },
-    });
-    const reply = (await created.response.result()).message ?? "";
-    sessions.set(community, channel, {
-      id: created.session.state.sessionId,
-      streamIndex: created.session.state.streamIndex,
-    });
-    return reply;
-  }
-
-  /**
    * Send someone the link that makes them known, privately.
    *
    * @remarks
@@ -389,11 +274,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
      * "I got a file I cannot read" is a worse answer than the truth only if
      * you never wanted the truth.
      */
-    const message = await composeMessage(text, attachments);
+    const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () => ask(channel, message, event.pubkey, from));
+      const reply = await serialize(channel, () =>
+        answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log),
+      );
       if (!reply) {
         /**
          * Silence is the worst answer available.
