@@ -646,6 +646,13 @@ export { default } from "@kybernesis/engineer";
 
   if (onExe) {
     files.push({
+      path: "agent/subagents/builder/hooks/sandbox-cleanup.ts",
+      content: `export { terminalSandboxCleanupHook as default } from "@kybernesis/exe/sandbox-cleanup";\n`,
+    });
+  }
+
+  if (onExe) {
+    files.push({
       path: "agent/subagents/builder/tools/preview.ts",
       content: `export { previewTool as default } from "@kybernesis/exe/preview";
 `,

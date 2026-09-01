@@ -7,7 +7,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "eve": "^0.38.3",
+    "eve": "^0.47.7",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -40,6 +40,10 @@
     "./preview": {
       "types": "./dist/preview.d.ts",
       "default": "./dist/preview.js"
+    },
+    "./sandbox-cleanup": {
+      "types": "./dist/sandbox-cleanup.d.ts",
+      "default": "./dist/sandbox-cleanup.js"
     }
   },
   "scripts": {
@@ -51,11 +55,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.38.3",
+    "eve": "0.47.7",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0",
+    "eve": ">=0.47.0 <0.48.0",
     "zod": "^4"
   },
   "engines": {

@@ -32,7 +32,7 @@ where it lives, and how to fix things. Last full update: **2026-08-08**.
 
 ## Current state snapshot (2026-08-08)
 
-- **eve pin: 0.38.3** (Kybernesis-certified 2026-08-17; do NOT bump without the
+- **eve pin: 0.47.7** (Kybernesis-certified 2026-09-01; do NOT bump without the
   certification flow in the certification skill). 0.31.0 is the migration wall: it
   replaced continuation-token session APIs with ID-addressed handles, so anything
   crossing it moves together. Remote-agent CALLBACKS do not work between hosts that

@@ -15,11 +15,11 @@
   },
   "dependencies": {
     "@kybernesis/arcana": "^0.3.0",
-    "@kybernesis/enterprise": "^0.5.0",
-    "@kybernesis/evals": "^0.3.0",
+    "@kybernesis/enterprise": "^0.7.0",
+    "@kybernesis/evals": "^0.5.0",
     "@vercel/connect": "0.4.3",
     "ai": "^7.0.38",
-    "eve": "^0.38.3",
+    "eve": "^0.47.7",
     "zod": "4.4.3"
   },
   "devDependencies": {

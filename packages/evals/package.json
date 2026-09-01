@@ -32,11 +32,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.38.3",
+    "eve": "0.47.7",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0"
+    "eve": ">=0.47.0 <0.48.0"
   },
   "engines": {
     "node": ">=20"

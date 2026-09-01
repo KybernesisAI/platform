@@ -24,12 +24,12 @@
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0",
+    "eve": ">=0.47.0 <0.48.0",
     "zod": "^3.23.0 || ^4.0.0",
     "@kybernesis/enterprise": ">=0.3.0"
   },
   "devDependencies": {
-    "@kybernesis/enterprise": "^0.6.0",
+    "@kybernesis/enterprise": "^0.7.0",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
 import { repairManageRestart } from "./systemd.js";
+import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -206,6 +207,16 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+function repairSandboxCleanupHooks(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/exe"]) return;
+  const added = repairTerminalSandboxCleanupHooks(cwd);
+  if (added.length === 0) return;
+  console.log(
+    `  ${green("+")} installed terminal sandbox cleanup for ${added.length} agent scope(s) ` +
+      `${dim("(completed and failed sessions only)")}\n`,
+  );
+}
+
 /**
  * Keep package-owned host files synchronized with the package that installed them.
  *
@@ -378,6 +389,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     // Still repair: being on the right versions is not the same as being set
     // up. An agent can sit at latest for weeks with a capability switched off.
     repairBuzzSetup(cwd, deps);
+    repairSandboxCleanupHooks(cwd, deps);
     repairHostArtifacts(cwd, deps);
     repairManageRestart(cwd, deps);
     return;
@@ -396,6 +408,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
    * bug that hides itself, because by then it looks like it always worked.
    */
   repairBuzzSetup(cwd, deps);
+  repairSandboxCleanupHooks(cwd, deps);
   repairHostArtifacts(cwd, deps);
   repairManageRestart(cwd, deps);
 
