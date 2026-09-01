@@ -7,6 +7,7 @@
  */
 
 import { claudeProxyReady, isLoopbackUrl } from "./claude.js";
+import { inspectDockerTemplates } from "./docker-templates.js";
 
 export interface HostCheck {
   name: string;
@@ -20,7 +21,7 @@ export interface HostPreflightResult {
 }
 
 export interface HostPreflightOptions {
-  /** Agent directory, for reading durable workflow state. Defaults to cwd. */
+  /** Agent project directory, for sandbox templates and durable workflow state. Defaults to cwd. */
   appDir?: string;
   /** LLM integration base URL. Defaults to EXE_LLM_URL or the default personal integration. */
   llmBaseUrl?: string;
@@ -58,6 +59,8 @@ async function probe(url: string, init?: RequestInit): Promise<Response | null> 
  *   fails only at the first turn, in production.
  * - **eve responds** — `eve start` silently exits when a Vercel-Connect-backed
  *   channel or sandbox can't get an OIDC token off-Vercel.
+ * - **Docker sandbox templates provisioned** — reclaim can remove an image
+ *   while the server and its API-only capabilities remain healthy.
  * - **Required env present** — `eve start` does NOT load `.env.local` the way
  *   `eve dev` does; variables must be exported into the process.
  * - **Slack: exactly one socket connection** — Slack round-robins events across
@@ -71,6 +74,25 @@ export async function hostPreflight(
   const checks: HostCheck[] = [];
   const llm = (options.llmBaseUrl ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1").replace(/\/$/, "");
   const eve = (options.eveUrl ?? process.env.EVE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+
+  const templateInspection = await inspectDockerTemplates({ appDir: options.appDir ?? process.cwd() });
+  if (templateInspection.status === "present") {
+    checks.push({
+      name: "Docker sandbox templates provisioned",
+      ok: true,
+      detail: `${templateInspection.images.length}/${templateInspection.sandboxes.length} current template images present`,
+    });
+  } else if (templateInspection.status === "failed") {
+    for (const issue of templateInspection.issues) {
+      checks.push({
+        name: issue.kind === "missing-marker"
+          ? `Docker sandbox template unresolved: ${issue.subject}`
+          : `Docker sandbox template unavailable: ${issue.subject}`,
+        ok: false,
+        detail: issue.detail,
+      });
+    }
+  }
 
   const models = await probe(`${llm}/models`);
   checks.push({

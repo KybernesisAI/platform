@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { inspectDockerTemplates, type DockerTemplateInspection } from "./docker-templates.js";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 
 type Verdict = "pass" | "warn" | "fail";
@@ -10,10 +11,27 @@ const MARK: Record<Verdict, string> = {
   fail: red("✗"),
 };
 
-interface Check {
+export interface Check {
   verdict: Verdict;
   label: string;
   detail?: string;
+}
+
+export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Check[] {
+  if (result.status === "skipped") return [];
+  if (result.status === "present") {
+    return [{
+      verdict: "pass",
+      label: `Docker sandbox templates provisioned (${result.images.length}/${result.sandboxes.length})`,
+    }];
+  }
+  return result.issues.map((issue) => ({
+    verdict: "fail",
+    label: issue.kind === "missing-marker"
+      ? `Docker sandbox template unresolved: ${issue.subject}`
+      : `Docker sandbox template unavailable: ${issue.subject}`,
+    detail: issue.detail,
+  }));
 }
 
 async function head(url: string, headers?: Record<string, string>): Promise<number | null> {
@@ -211,6 +229,11 @@ export async function doctor(): Promise<void> {
     Boolean(deps["@kybernesis/exe"]) ||
     existsSync(join(cwd, "agent/sandbox/sandbox.ts")) &&
       readFileSync(join(cwd, "agent/sandbox/sandbox.ts"), "utf8").includes("docker(");
+  const templateInspection = await inspectDockerTemplates({ appDir: cwd });
+  for (const check of dockerTemplateDoctorChecks(templateInspection)) {
+    add(check.verdict, check.label, check.detail);
+  }
+
   if (selfHosted) {
     // Vercel Connect needs Vercel OIDC — it CANNOT work off-Vercel, for Slack,
     // the Vercel MCP connection, or anything else. Every such connection has to
