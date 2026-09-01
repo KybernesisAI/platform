@@ -20,8 +20,29 @@ npx eve start
 
 Merely sourcing the file creates shell variables that may not be inherited by
 the child process. `set -a` marks assignments for export, and `set +a` restores
-the shell's normal behavior afterward. Put production-only variables directly
-in the systemd unit rather than in `.env.local`.
+the shell's normal behavior afterward.
+
+Install the package-owned unit from the agent directory:
+
+```bash
+bash node_modules/@kybernesis/exe/scripts/install-service.sh
+```
+
+`kyb upgrade` refreshes an existing generated unit when its content or mode
+drifts, but does not create a missing unit or restart the service. Keep persistent
+host-specific settings in a systemd drop-in instead of editing the generated
+unit, so package refreshes do not erase them:
+
+```bash
+sudo systemctl edit <name>-agent
+# writes /etc/systemd/system/<name>-agent.service.d/override.conf
+sudo systemctl daemon-reload
+sudo systemctl restart <name>-agent
+```
+
+For inspection or repair, the installer also supports `--unit-path`,
+`--print-unit`, and `--refresh-unit`. The refresh mode rewrites the unit and runs
+`systemctl daemon-reload` without enabling or restarting the service.
 
 Once the unit exists, restart the agent through the service instead of running
 `scripts/eve-server.sh` independently. Running both gives two supervisors

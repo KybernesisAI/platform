@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
+import { reconcileHostArtifact } from "./host-artifacts.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -199,61 +200,78 @@ function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
   }
 }
 
+/** Quote one argument for the manual shell commands printed after a failed repair. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 /**
- * Keep the agent host from filling up with what the runtime leaves behind.
+ * Keep package-owned host files synchronized with the package that installed them.
  *
- * @remarks
- * eve builds a sandbox template image per session configuration and never
- * collects the old ones, and it leaves session CONTAINERS running — a turn that
- * took four minutes can still own a container, and its writable layer, eight
- * days later. Forty stale images accumulated on one agent in a week; another
- * reached 94% full and began failing in ways that looked like anything but a
- * disk problem. Every self-hosted agent hits this; it is a property of the
- * runtime, not of any one deployment.
- *
- * Installed rather than documented, and DAILY rather than weekly, because the
- * accumulation is measured in gigabytes per day on an agent doing real work.
- * The first version of this ran weekly and was already too slow.
+ * Existing artifacts are compared even when the capability they support is
+ * temporarily unavailable. Missing cron installation remains Docker-gated, and
+ * a missing systemd unit remains an explicit operator choice.
  */
-function repairDockerPrune(cwd: string, deps: Record<string, string>): void {
+function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   if (!deps["@kybernesis/exe"]) return;
-  if (capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() !== "yes") return;
 
-  const installed = capture("sh", ["-c", "test -x /etc/cron.daily/kyb-docker-prune && echo yes"]);
-  if (installed?.trim() === "yes") return;
+  const scripts = join(cwd, "node_modules/@kybernesis/exe/scripts");
+  const pruneSource = join(scripts, "docker-prune.sh");
+  const pruneTarget = "/etc/cron.daily/kyb-docker-prune";
+  const hasDocker =
+    capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes";
 
-  const source = join(cwd, "node_modules/@kybernesis/exe/scripts/docker-prune.sh");
-  if (!existsSync(source)) return;
+  if (existsSync(pruneSource)) {
+    const pruneResult = reconcileHostArtifact({
+      targetPath: pruneTarget,
+      desiredContent: readFileSync(pruneSource),
+      expectedMode: 0o755,
+      installIfMissing: hasDocker,
+      owner: "@kybernesis/exe/scripts/docker-prune.sh",
+      update: () =>
+        run("sudo", ["-n", "install", "-m", "0755", pruneSource, pruneTarget], {
+          cwd,
+          allowFail: true,
+          quiet: true,
+        }),
+      manualCommand: `sudo install -m 0755 ${shellQuote(pruneSource)} ${pruneTarget}`,
+    });
 
-  // `sudo -n`: this runs inside an upgrade, and an upgrade that stops to ask
-  // for a password in the middle of an unattended run is worse than one that
-  // says what it could not do.
-  const ok = run(
-    "sh",
-    [
-      "-c",
-      // The weekly predecessor is removed in the same breath: two jobs pruning
-      // the same host is not twice as safe, it is one more thing to reason
-      // about when something unexpected disappears.
-      `sudo -n cp ${JSON.stringify(source)} /etc/cron.daily/kyb-docker-prune && ` +
-        `sudo -n chmod 755 /etc/cron.daily/kyb-docker-prune && ` +
-        `sudo -n rm -f /etc/cron.weekly/docker-prune`,
-    ],
-    { cwd, allowFail: true, quiet: true },
-  );
-
-  if (ok) {
-    console.log(`  ${green("+")} installed the daily docker reclaim (/etc/cron.daily/kyb-docker-prune)`);
-    console.log(
-      `    ${dim("eve leaves sandbox images and running session containers behind; this collects them.")}\n`,
-    );
-  } else {
-    console.log(
-      `  ${yellow("!")} could not install the docker reclaim job (needs sudo). Without it this host ` +
-        `fills with stale sandbox images. Run:\n` +
-        `    ${dim("sudo cp node_modules/@kybernesis/exe/scripts/docker-prune.sh /etc/cron.daily/kyb-docker-prune && sudo chmod 755 /etc/cron.daily/kyb-docker-prune")}`,
-    );
+    if ((pruneResult === "current" || pruneResult === "updated") && existsSync("/etc/cron.weekly/docker-prune")) {
+      const removed = run("sudo", ["-n", "rm", "-f", "/etc/cron.weekly/docker-prune"], {
+        cwd,
+        allowFail: true,
+        quiet: true,
+      });
+      if (!removed) {
+        console.log(
+          `  ${yellow("!")} the daily docker reclaim is current, but the legacy weekly job remains. Run:\n` +
+            `    ${dim("sudo rm -f /etc/cron.weekly/docker-prune")}`,
+        );
+      }
+    }
   }
+
+  const serviceScript = join(scripts, "install-service.sh");
+  if (!existsSync(serviceScript)) return;
+  const unitTarget = capture("bash", [serviceScript, "--unit-path"], cwd)?.trim();
+  const unitContent = capture("bash", [serviceScript, "--print-unit"], cwd);
+  if (!unitTarget || unitContent === null) return;
+
+  reconcileHostArtifact({
+    targetPath: unitTarget,
+    desiredContent: Buffer.from(unitContent),
+    expectedMode: 0o644,
+    installIfMissing: false,
+    owner: "@kybernesis/exe/scripts/install-service.sh",
+    update: () =>
+      run("env", ["KYB_NONINTERACTIVE=1", "bash", serviceScript, "--refresh-unit"], {
+        cwd,
+        allowFail: true,
+        quiet: true,
+      }),
+    manualCommand: `bash ${shellQuote(serviceScript)} --refresh-unit`,
+  });
 }
 
 export async function upgrade(skipEval: boolean): Promise<void> {
@@ -325,7 +343,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     // Still repair: being on the right versions is not the same as being set
     // up. An agent can sit at latest for weeks with a capability switched off.
     repairBuzzSetup(cwd, deps);
-    repairDockerPrune(cwd, deps);
+    repairHostArtifacts(cwd, deps);
     return;
   }
 
@@ -342,7 +360,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
    * bug that hides itself, because by then it looks like it always worked.
    */
   repairBuzzSetup(cwd, deps);
-  repairDockerPrune(cwd, deps);
+  repairHostArtifacts(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {

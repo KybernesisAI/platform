@@ -20,16 +20,8 @@ NAME=${AGENT_NAME:-$(basename "$APP")}
 PORT=${PORT:-8000}
 UNIT=/etc/systemd/system/${NAME}-agent.service
 
-if [ ! -f "$APP/package.json" ]; then
-  echo "install-service: $APP does not look like an agent (no package.json)" >&2
-  exit 1
-fi
-if [ ! -f "$APP/.env.local" ]; then
-  echo "install-service: no .env.local in $APP — the agent would start with no credentials" >&2
-  exit 1
-fi
-
-sudo tee "$UNIT" >/dev/null <<UNITFILE
+render_unit() {
+  cat <<UNITFILE
 [Unit]
 Description=${NAME} eve agent
 # docker.service because sandboxes live in it: started before docker is up, the
@@ -60,10 +52,70 @@ StandardError=append:${APP}/cli.log
 [Install]
 WantedBy=multi-user.target
 UNITFILE
+}
 
-sudo systemctl daemon-reload
-sudo systemctl enable "${NAME}-agent" >/dev/null 2>&1
-sudo systemctl restart "${NAME}-agent"
+sudo_command() {
+  if [ "${KYB_NONINTERACTIVE:-0}" = "1" ]; then
+    sudo -n "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+validate_agent() {
+  if [ ! -f "$APP/package.json" ]; then
+    echo "install-service: $APP does not look like an agent (no package.json)" >&2
+    exit 1
+  fi
+  if [ ! -f "$APP/.env.local" ]; then
+    echo "install-service: no .env.local in $APP — the agent would start with no credentials" >&2
+    exit 1
+  fi
+}
+
+write_unit() {
+  local tmp
+  tmp=$(mktemp) || exit 1
+  render_unit >"$tmp"
+  if ! sudo_command install -m 0644 "$tmp" "$UNIT"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+}
+
+case "${1:-}" in
+  --unit-path)
+    [ "$#" -eq 1 ] || { echo "install-service: --unit-path takes no arguments" >&2; exit 2; }
+    printf '%s\n' "$UNIT"
+    exit 0
+    ;;
+  --print-unit)
+    [ "$#" -eq 1 ] || { echo "install-service: --print-unit takes no arguments" >&2; exit 2; }
+    render_unit
+    exit 0
+    ;;
+  --refresh-unit)
+    [ "$#" -eq 1 ] || { echo "install-service: --refresh-unit takes no arguments" >&2; exit 2; }
+    validate_agent
+    write_unit || exit 1
+    sudo_command systemctl daemon-reload || exit 1
+    echo "install-service: ${NAME}-agent unit refreshed (service not restarted)"
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    echo "install-service: unknown option: $1" >&2
+    exit 2
+    ;;
+esac
+
+validate_agent
+write_unit || exit 1
+sudo_command systemctl daemon-reload || exit 1
+sudo_command systemctl enable "${NAME}-agent" >/dev/null 2>&1 || exit 1
+sudo_command systemctl restart "${NAME}-agent" || exit 1
 
 echo "install-service: ${NAME}-agent installed and started"
 echo "  logs:   tail -f ${APP}/cli.log"
