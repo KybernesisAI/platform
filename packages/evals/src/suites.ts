@@ -193,8 +193,14 @@ export function routingSuite(entries: Array<{ subagent: string; prompt?: string 
     }
     return defineEval({
       description: `Routing: a ${subagent}-shaped task is delegated to the ${subagent} specialist.`,
-      // Delegation runs a full child session doing real memory work.
-      timeoutMs: 360_000,
+      // Delegation runs a full child session doing real memory work — and on
+      // a specialist pinned to a slow model (Kyber's research on grok: 350–450s
+      // per turn, plus the root's own delegation round trip) six minutes was
+      // the edge, not a bound. The agent's evals.config timeoutMs does NOT
+      // override this per-eval value, so it has to be generous here: a routing
+      // eval that fails is meant to say "delegated to the wrong specialist",
+      // never "a model was slow today".
+      timeoutMs: 900_000,
       async test(t) {
         await t.send(resolved);
         t.succeeded();
