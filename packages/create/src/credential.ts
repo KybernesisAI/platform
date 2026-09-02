@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
+import { systemdRestartCommand } from "./systemd.js";
 import { signIn } from "./register.js";
 import { bold, dim, green, red, yellow } from "./util.js";
 
@@ -150,13 +151,14 @@ export async function credential(options: {
   }
 
   console.log(dim("  Restarting so the agent reads it …"));
+  const restart = systemdRestartCommand(name);
   try {
-    execFileSync("ssh", [target, `cd ~/${name} && bash scripts/eve-server.sh restart >/dev/null 2>&1 &`], {
+    execFileSync("ssh", [target, `${restart} >/dev/null 2>&1 &`], {
       encoding: "utf8",
     });
-    console.log(green("  ✓ restart triggered"));
+    console.log(green("  ✓ systemd restart triggered"));
   } catch {
-    console.log(yellow(`  ! could not restart — run: ssh ${target} 'cd ~/${name} && bash scripts/eve-server.sh restart'`));
+    console.log(yellow(`  ! could not restart — run: ssh ${target} '${restart}'`));
   }
 
   console.log(

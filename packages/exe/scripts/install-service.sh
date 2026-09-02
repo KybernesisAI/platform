@@ -13,12 +13,16 @@
 # limit and sat "starting" forever while nobody noticed it was down. A unit is a
 # small file that encodes several expensive lessons, so it belongs in the
 # package with the lessons written down next to it.
-set -u
+set -euo pipefail
 
 APP=${EVE_APP_DIR:-$(pwd)}
 NAME=${AGENT_NAME:-$(basename "$APP")}
 PORT=${PORT:-8000}
 UNIT=/etc/systemd/system/${NAME}-agent.service
+RESTART_COMMAND="sudo -n systemctl restart ${NAME}-agent"
+MANAGE_FILE="$APP/agent/channels/kyb.ts"
+LEGACY_RESTART_COMMAND='bash scripts/eve-server.sh restart'
+SYSTEMD_RESTART_COMMAND="$RESTART_COMMAND"
 
 # The first line of every unit this script writes. `kyb upgrade` refreshes a
 # unit only when it carries this line: a unit written by hand — every host from
@@ -43,8 +47,17 @@ WorkingDirectory=${APP}
 # Sourced the same way scripts/eve-server.sh does it, because \`eve start\` does
 # NOT read .env.local the way \`eve dev\` does: set -a exports what the file
 # assigns, and without it every credential in there is invisible to the server.
+# Build before every start, so a restart never serves whatever .output was
+# last written — a package bump, a pulled commit or a Studio install becomes
+# the running agent the moment the service comes back. A failed build stops
+# the start (systemd will not run ExecStart after a failed ExecStartPre), and
+# with Restart=always that shows up as the crash loop below rather than as an
+# agent quietly running old code.
+ExecStartPre=/bin/bash -lc 'set -a && . ./.env.local && set +a && npx eve build'
 ExecStart=/bin/bash -lc 'set -a && . ./.env.local && set +a && exec npx eve start --host 0.0.0.0'
 Environment=PORT=${PORT}
+# A build with sandbox templates to prewarm can take several minutes.
+TimeoutStartSec=900
 Restart=always
 RestartSec=15
 # A crash loop should be loud rather than infinite: five failures inside five
@@ -137,3 +150,31 @@ sudo_command systemctl restart "${NAME}-agent" || exit 1
 echo "install-service: ${NAME}-agent installed and started"
 echo "  logs:   tail -f ${APP}/cli.log"
 echo "  status: systemctl status ${NAME}-agent"
+
+case "$RESTART_STATE" in
+  migrated)
+    echo "  manage: migrated agent/channels/kyb.ts to: ${RESTART_COMMAND}"
+    ;;
+  custom)
+    echo >&2
+    echo "install-service: WARNING — preserved customized restartCommand in agent/channels/kyb.ts." >&2
+    echo "  systemd now owns this agent. A command that invokes scripts/eve-server.sh can start" >&2
+    echo "  a second server against the same durable store. Review it and use exactly:" >&2
+    echo "    restartCommand: \"${RESTART_COMMAND}\"," >&2
+    echo "  This requires passwordless/noninteractive sudo; verify with:" >&2
+    echo "    ${RESTART_COMMAND}" >&2
+    echo "  Unlike eve-server.sh, systemctl restart does not wait for an in-flight turn;" >&2
+    echo "  an install during a conversation can interrupt that turn." >&2
+    ;;
+  missing)
+    if [ -f "$MANAGE_FILE" ]; then
+      echo >&2
+      echo "install-service: WARNING — management routes have no restartCommand." >&2
+      echo "  Add this exact line to agent/channels/kyb.ts so Studio installs become live" >&2
+      echo "  without creating a second, independently supervised server:" >&2
+      echo "    restartCommand: \"${RESTART_COMMAND}\"," >&2
+      echo "  This requires passwordless/noninteractive sudo. systemctl restart also does" >&2
+      echo "  not wait for an in-flight turn, so an install can interrupt that turn." >&2
+    fi
+    ;;
+esac

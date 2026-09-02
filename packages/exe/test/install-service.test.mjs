@@ -167,3 +167,17 @@ test("every generated unit opens with the managed marker, and the marker is prin
     f.cleanup();
   }
 });
+
+test("the unit builds before it starts, and gives the build time to prewarm", () => {
+  const f = fixture();
+  try {
+    const unit = run(["--print-unit"], f.env).stdout;
+    const pre = unit.indexOf("ExecStartPre=/bin/bash -lc 'set -a && . ./.env.local && set +a && npx eve build'");
+    const start = unit.indexOf("ExecStart=/bin/bash -lc 'set -a && . ./.env.local && set +a && exec npx eve start");
+    assert.ok(pre > 0 && start > pre, "ExecStartPre precedes ExecStart");
+    assert.match(unit, /^TimeoutStartSec=900$/m);
+    assert.match(unit, /^Restart=always$/m);
+  } finally {
+    f.cleanup();
+  }
+});

@@ -439,8 +439,9 @@ export function hostSteps(host: HostKind, name: string): string[] {
       `Attach an LLM integration (ChatGPT subscription, your API key, or exe's gateway):`,
       `    ssh exe.dev integrations setup chatgpt --name work   # once, device-code`,
       `    ssh exe.dev integrations edit llm --openai=chatgpt --openai-account=work`,
-      `Install Node 24 + deps on the VM, then: npx eve build && bash scripts/eve-server.sh start`,
-      `\`eve start\` does NOT read .env.local — scripts/eve-server.sh loads it for you`,
+      `Install Node 24 + deps on the VM, fill .env.local, then install the production service:`,
+      `    bash node_modules/@kybernesis/exe/scripts/install-service.sh`,
+      `The systemd unit exports .env.local, builds before every start, and is the single supervisor`,
     ];
   }
   return [

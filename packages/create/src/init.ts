@@ -36,6 +36,7 @@ import {
 import { suiteDir } from "./skills.js";
 import { configureArcana } from "./arcana.js";
 import { upsertEnv } from "./envfile.js";
+import { systemdRestartCommand } from "./systemd.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -344,28 +345,27 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
 
     /**
-     * Point the management routes at that script.
+     * Point management restarts at the one supervisor that owns production.
      *
-     * The registry template ships `restartCommand` commented out next to an
-     * example path, because on Vercel there is nothing to restart. On a VM
-     * there is, and the correct value is not a guess — it is the script three
-     * lines above. Left commented, every install through Studio succeeds and
-     * then reports that a restart is still required, which reads as a broken
-     * feature rather than one line of config nobody was asked for.
+     * install-service.sh installs systemd with a build-before-start gate. Using
+     * eve-server.sh after that would create a second supervisor and can leave
+     * two executors racing over one durable store. `-n` makes missing sudo
+     * authorization fail instead of hanging a detached Studio restart.
      */
     const manageChannelFile = join(dir, "agent/channels/kyb.ts");
     if (existsSync(manageChannelFile)) {
       const appRoot = `/home/exedev/${name}`;
+      const restartCommand = systemdRestartCommand(name);
       const wired = readFileSync(manageChannelFile, "utf8").replace(
         /export default manageChannel\(\{[\s\S]*?\}\);/,
         () =>
           `export default manageChannel({\n` +
           `  appRoot: process.env.EVE_APP_DIR ?? ${JSON.stringify(appRoot)},\n` +
-          `  restartCommand: "bash scripts/eve-server.sh restart",\n` +
+          `  restartCommand: ${JSON.stringify(restartCommand)},\n` +
           `});`,
       );
       writeFileSync(manageChannelFile, wired);
-      console.log(dim("     agent/channels/kyb.ts — restart wired to that script"));
+      console.log(dim(`     agent/channels/kyb.ts — restart wired to systemd (${restartCommand})`));
     }
   }
 
