@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { inspectDockerTemplates, type DockerTemplateInspection } from "./docker-templates.js";
+import { pathToFileURL } from "node:url";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 
 type Verdict = "pass" | "warn" | "fail";
@@ -17,6 +17,14 @@ export interface Check {
   detail?: string;
 }
 
+/** The shape @kybernesis/exe's inspector returns; declared here so create keeps zero runtime deps. */
+export interface DockerTemplateInspection {
+  status: "skipped" | "present" | "failed";
+  sandboxes: readonly string[];
+  images: readonly string[];
+  issues: readonly { kind: "missing-marker" | "missing-image" | "incomplete-set" | "docker-error"; subject: string; detail: string }[];
+}
+
 export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Check[] {
   if (result.status === "skipped") return [];
   if (result.status === "present") {
@@ -26,12 +34,33 @@ export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Ch
     }];
   }
   return result.issues.map((issue) => ({
-    verdict: "fail",
+    // A set the newest build did not fully cover still serves: the uncovered
+    // scope builds on first use. A current marker with no image, or a daemon
+    // that will not answer, is a fault.
+    verdict: issue.kind === "incomplete-set" ? "warn" : "fail",
     label: issue.kind === "missing-marker"
       ? `Docker sandbox template unresolved: ${issue.subject}`
-      : `Docker sandbox template unavailable: ${issue.subject}`,
+      : issue.kind === "incomplete-set"
+        ? `Docker sandbox templates incomplete: ${issue.subject}`
+        : `Docker sandbox template unavailable: ${issue.subject}`,
     detail: issue.detail,
   }));
+}
+
+/**
+ * The inspector lives in @kybernesis/exe, next to the runtime that owns the
+ * templates; create already resolves that package's scripts out of
+ * node_modules at runtime, and does the same here rather than carry a second
+ * copy of a heuristic this subtle. No exe package means no Docker host, and
+ * no check.
+ */
+export async function inspectDockerTemplatesViaExe(cwd: string): Promise<DockerTemplateInspection | null> {
+  const module = join(cwd, "node_modules/@kybernesis/exe/dist/docker-templates.js");
+  if (!existsSync(module)) return null;
+  const { inspectDockerTemplates } = (await import(pathToFileURL(module).href)) as {
+    inspectDockerTemplates: (options: { appDir: string }) => Promise<DockerTemplateInspection>;
+  };
+  return inspectDockerTemplates({ appDir: cwd });
 }
 
 async function head(url: string, headers?: Record<string, string>): Promise<number | null> {
@@ -229,8 +258,8 @@ export async function doctor(): Promise<void> {
     Boolean(deps["@kybernesis/exe"]) ||
     existsSync(join(cwd, "agent/sandbox/sandbox.ts")) &&
       readFileSync(join(cwd, "agent/sandbox/sandbox.ts"), "utf8").includes("docker(");
-  const templateInspection = await inspectDockerTemplates({ appDir: cwd });
-  for (const check of dockerTemplateDoctorChecks(templateInspection)) {
+  const templateInspection = await inspectDockerTemplatesViaExe(cwd);
+  for (const check of templateInspection ? dockerTemplateDoctorChecks(templateInspection) : []) {
     add(check.verdict, check.label, check.detail);
   }
 

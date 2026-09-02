@@ -87,7 +87,9 @@ export async function hostPreflight(
       checks.push({
         name: issue.kind === "missing-marker"
           ? `Docker sandbox template unresolved: ${issue.subject}`
-          : `Docker sandbox template unavailable: ${issue.subject}`,
+          : issue.kind === "incomplete-set"
+            ? `Docker sandbox templates incomplete: ${issue.subject}`
+            : `Docker sandbox template unavailable: ${issue.subject}`,
         ok: false,
         detail: issue.detail,
       });

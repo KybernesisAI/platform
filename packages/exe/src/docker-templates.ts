@@ -17,6 +17,7 @@ export interface DockerTemplateFileSystem {
 
 export interface DockerCommandResult {
   ok: boolean;
+  stdout?: string;
   stderr?: string;
 }
 
@@ -26,7 +27,7 @@ export type DockerCommand = (
 ) => DockerCommandResult | Promise<DockerCommandResult>;
 
 export interface DockerTemplateIssue {
-  kind: "missing-marker" | "missing-image" | "docker-error";
+  kind: "missing-marker" | "missing-image" | "incomplete-set" | "docker-error";
   subject: string;
   detail: string;
 }
@@ -61,11 +62,19 @@ const nodeFileSystem: DockerTemplateFileSystem = {
   mtimeMs: (path) => statSync(path).mtimeMs,
 };
 
+/** Bounded: a wedged daemon must not hang `kyb doctor`, which runs unattended inside `kyb upgrade`. */
+const DOCKER_TIMEOUT_MS = 15_000;
+
 function defaultDockerCommand(command: string, args: readonly string[]): DockerCommandResult {
-  const result = spawnSync(command, [...args], { encoding: "utf8" });
+  const result = spawnSync(command, [...args], { encoding: "utf8", timeout: DOCKER_TIMEOUT_MS });
+  const timedOut = result.error?.name === "Error" && /ETIMEDOUT/.test(String(result.error.message ?? result.error));
   return {
-    ok: result.status === 0,
-    stderr: [result.stderr, result.error?.message].filter(Boolean).join("\n").trim(),
+    ok: result.status === 0 && !timedOut,
+    stdout: result.stdout ?? "",
+    stderr: [result.stderr, timedOut ? `timed out after ${DOCKER_TIMEOUT_MS}ms` : result.error?.message]
+      .filter(Boolean)
+      .join("\n")
+      .trim(),
   };
 }
 
@@ -233,8 +242,112 @@ function markerReference(fs: DockerTemplateFileSystem, markerPath: string): stri
   return `${DOCKER_TEMPLATE_IMAGE_REPOSITORY}:${basename(markerPath)}`;
 }
 
-function isMissingImage(stderr: string): boolean {
-  return /no such (?:image|object)/i.test(stderr);
+/** The three hashes eve encodes in a template tag: checkout, sandbox config, runtime. */
+export interface TemplateTagIdentity {
+  app: string;
+  config: string;
+  runtime: string;
+}
+
+/**
+ * `eve-sbx-tpl-docker-<app dir hash>-<sandbox config hash>-<runtime hash>`.
+ *
+ * The middle hash is the identity that matters here: one per sandbox
+ * configuration, stable across rebuilds of the same config, different for
+ * every scope. It is what lets a marker be matched to an image by WHAT it is
+ * rather than by where it sorts.
+ */
+export function parseTemplateTag(tag: string): TemplateTagIdentity | null {
+  const match = /^eve-sbx-tpl-docker-([0-9a-f]+)-([0-9a-f]+)-([0-9a-f]+)$/.exec(tag);
+  return match ? { app: match[1]!, config: match[2]!, runtime: match[3]! } : null;
+}
+
+/** One marker file, as eve left it, plus what its name says about it. */
+export interface TemplateMarker {
+  tag: string;
+  image: string;
+  mtimeMs: number;
+  identity: TemplateTagIdentity | null;
+}
+
+/**
+ * eve prewarms every template of a checkout together, so the current set
+ * shares a build time — twelve of Kyber's thirteen were committed in the same
+ * second, and the browser template lagged by minutes. An hour is wide enough
+ * for the largest template and narrow enough that yesterday's set is not in
+ * it. The same window the reclaim job uses.
+ */
+export const TEMPLATE_BATCH_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * The markers that describe the templates this checkout will use next.
+ *
+ * Markers accumulate — eve never removes one (forty on Kyber for thirteen
+ * sandboxes) — so "the newest N" says nothing about which sandbox any of
+ * them belongs to, and a partial rebuild puts two markers for the same scope
+ * at the top. Instead: take the newest prewarm batch, and within it keep one
+ * marker per sandbox-config hash (the newest). That is exactly the set eve
+ * will look for on its next turn, and a marker outside it is history.
+ */
+export function currentTemplateMarkers(markers: readonly TemplateMarker[]): TemplateMarker[] {
+  if (markers.length === 0) return [];
+  const newest = Math.max(...markers.map((marker) => marker.mtimeMs));
+  const batch = markers.filter((marker) => newest - marker.mtimeMs <= TEMPLATE_BATCH_WINDOW_MS);
+  const byIdentity = new Map<string, TemplateMarker>();
+  for (const marker of batch) {
+    const key = marker.identity ? `${marker.identity.app}:${marker.identity.config}` : `tag:${marker.tag}`;
+    const held = byIdentity.get(key);
+    if (!held || marker.mtimeMs > held.mtimeMs) byIdentity.set(key, marker);
+  }
+  return [...byIdentity.values()].sort((left, right) => left.tag.localeCompare(right.tag));
+}
+
+export function readTemplateMarkers(appDir: string, fs: DockerTemplateFileSystem = nodeFileSystem): TemplateMarker[] {
+  const markerDir = join(appDir, DOCKER_TEMPLATE_MARKER_DIRECTORY);
+  let entries: readonly { name: string; isFile: boolean }[];
+  try {
+    entries = fs.readDir(markerDir);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile)
+    .map((entry) => {
+      const path = join(markerDir, entry.name);
+      return {
+        tag: entry.name,
+        image: markerReference(fs, path),
+        mtimeMs: fs.mtimeMs(path),
+        identity: parseTemplateTag(entry.name),
+      };
+    });
+}
+
+/** Every `eve-sandbox-template` image the daemon holds, as `repository:tag`. One call, bounded. */
+async function listTemplateImages(
+  runDocker: DockerCommand,
+  dockerPath: string,
+): Promise<{ images: Set<string> } | { error: string }> {
+  let result: DockerCommandResult;
+  try {
+    result = await runDocker(dockerPath, [
+      "images",
+      "--filter",
+      `reference=${DOCKER_TEMPLATE_IMAGE_REPOSITORY}`,
+      "--format",
+      "{{.Repository}}:{{.Tag}}",
+    ]);
+  } catch (error) {
+    result = { ok: false, stderr: error instanceof Error ? error.message : String(error) };
+  }
+  if (!result.ok) return { error: result.stderr?.trim() || "Docker returned an unknown error" };
+  const images = new Set(
+    (result.stdout ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+  return { images };
 }
 
 export async function inspectDockerTemplates(
@@ -244,45 +357,57 @@ export async function inspectDockerTemplates(
   const sandboxes = discoverDockerTemplateSandboxes(options.appDir, fs);
   if (sandboxes.length === 0) return { status: "skipped", sandboxes, images: [], issues: [] };
 
-  const markerDir = join(options.appDir, DOCKER_TEMPLATE_MARKER_DIRECTORY);
-  let markers: { path: string; mtimeMs: number }[] = [];
-  try {
-    markers = fs.readDir(markerDir)
-      .filter((entry) => entry.isFile)
-      .map((entry) => ({ path: join(markerDir, entry.name), mtimeMs: fs.mtimeMs(join(markerDir, entry.name)) }))
-      .sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
-      .slice(0, sandboxes.length);
-  } catch {
-    markers = [];
-  }
-
-  const images = markers.map((marker) => markerReference(fs, marker.path));
+  const current = currentTemplateMarkers(readTemplateMarkers(options.appDir, fs));
+  const images = current.map((marker) => marker.image);
   const issues: DockerTemplateIssue[] = [];
-  for (const sandbox of sandboxes.slice(markers.length)) {
+
+  if (current.length === 0) {
     issues.push({
       kind: "missing-marker",
-      subject: sandbox,
-      detail: `No current Docker template marker exists for ${sandbox}. ${REPAIR_GUIDANCE}`,
+      subject: DOCKER_TEMPLATE_MARKER_DIRECTORY,
+      detail:
+        `No Docker template has been built for this checkout (${sandboxes.length} sandbox(es) configured). ` +
+        REPAIR_GUIDANCE,
+    });
+    return { status: "failed", sandboxes, images, issues };
+  }
+
+  if (current.length < sandboxes.length) {
+    // The newest prewarm did not cover every sandbox. Either it was a partial
+    // rebuild (a single scope on first use) or a scope has never been built;
+    // both mean the next turn on the uncovered scope builds a template first.
+    //
+    // `sandboxes` is a floor, not the exact count: a subagent that inherits
+    // the root sandbox has no sandbox file of its own yet still gets its own
+    // template (Kyber: one sandbox file, thirteen templates). More current
+    // markers than discovered sandboxes is therefore normal; fewer is not.
+    issues.push({
+      kind: "incomplete-set",
+      subject: `${current.length} of ${sandboxes.length} sandboxes`,
+      detail:
+        `The newest template build covered ${current.length} of ${sandboxes.length} configured sandbox(es); ` +
+        `the rest build on first use. ${REPAIR_GUIDANCE}`,
     });
   }
 
   const runDocker = options.runDocker ?? defaultDockerCommand;
   const dockerPath = options.dockerPath ?? process.env.EVE_DOCKER_PATH ?? "docker";
-  for (const image of images) {
-    let result: DockerCommandResult;
-    try {
-      result = await runDocker(dockerPath, ["image", "inspect", image]);
-    } catch (error) {
-      result = { ok: false, stderr: error instanceof Error ? error.message : String(error) };
-    }
-    if (result.ok) continue;
-    const stderr = result.stderr?.trim() || "Docker returned an unknown error";
+  const listed = await listTemplateImages(runDocker, dockerPath);
+  if ("error" in listed) {
     issues.push({
-      kind: isMissingImage(stderr) ? "missing-image" : "docker-error",
-      subject: image,
-      detail: isMissingImage(stderr)
-        ? `Docker template image ${image} is missing. ${REPAIR_GUIDANCE}`
-        : `Could not inspect Docker template image ${image}: ${stderr}. ${REPAIR_GUIDANCE}`,
+      kind: "docker-error",
+      subject: dockerPath,
+      detail: `Could not list Docker template images: ${listed.error}. ${REPAIR_GUIDANCE}`,
+    });
+    return { status: "failed", sandboxes, images, issues };
+  }
+
+  for (const marker of current) {
+    if (listed.images.has(marker.image)) continue;
+    issues.push({
+      kind: "missing-image",
+      subject: marker.image,
+      detail: `Docker template image ${marker.image} is missing (its marker is current). ${REPAIR_GUIDANCE}`,
     });
   }
 
