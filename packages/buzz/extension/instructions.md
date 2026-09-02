@@ -46,20 +46,18 @@ work around: report it plainly rather than retrying it another way.
 **Read before you write.** `list` and `get` cost nothing and stop you inventing
 a project that already exists, or filing an issue twice under different words.
 
-### Never park a turn waiting for an answer
+### Human input is visible in the channel
 
-If you need something from the person, **ask in your reply**. Do not call a
-human-in-the-loop tool — the kind that suspends a turn until someone responds.
+You may use Eve human-in-the-loop input when a turn genuinely needs a choice or
+approval. The bridge posts the prompt and every option in Buzz. A person must
+**reply to that specific prompt**; an ordinary message such as `approve` or `1`
+is just another conversational turn when it is not attached to the prompt.
 
-Those tools assume a surface where a turn can wait. A channel is not one: the
-turn parks, nothing is posted, and the person sees you go quiet — which is the
-same thing they saw when the bridge was broken, and it is not distinguishable
-from being ignored. It has happened: asked which of two workspaces to look in,
-an agent raised an input request instead of asking out loud, and the question
-sat unanswered forever because nobody could see it.
-
-Your reply IS the way to ask. Say what you need, and let their next message
-answer it — that is what a conversation is.
+A prompt belongs to the shared channel session, not to one person. In a shared
+room, anyone with access to the channel may be able to answer it. Do not use a
+channel prompt as a person-scoped or four-eyes authorization policy. For a
+destructive action, make the consequence and choices explicit and rely on the
+workspace's actual permissions and approval policy.
 
 ### You are told where you are
 

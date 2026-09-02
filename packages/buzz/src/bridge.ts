@@ -2,7 +2,7 @@ import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise"
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
-import { answerTurn, composeMessage, rejectedTurnReply } from "./turn.js";
+import { composeMessage, rejectedTurnReply, SessionCoordinator } from "./turn.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -216,6 +216,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     );
   }
 
+  const coordinator = new SessionCoordinator({
+    sessions,
+    clientFor,
+    relayFor: (community) => relays.get(community),
+    log,
+  });
+
   async function handle(event: NostrEvent, from: string): Promise<void> {
     const relay = relays.get(from);
     if (!relay) return;
@@ -264,49 +271,26 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         (attachments.length ? ` [+${attachments.length} attachment(s)]` : ""),
     );
 
-    /**
-     * Attachments become parts of the turn, or become words about themselves.
-     *
-     * An image the model can see goes in as bytes. Anything else — a zip, a
-     * PDF the model cannot read, a fetch that failed — goes in as a sentence
-     * saying so, because the alternative is an agent that answers the caption
-     * while the person waits for a reply about the file they sent. Being told
-     * "I got a file I cannot read" is a worse answer than the truth only if
-     * you never wanted the truth.
-     */
-    const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
     void relay.react(event.id, SEEN);
-    const stopTyping = relay.typingIn(channel);
+
     try {
-      const reply = await serialize(channel, () =>
-        answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log),
-      );
-      if (!reply) {
-        /**
-         * Silence is the worst answer available.
-         *
-         * An empty result used to end here, with a line in a log nobody was
-         * reading. In a room that is indistinguishable from the agent ignoring
-         * you — so people ask again, which is how one unanswered question
-         * became five, none of which looked like a fault to anyone watching.
-         */
-        log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
-        relay.reply(
-          channel,
-          "I didn't get an answer back for that one — ask me again and I'll retry.",
-          event,
+      if (attachments.length === 0) {
+        const routed = await serialize(channel, () =>
+          coordinator.respondToPrompt(from, channel, event.pubkey, text, event),
         );
-        return;
+        if (routed === "invalid") {
+          relay.reply(channel, coordinator.correctionFor(from, channel, event), event);
+          return;
+        }
+        if (routed === "submitted") return;
       }
-      relay.reply(channel, reply, event);
-      log(`replied (${reply.length} chars)`);
+
+      /** Attachments become Eve message parts, with an explicit text fallback. */
+      const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
+      await serialize(channel, () =>
+        coordinator.submitMessage(from, channel, event.pubkey, message, event),
+      );
     } catch (error) {
-      /**
-       * eve refused the turn as malformed. The conversation is intact — the
-       * session mapping was kept — but silence here is indistinguishable from
-       * being ignored, the same failure the empty-reply branch above exists
-       * for. Say what happened; the log gets the full error.
-       */
       const rejected = rejectedTurnReply(error);
       if (rejected) {
         log(`turn rejected for ${channel.slice(0, 8)}: ${(error as Error).message}`);
@@ -314,8 +298,6 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         return;
       }
       log(`failed to answer: ${(error as Error).message}`);
-    } finally {
-      stopTyping();
     }
   }
 
@@ -327,6 +309,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     relays: urls,
     start(): void {
       for (const relay of relays.values()) relay.connect();
+      coordinator.resumeStored();
       log(
         urls.length > 1
           ? `listening on ${urls.length} communities — turns run as whoever sent them`
@@ -335,6 +318,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     },
     /** Say goodbye rather than letting presence lapse: a stopped agent should not look online. */
     stop(): void {
+      coordinator.stop();
       for (const relay of relays.values()) relay.setPresence("offline");
       setTimeout(() => {
         for (const relay of relays.values()) relay.close();

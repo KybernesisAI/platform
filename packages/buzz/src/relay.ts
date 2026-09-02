@@ -87,6 +87,8 @@ export class BuzzRelay {
   private refusal: string | null = null;
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
+  /** Signed messages created before authentication; preserve identity and send once connected. */
+  private readonly pendingEvents: NostrEvent[] = [];
   private cursor = now();
 
   private readonly url: string;
@@ -210,6 +212,7 @@ export class BuzzRelay {
       this.backoff = 5_000;
       this.refusal = null;
       this.log(`authenticated as ${this.key.publicKey.slice(0, 12)}…`);
+      for (const event of this.pendingEvents.splice(0)) this.send(["EVENT", event]);
       this.keepPresent();
       this.poll();
       return;
@@ -258,8 +261,14 @@ export class BuzzRelay {
     this.pollTimer = setTimeout(() => this.poll(), this.pollMs);
   }
 
-  publish(event: { kind: number; tags: string[][]; content: string }): void {
-    this.send(["EVENT", finalizeEvent({ created_at: now(), ...event }, this.key.secretKey)]);
+  publish(event: { kind: number; tags: string[][]; content: string }): NostrEvent {
+    const signed = finalizeEvent({ created_at: now(), ...event }, this.key.secretKey) as NostrEvent;
+    if (this.authenticated && this.socket?.readyState === WebSocket.OPEN) {
+      this.send(["EVENT", signed]);
+    } else {
+      this.pendingEvents.push(signed);
+    }
+    return signed;
   }
 
   setPresence(status: PresenceStatus): void {
@@ -280,12 +289,12 @@ export class BuzzRelay {
     return () => clearInterval(timer);
   }
 
-  reply(channel: string, text: string, replyTo?: NostrEvent): void {
+  reply(channel: string, text: string, replyTo?: NostrEvent): NostrEvent {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
       tags.push(["e", replyTo.id], ["p", replyTo.pubkey]);
     }
-    this.publish({ kind: KIND_MESSAGE, tags, content: text });
+    return this.publish({ kind: KIND_MESSAGE, tags, content: text });
   }
 
   /** Sign one HTTP request as this agent (NIP-98), binding the signature to the body. */

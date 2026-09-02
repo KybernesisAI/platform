@@ -84,6 +84,18 @@ test("a challenge is answered with a signed event naming the relay and the chall
   assert.equal(tags.challenge, "challenge-123");
 });
 
+test("messages signed before authentication are queued and keep the returned identity", () => {
+  const { relay, socket } = connected();
+  const queued = relay.reply("channel-1", "caught up answer");
+  assert.equal(socket.published(KIND_MESSAGE).length, 0);
+
+  authenticate(socket);
+  const published = socket.published(KIND_MESSAGE);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].id, queued.id);
+  assert.equal(published[0].content, "caught up answer");
+});
+
 test("presence goes out on sign-in, so the agent does not look offline between sentences", () => {
   const { socket } = connected();
   authenticate(socket);
@@ -208,9 +220,10 @@ test("a reply is anchored to the message it answers and addressed back to its au
   authenticate(socket);
 
   const asked = { id: "msg-1", pubkey: "a".repeat(64), created_at: 1, kind: 9, tags: [], content: "?", sig: "" };
-  relay.reply("channel-1", "an answer", asked);
+  const returned = relay.reply("channel-1", "an answer", asked);
 
   const message = socket.published(KIND_MESSAGE).at(-1);
+  assert.equal(returned.id, message.id, "the caller receives the prompt identity needed for reply correlation");
   assert.equal(message.content, "an answer");
   assert.deepEqual(message.tags, [["h", "channel-1"], ["e", "msg-1"], ["p", "a".repeat(64)]]);
 });

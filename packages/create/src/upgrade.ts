@@ -6,6 +6,7 @@ import { reconcileHostArtifact } from "./host-artifacts.js";
 import { repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
+import { formatSessionInputLimit, inspectEveManifest } from "./session-limit.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -337,6 +338,17 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   });
 }
 
+
+function reportSessionInputLimit(cwd: string): void {
+  const inspection = inspectEveManifest(cwd);
+  if (inspection === null) {
+    console.log(`  ${yellow("!")} limits.maxInputTokensPerSession unverifiable (eve info --json failed)`);
+    return;
+  }
+  const mark = inspection.limit.status === "unverifiable" ? yellow("!") : green("✓");
+  console.log(`  ${mark} ${formatSessionInputLimit(inspection.limit)} ${dim("(read-only; agent/agent.ts unchanged)")}`);
+}
+
 export async function upgrade(skipEval: boolean): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -399,6 +411,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
         `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
     );
     repairManageRestart(cwd, deps);
+    reportSessionInputLimit(cwd);
     return;
   }
 
@@ -411,6 +424,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     repairSandboxCleanupHooks(cwd, deps);
     repairHostArtifacts(cwd, deps);
     repairManageRestart(cwd, deps);
+    reportSessionInputLimit(cwd);
     return;
   }
 
@@ -441,6 +455,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   repairSandboxCleanupHooks(cwd, deps);
   repairHostArtifacts(cwd, deps);
   repairManageRestart(cwd, deps);
+  reportSessionInputLimit(cwd);
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {

@@ -40,6 +40,23 @@ A member that only ever speaks looks offline between sentences, so the bridge al
 what a person's client publishes: presence on a heartbeat, a typing indicator while a turn is
 running, and 👀 on a message the moment it is picked up.
 
+## Human input and durable delivery
+
+Eve human-in-the-loop requests are rendered in the Buzz room with every prompt,
+option, description, and reply instruction. Buzz only treats a message as an
+input response when it is a reply to that visible prompt; the same text sent as
+an ordinary channel message remains an ordinary turn. Invalid prompt replies
+receive guidance listing the accepted choices.
+
+The bridge follows Eve's durable session stream for each channel. That follower,
+not the initiating HTTP request, owns assistant delivery. A final answer is
+therefore posted once even when another client resumes a parked session; when
+Buzz knows the triggering message it keeps the reply anchor, and an out-of-band
+continuation posts to the channel without inventing one.
+
+A HITL prompt is scoped to the shared channel session, not to one person. Do not
+use it as a substitute for person-scoped or four-eyes approval policy.
+
 ## More than one community
 
 One agent, one identity, many communities. Membership is each workspace's to
