@@ -41,8 +41,14 @@ test("upgrade repairs missing root and discovered local hooks idempotently", () 
     writeFileSync(join(cwd, "agent/subagents/sales/agent.ts"), "sales");
     writeFileSync(join(cwd, "agent/subagents/group/support/agent.ts"), "support");
 
+    // A scope that has switched its sandbox off never gets the hook.
+    mkdirSync(join(cwd, "agent/subagents/finance/tools"), { recursive: true });
+    writeFileSync(join(cwd, "agent/subagents/finance/agent.ts"), "finance");
+    writeFileSync(join(cwd, "agent/subagents/finance/tools/bash.ts"), 'import { disableTool } from "eve/tools";\nexport default disableTool();\n');
+
     const first = repairTerminalSandboxCleanupHooks(cwd);
     assert.equal(first.length, 3);
+    assert.equal(first.some((file) => file.includes("finance")), false);
     for (const file of first) assert.equal(readFileSync(file, "utf8"), managed);
     assert.deepEqual(repairTerminalSandboxCleanupHooks(cwd), []);
   } finally {

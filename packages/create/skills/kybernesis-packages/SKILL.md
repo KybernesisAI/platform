@@ -127,7 +127,7 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   asterisks onto the URL in Slack and breaks it. Coach agents in prose, not
   shell (WAFs eat shell-syntax Slack messages).
 - **ESM packaging**: relative imports need `.js` extensions (tsc doesn't
-  rewrite); eve is a peer dep with an explicit range (`>=0.47.0 <0.48.0`),
+  rewrite); eve is a peer dep with an explicit range (`>=0.49.0 <0.50.0`),
   pinned exactly in devDeps.
 - **Eval fixtures are hardened on purpose** — in-test nonces (eve caches
   compiled eval modules), per-run unique keys (workspaces accumulate),

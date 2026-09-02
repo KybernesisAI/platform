@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { scopeHasSandboxTools } from "./removed-default-tools.js";
 
 export const SANDBOX_CLEANUP_HOOK_FILE = "sandbox-cleanup.ts";
 
@@ -33,12 +34,19 @@ function findLocalSubagents(directory: string): string[] {
 /**
  * Add the dedicated managed hook where it is missing, without replacing an
  * authored file that happens to use the same path.
+ *
+ * Only scopes that can have a sandbox get it. `ctx.getSandbox()` PROVISIONS
+ * a sandbox when the session has none (eve docs, "Delete a sandbox": the next
+ * call provisions a fresh workspace), so a cleanup hook on a scope that has
+ * disabled its sandbox tools would start a container at session end in order
+ * to delete it — on Kyber, ten knowledge specialists doing that per closed
+ * session.
  */
 export function repairTerminalSandboxCleanupHooks(cwd: string): string[] {
   const agent = join(cwd, "agent");
   if (!existsSync(agent)) return [];
 
-  const scopes = [agent, ...findLocalSubagents(join(agent, "subagents"))];
+  const scopes = [agent, ...findLocalSubagents(join(agent, "subagents"))].filter(scopeHasSandboxTools);
   const added: string[] = [];
   for (const scope of scopes) {
     const hooks = join(scope, "hooks");

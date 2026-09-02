@@ -5,6 +5,7 @@ import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
 import { repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
+import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -207,6 +208,23 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+/**
+ * eve 0.39 removed glob and grep from the default tool set; see
+ * removed-default-tools.ts. Runs before typecheck because a stale disable
+ * file is a compile error from 0.39 on, and an upgrade must never leave an
+ * agent that cannot build.
+ */
+function repairRemovedDefaultTools(cwd: string): void {
+  const { removed, optedIn } = repairRemovedDefaultTools_(cwd);
+  for (const file of removed) {
+    console.log(`  ${green("-")} removed ${file} ${dim("(disabled a tool eve no longer provides by default; a compile error from eve 0.39)")}`);
+  }
+  for (const file of optedIn) {
+    console.log(`  ${green("+")} wrote ${file} ${dim("(keeps the tool this scope had on eve 0.38)")}`);
+  }
+  if (removed.length || optedIn.length) console.log();
+}
+
 function repairSandboxCleanupHooks(cwd: string, deps: Record<string, string>): void {
   if (!deps["@kybernesis/exe"]) return;
   const added = repairTerminalSandboxCleanupHooks(cwd);
@@ -389,6 +407,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     // Still repair: being on the right versions is not the same as being set
     // up. An agent can sit at latest for weeks with a capability switched off.
     repairBuzzSetup(cwd, deps);
+    repairRemovedDefaultTools(cwd);
     repairSandboxCleanupHooks(cwd, deps);
     repairHostArtifacts(cwd, deps);
     repairManageRestart(cwd, deps);
@@ -408,6 +427,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
    * bug that hides itself, because by then it looks like it always worked.
    */
   repairBuzzSetup(cwd, deps);
+  repairRemovedDefaultTools(cwd);
   repairSandboxCleanupHooks(cwd, deps);
   repairHostArtifacts(cwd, deps);
   repairManageRestart(cwd, deps);

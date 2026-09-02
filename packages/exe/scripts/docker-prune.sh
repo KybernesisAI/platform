@@ -12,14 +12,15 @@
 #   840MB–2.5GB each. A second agent reached 94% full and started failing in
 #   ways that looked like anything but a disk problem.
 #
-#   Worse, session CONTAINERS are left RUNNING. `docker container prune` only
-#   removes stopped ones, so a container from a turn that ended days ago sits
-#   there holding its writable layer forever. Seven such containers were found
-#   across four agents, the oldest four days old — for turns that took minutes.
+#   Session CONTAINERS stay around too: eve keeps one per durable session so a
+#   conversation can be resumed, and only deletes it when the session ends —
+#   which by default is thirty days after it began. The session.completed
+#   hook in @kybernesis/exe/sandbox-cleanup handles the ones that do end;
+#   this job is the week-long backstop for the ones that just go quiet.
 #
 # WHAT IS NEVER TOUCHED: volumes (a Claude subscription sign-in lives in one),
-# any image a running container depends on, and any session container younger
-# than the cutoff — that one might be a turn in flight.
+# any image a running container depends on, any session container younger
+# than the backstop, and any container this script cannot inspect.
 #
 # KYB_PRUNE_DRY_RUN=1 reports every decision and removes nothing.
 set -u
@@ -31,35 +32,81 @@ command -v docker >/dev/null 2>&1 || exit 0
 echo "=== $(date -u +%FT%TZ) start ==="
 df -h / | tail -1
 
-# 1. Abandoned session containers. A turn lasts minutes; anything older than the
-#    cutoff belongs to a session nobody is waiting on. Stopped first so the
-#    layer is released, then removed.
-cutoff=$(date -u -d "${CUTOFF_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || cutoff=""
-if [ -n "$cutoff" ]; then
-  docker ps -a --filter 'name=eve-sbx-ses' --format '{{.Names}}|{{.CreatedAt}}' 2>/dev/null |
-    while IFS='|' read -r name created; do
-      [ -z "$name" ] && continue
-      # CreatedAt is "2026-08-25 10:12:33 +0000 UTC"; the first two fields sort
-      # lexically against the cutoff because both are zero-padded UTC.
-      when=$(echo "$created" | awk '{print $1" "$2}')
-      if [ "$when" \< "$cutoff" ]; then
+# 1. Session containers.
+#
+#    Two facts pull in opposite directions. eve leaves a session's container
+#    running after the turn ends, and a session can be resumed days later —
+#    a thread picked up tomorrow reattaches to the same container and its
+#    /workspace, so "old" is not "dead": a 24-hour cut killed live threads.
+#    But the durable session that owns a container only ends at eve's
+#    sessionTimeoutMs, thirty days by default, and only THEN does the
+#    session.completed hook (@kybernesis/exe/sandbox-cleanup) delete the
+#    sandbox. On a busy agent that is a container per conversation for a
+#    month, and a delete that fails leaks forever.
+#
+#    So: the hook is the primary path and reclaims a closed session at once;
+#    this job is the backstop at a horizon that cannot plausibly be a live
+#    thread — a week. Stopped first so the layer is released, then removed;
+#    a container that restarts between the listing and the remove wins, which
+#    is why this is not `rm -f`. Inspect failures protect: not knowing what a
+#    container is never becomes permission to remove it.
+SESSION_HOURS="${KYB_PRUNE_SESSION_HOURS:-168}"
+session_cutoff=$(date -u -d "${SESSION_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || session_cutoff=""
+# A template build lasts minutes; a build container still up hours later is a
+# leak (three were found "Up 2 weeks" on one host). Nothing reattaches to one.
+BUILD_HOURS="${KYB_PRUNE_BUILD_HOURS:-6}"
+build_cutoff=$(date -u -d "${BUILD_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || build_cutoff=""
+docker ps -a --format '{{.ID}}|{{.Names}}|{{.CreatedAt}}|{{.Status}}' 2>/dev/null |
+  while IFS='|' read -r id name created status; do
+    [ -z "$id" ] && continue
+    role=$(docker inspect --format '{{ index .Config.Labels "eve.sandbox.role" }}' "$id" 2>/dev/null) || {
+      echo "skipping container ${name}: inspect failed"
+      continue
+    }
+    # CreatedAt is "2026-08-25 10:12:33 +0000 UTC"; the first two fields sort
+    # lexically against a cutoff because both are zero-padded UTC.
+    when=$(echo "$created" | awk '{print $1" "$2}')
+    case "$status" in Up*) running=1 ;; *) running=0 ;; esac
+    if [ "$role" = "session" ] || [ "${name#eve-sbx-ses-}" != "$name" ]; then
+      if [ -n "$session_cutoff" ] && [ "$when" \< "$session_cutoff" ]; then
         if [ -n "${KYB_PRUNE_DRY_RUN:-}" ]; then
-          echo "would remove stale session container ${name} (created ${when})"
+          echo "would remove session container ${name} (created ${when}, older than ${SESSION_HOURS}h)"
         else
-          echo "removing stale session container ${name} (created ${when})"
-          docker rm -f "$name" >/dev/null 2>&1
+          [ "$running" = 1 ] && docker stop "$id" >/dev/null 2>&1
+          docker rm "$id" >/dev/null 2>&1 && echo "removed session container ${name} (created ${when}, older than ${SESSION_HOURS}h)"
         fi
+      else
+        echo "keeping session container ${name} (created ${when})"
       fi
-    done
-fi
+      continue
+    fi
+    if [ "$role" = "template-build" ] || [ "${name#eve-sbx-tpl-}" != "$name" ]; then
+      if [ "$running" = 1 ] && { [ -z "$build_cutoff" ] || [ ! "$when" \< "$build_cutoff" ]; }; then
+        continue  # a build in progress
+      fi
+      if [ -n "${KYB_PRUNE_DRY_RUN:-}" ]; then
+        echo "would remove template build container ${name} (created ${when})"
+      else
+        docker rm -f "$id" >/dev/null 2>&1 && echo "removed template build container ${name} (created ${when})"
+      fi
+      continue
+    fi
+    # Anything else: only if it is already stopped. This host is the agent's;
+    # a stopped container of some other kind is nobody's, but a running one
+    # is not this job's to judge.
+    if [ "$running" = 0 ]; then
+      if [ -n "${KYB_PRUNE_DRY_RUN:-}" ]; then
+        echo "would remove stopped container ${name} (created ${when})"
+      else
+        docker rm "$id" >/dev/null 2>&1 && echo "removed stopped container ${name} (created ${when})"
+      fi
+    fi
+  done
 
-# 2. Whatever is already stopped.
-[ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker container prune -f
-
-# 3. Build cache — nothing depends on it, and a Rust or browser build leaves GBs.
+# 2. Build cache — nothing depends on it, and a Rust or browser build leaves GBs.
 [ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker builder prune -af
 
-# 4. Sandbox templates: keep each checkout's current set, drop superseded ones.
+# 3. Sandbox templates: keep each checkout's current set, drop superseded ones.
 #
 #    NOT "unused images older than N hours". Docker protects an image a
 #    container is USING, but a warm template with no session running is not in
@@ -127,7 +174,7 @@ awk '{print $1}' "$templates" | sort -u | while read -r app; do
 done
 rm -f "$templates"
 
-# 5. Dangling layers — untagged, unreferenced, and nothing will ever want them.
+# 4. Dangling layers — untagged, unreferenced, and nothing will ever want them.
 [ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker image prune -f
 
 df -h / | tail -1
