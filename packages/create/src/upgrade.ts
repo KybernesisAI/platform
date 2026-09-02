@@ -7,7 +7,8 @@ import { repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
-import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
+import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
+import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 
 /**
  * Which packages to upgrade: every `@kybernesis/*` this agent depends on.
@@ -66,6 +67,34 @@ function warnIfStale(): void {
       `compiled into this tool, so an old kyb reports an old pin as current.`,
   );
   console.log(`    ${dim("npm install -g @kybernesis/create@latest")}\n`);
+}
+
+export function agentInputLimitUpgradeMessage(limit: AgentInputLimit): string {
+  switch (limit.kind) {
+    case "explicit-numeric":
+      return `Eve max input tokens/session: ${limit.value.toLocaleString("en-US")} (explicit; unchanged)`;
+    case "explicit-uncapped":
+      return "Eve max input tokens/session: uncapped (explicit; unchanged)";
+    case "inherited":
+      return `Eve max input tokens/session: ${limit.value.toLocaleString("en-US")} inherited — set limits.maxInputTokensPerSession explicitly in agent/agent.ts; upgrade will not rewrite authored source`;
+    case "unresolved":
+      return `Eve max input tokens/session: unresolved (${limit.reason}); authored source was not changed`;
+  }
+}
+
+function reportAgentInputLimit(cwd: string): void {
+  const envPath = join(cwd, ".env.local");
+  const env = {
+    ...(existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {}),
+    ...(process.env as Record<string, string>),
+  };
+  const inspection = inspectEveAgent(cwd, env);
+  const limit: AgentInputLimit = inspection?.limit ?? {
+    kind: "unresolved",
+    reason: "eve info --json failed",
+  };
+  const marker = limit.kind === "inherited" || limit.kind === "unresolved" ? yellow("!") : green("✓");
+  console.log(`  ${marker} ${agentInputLimitUpgradeMessage(limit)}`);
 }
 
 /**
@@ -344,6 +373,8 @@ export async function upgrade(skipEval: boolean): Promise<void> {
 
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
+  // Read-only: report the compiled effective policy, never rewrite agent/agent.ts.
+  reportAgentInputLimit(cwd);
   // Env-only, so it is safe before anything is installed.
   repairLocalQueueTimeouts(cwd, deps);
   const toUpgrade: string[] = [];

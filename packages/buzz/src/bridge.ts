@@ -3,6 +3,14 @@ import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
 import { answerTurn, composeMessage, rejectedTurnReply } from "./turn.js";
+import {
+  followPendingConversation,
+  formatInputRequests,
+  invalidInputReply,
+  needsPendingFollower,
+  resolveInputReply,
+  respondToPendingConversation,
+} from "./hitl.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -140,10 +148,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
    * turns are ordered whether or not the people in it take turns.
    */
   const inFlight = new Map<string, Promise<unknown>>();
-  function serialize<T>(channel: string, work: () => Promise<T>): Promise<T> {
-    const queued = (inFlight.get(channel) ?? Promise.resolve()).then(work, work);
+  function serialize<T>(community: string, channel: string, work: () => Promise<T>): Promise<T> {
+    const key = SessionStore.key(community, channel);
+    const queued = (inFlight.get(key) ?? Promise.resolve()).then(work, work);
     // Kept only while it matters: the chain holds the LAST promise, not a history.
-    inFlight.set(channel, queued.catch(() => {}));
+    inFlight.set(key, queued.catch(() => {}));
     return queued;
   }
 
@@ -216,6 +225,96 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     );
   }
 
+  /** One abortable durable-stream follower owns each parked conversation. */
+  const followers = new Map<string, AbortController>();
+  const followerRestartTimers = new Map<string, NodeJS.Timeout>();
+  let stopped = false;
+
+  function clearFollowerRestart(conversation: string): void {
+    const timer = followerRestartTimers.get(conversation);
+    if (timer) clearTimeout(timer);
+    followerRestartTimers.delete(conversation);
+  }
+
+  function stopFollower(community: string, channel: string): void {
+    const conversation = SessionStore.key(community, channel);
+    clearFollowerRestart(conversation);
+    followers.get(conversation)?.abort();
+    followers.delete(conversation);
+  }
+
+  function startFollower(community: string, channel: string): void {
+    if (stopped) return;
+    const conversation = SessionStore.key(community, channel);
+    clearFollowerRestart(conversation);
+    if (followers.has(conversation)) return;
+    const stored = sessions.get(community, channel);
+    const relay = relays.get(community);
+    if (!stored || !needsPendingFollower(stored) || !stored.speakerPublicKey || !relay) return;
+
+    const controller = new AbortController();
+    followers.set(conversation, controller);
+    const session = clientFor(stored.speakerPublicKey).sessions.attach(stored.id, {
+      streamIndex: stored.streamIndex,
+    });
+    void followPendingConversation(
+      session,
+      stored,
+      {
+        // A stopped/replaced follower may already have queued a callback. Check
+        // its generation inside the same conversation queue used by inbound
+        // messages so stale state cannot overwrite a newer responder or cursor.
+        onState: (state) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          const current = sessions.get(community, channel);
+          if (state.pendingInputRequests?.length) {
+            sessions.set(community, channel, { ...state, promptEventIds: current?.promptEventIds });
+            return;
+          }
+          if (current?.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
+          sessions.set(community, channel, state);
+        }),
+        onInputRequested: (requests) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          const promptId = relay.reply(channel, formatInputRequests(requests));
+          if (!promptId) throw new Error("Buzz relay is not connected");
+          relay.watchReplies([promptId]);
+          const current = sessions.get(community, channel);
+          if (current) {
+            sessions.set(community, channel, {
+              ...current,
+              promptEventIds: [...(current.promptEventIds ?? []), promptId],
+            });
+          }
+          log(`posted another input request in ${channel.slice(0, 8)}`);
+        }),
+        onMessage: (message) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          if (!relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
+          log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
+        }),
+        onLog: log,
+      },
+      controller.signal,
+    ).catch((error) => {
+      if (!controller.signal.aborted) {
+        // Keep the persisted request, cursor and public identity. A later reply
+        // or process restart can refresh credentials and reattach.
+        log(`pending follower for ${channel.slice(0, 8)} disconnected (${(error as Error).message})`);
+      }
+    }).finally(() => {
+      if (followers.get(conversation) === controller) followers.delete(conversation);
+      const recoverable = sessions.get(community, channel);
+      if (!controller.signal.aborted && recoverable && needsPendingFollower(recoverable)) {
+        const timer = setTimeout(() => {
+          followerRestartTimers.delete(conversation);
+          startFollower(community, channel);
+        }, 1_000);
+        followerRestartTimers.set(conversation, timer);
+      }
+    });
+  }
+
   async function handle(event: NostrEvent, from: string): Promise<void> {
     const relay = relays.get(from);
     if (!relay) return;
@@ -223,25 +322,17 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     // Addressed by TAG, not by text. A name in prose is a string anyone can type; a p tag is what
     // the client emits when someone actually picks this member out of a mention list.
     const addressed = event.tags.some((t) => t[0] === "p" && t[1] === key.publicKey);
-    if (!channel || !addressed) return;
+    // A reply to a prompt this agent posted is an answer even when it names nobody: people answer
+    // a question by replying to it, not by mentioning the asker. Only while that prompt is open.
+    const repliedTo = event.tags.find((t) => t[0] === "e")?.[1];
+    const open = channel ? sessions.get(from, channel) : undefined;
+    const answersPrompt = Boolean(
+      repliedTo && open?.pendingInputRequests?.length && open.promptEventIds?.includes(repliedTo),
+    );
+    if (!channel || !(addressed || answersPrompt)) return;
 
     const text = String(event.content ?? "").trim();
     const attachments = parseMedia(event);
-
-    /**
-     * Drop only a message with NOTHING in it — and say so when we do.
-     *
-     * This guard used to test the text alone, and sat above the log line, so an
-     * image sent without a caption was discarded before anything was written
-     * down. From the outside the agent had simply ignored someone; from the
-     * inside there was no record that a message had ever arrived. The reply
-     * path was hardened against exactly this failure — an empty answer now
-     * says so out loud — and the receiving path was left as it was.
-     */
-    if (!text && attachments.length === 0) {
-      log(`nothing to answer in ${channel.slice(0, 8)} from ${event.pubkey.slice(0, 8)} — no text, no attachments`);
-      return;
-    }
 
     let speaker: SpeakerResolution;
     try {
@@ -264,49 +355,92 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         (attachments.length ? ` [+${attachments.length} attachment(s)]` : ""),
     );
 
-    /**
-     * Attachments become parts of the turn, or become words about themselves.
-     *
-     * An image the model can see goes in as bytes. Anything else — a zip, a
-     * PDF the model cannot read, a fetch that failed — goes in as a sentence
-     * saying so, because the alternative is an agent that answers the caption
-     * while the person waits for a reply about the file they sent. Being told
-     * "I got a file I cannot read" is a worse answer than the truth only if
-     * you never wanted the truth.
-     */
-    const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () =>
-        answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log),
-      );
-      if (!reply) {
-        /**
-         * Silence is the worst answer available.
-         *
-         * An empty result used to end here, with a line in a log nobody was
-         * reading. In a room that is indistinguishable from the agent ignoring
-         * you — so people ask again, which is how one unanswered question
-         * became five, none of which looked like a fault to anyone watching.
-         */
-        log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
-        relay.reply(
-          channel,
-          "I didn't get an answer back for that one — ask me again and I'll retry.",
-          event,
-        );
+      await serialize(from, channel, async () => {
+        const pending = sessions.get(from, channel);
+        if (pending?.pendingInputRequests?.length) {
+          // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
+          const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
+          const responses = resolveInputReply(answer, pending.pendingInputRequests);
+          if (!responses) {
+            relay.reply(channel, invalidInputReply(pending.pendingInputRequests), event);
+            return;
+          }
+
+          // Reattach both POST and follower with the current responder's freshly
+          // resolved credentials. The follower remains the sole output reader.
+          stopFollower(from, channel);
+          sessions.set(from, channel, {
+            ...pending,
+            speakerPublicKey: event.pubkey,
+          });
+          startFollower(from, channel);
+          const session = clientFor(event.pubkey).sessions.attach(pending.id, {
+            streamIndex: pending.streamIndex,
+          });
+          await respondToPendingConversation(session, responses, from, channel);
+          log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
+          return;
+        }
+
+        if (pending?.resumeInFlight) {
+          startFollower(from, channel);
+          relay.reply(channel, "I'm still finishing the resumed request. I'll post the answer here when it is ready.", event);
+          return;
+        }
+
+        /** Drop only a message with NOTHING in it — pending HITL replies are handled above. */
+        if (!text && attachments.length === 0) {
+          log(`nothing to answer in ${channel.slice(0, 8)} from ${event.pubkey.slice(0, 8)} — no text, no attachments`);
+          return;
+        }
+
+        /** Images become file parts; unreadable files become explicit model context. */
+        const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
+        const result = await answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log);
+
+        if (result.status === "waiting" && result.inputRequests.length > 0) {
+          sessions.set(from, channel, {
+            id: result.sessionId,
+            streamIndex: result.streamIndex,
+            pendingInputRequests: result.inputRequests,
+            speakerPublicKey: event.pubkey,
+          });
+          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests), event);
+          if (promptId) {
+            relay.watchReplies([promptId]);
+            const current = sessions.get(from, channel);
+            if (current) sessions.set(from, channel, { ...current, promptEventIds: [promptId] });
+          }
+          log(`posted ${result.inputRequests.length} input request(s) in ${channel.slice(0, 8)}`);
+          startFollower(from, channel);
+          return;
+        }
+
+        if (!result.message) {
+          log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
+          relay.reply(
+            channel,
+            "I didn't get an answer back for that one — ask me again and I'll retry.",
+            event,
+          );
+          return;
+        }
+        relay.reply(channel, result.message, event);
+        log(`replied (${result.message.length} chars)`);
+      });
+    } catch (error) {
+      /** A rejected HITL response stays pending; the room gets a concrete retry path. */
+      const stillPending = sessions.get(from, channel)?.pendingInputRequests;
+      if (stillPending?.length) {
+        log(`could not submit pending input for ${channel.slice(0, 8)}: ${(error as Error).message}`);
+        relay.reply(channel, invalidInputReply(stillPending), event);
+        startFollower(from, channel);
         return;
       }
-      relay.reply(channel, reply, event);
-      log(`replied (${reply.length} chars)`);
-    } catch (error) {
-      /**
-       * eve refused the turn as malformed. The conversation is intact — the
-       * session mapping was kept — but silence here is indistinguishable from
-       * being ignored, the same failure the empty-reply branch above exists
-       * for. Say what happened; the log gets the full error.
-       */
+
       const rejected = rejectedTurnReply(error);
       if (rejected) {
         log(`turn rejected for ${channel.slice(0, 8)}: ${(error as Error).message}`);
@@ -326,7 +460,16 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     /** The communities this agent is a member of. */
     relays: urls,
     start(): void {
+      stopped = false;
       for (const relay of relays.values()) relay.connect();
+      for (const { community, channel, session } of sessions.entries()) {
+        if (session.pendingInputRequests?.length && session.promptEventIds?.length) {
+          relays.get(community)?.watchReplies(session.promptEventIds);
+        }
+        if (needsPendingFollower(session) && session.speakerPublicKey) {
+          startFollower(community, channel);
+        }
+      }
       log(
         urls.length > 1
           ? `listening on ${urls.length} communities — turns run as whoever sent them`
@@ -335,6 +478,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     },
     /** Say goodbye rather than letting presence lapse: a stopped agent should not look online. */
     stop(): void {
+      stopped = true;
+      for (const controller of followers.values()) controller.abort();
+      followers.clear();
+      for (const timer of followerRestartTimers.values()) clearTimeout(timer);
+      followerRestartTimers.clear();
       for (const relay of relays.values()) relay.setPresence("offline");
       setTimeout(() => {
         for (const relay of relays.values()) relay.close();

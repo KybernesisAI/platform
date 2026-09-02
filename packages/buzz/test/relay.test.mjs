@@ -203,6 +203,39 @@ test("typing is scoped to its channel and stops when told", () => {
   stop();
 });
 
+test("reply returns the published event id, or null when no socket is connected", () => {
+  const offline = new BuzzRelay({ url: "wss://relay.example.com", key, onMessage: () => {} });
+  opened.push(offline);
+  assert.equal(offline.reply("channel-1", "not sent"), null);
+
+  const { relay, socket } = connected();
+  authenticate(socket);
+  const id = relay.reply("channel-1", "sent");
+  const published = socket.published(KIND_MESSAGE).at(-1);
+  assert.equal(published.content, "sent");
+  assert.equal(id, published.id);
+});
+
+test("watched prompts add a reply filter to the poll, so an answer needs no mention", () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  const before = socket.sent.filter((frame) => frame[0] === "REQ").at(-1);
+  assert.equal(before.length, 3, "one filter before any prompt is watched");
+
+  relay.watchReplies(["prompt-1"]);
+  socket.sent.length = 0;
+  relay.poll();
+  const req = socket.sent.filter((frame) => frame[0] === "REQ").at(-1);
+  assert.equal(req.length, 4, "a second filter once a prompt is watched");
+  assert.deepEqual(req[3]["#e"], ["prompt-1"]);
+  assert.equal(req[2]["#p"][0], relay.pubkey);
+
+  relay.unwatchReplies(["prompt-1"]);
+  socket.sent.length = 0;
+  relay.poll();
+  assert.equal(socket.sent.filter((frame) => frame[0] === "REQ").at(-1).length, 3);
+});
+
 test("a reply is anchored to the message it answers and addressed back to its author", () => {
   const { relay, socket } = connected();
   authenticate(socket);
