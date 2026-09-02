@@ -47,7 +47,10 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
   registry-written files instead.
 - Every package: Apache-2.0 `LICENSE` + `NOTICE`, `files: ["dist","NOTICE"]`,
   `eve` as wildcard **peerDependency** with the pinned dev version in
-  `devDependencies` (currently 0.47.7, certified 2026-09-01 via the full reference eval suite — upgrades are deliberate, eval-gated).
+  `devDependencies` (currently **0.49.0**, certified 2026-09-02: Kyber reference
+  suite on `kyber-eval` 17/18 — 0010 research-on-grok times out at 900s on 0.38.3
+  too — and Ava 7/7 with every package at its 0.49-pinned version; upgrades are
+  deliberate, eval-gated, see the certification skill for what the bump broke).
 - Tool-name matching is **by remote-name suffix**, never exact qualified names
   (mount namespace changes the prefix). See `packages/evals/src/tools.ts`.
 - Eval fixture rules (encoded in `packages/evals`, explained in its README):

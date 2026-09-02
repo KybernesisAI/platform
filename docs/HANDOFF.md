@@ -32,8 +32,14 @@ where it lives, and how to fix things. Last full update: **2026-08-08**.
 
 ## Current state snapshot (2026-08-08)
 
-- **eve pin: 0.47.7** (Kybernesis-certified 2026-09-01; do NOT bump without the
-  certification flow in the certification skill). 0.31.0 is the migration wall: it
+- **eve pin: 0.49.0** (Kybernesis-certified 2026-09-02 on Kyber 17/18 + Ava 7/7;
+  do NOT bump without the certification flow in the certification skill). The
+  0.38.3 → 0.49.0 move broke two things a typecheck never sees — `disableTool()`
+  files for `glob`/`grep` (removed from the default set in 0.39; `kyb upgrade`
+  migrates them) and eve 0.45's OpenAI `safety_identifier` (the exe gateway
+  rejects it; `@kybernesis/exe` strips it). eve 0.49 also has first-class memory
+  slots; `@kybernesis/arcana/memory` is the provider and `kyb add memory` the
+  slot. 0.31.0 is the migration wall: it
   replaced continuation-token session APIs with ID-addressed handles, so anything
   crossing it moves together. Remote-agent CALLBACKS do not work between hosts that
   cannot reach their own public URL — use governed peers, which poll a stream instead.

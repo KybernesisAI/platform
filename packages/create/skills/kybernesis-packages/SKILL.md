@@ -10,7 +10,10 @@ Twelve packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
 then `eve add @kybernesis/<item>`). Each covers one axis:
 
 - **arcana** — memory. Extension mount `arcana({ apiKey, workspace,
-  resolveWorkspace? })`. Workspace-scoped `kb_` keys (403 outside their
+  resolveWorkspace? })`; from eve 0.49 also a memory PROVIDER:
+  `arcanaMemory()` from `@kybernesis/arcana/memory` in an `agent/memory/*.ts`
+  slot (`kyb add memory` writes it) — recall before every turn, skipped
+  under 4 words, capture off by default, tools left to the extension. Workspace-scoped `kb_` keys (403 outside their
   workspace — one key per brain). `resolveWorkspace` only from VERIFIED
   session context, never model output, and only key-reachable workspaces.
   Subagents: local extension mount (`subagents/<id>/extensions/arcana.ts`,
