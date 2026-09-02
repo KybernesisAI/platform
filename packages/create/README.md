@@ -43,8 +43,6 @@ Run inside an agent project. Checks, with pass/warn/fail per line:
 - control-plane issuer JWKS reachable; `KYBERNESIS_AGENT` set
 - Slack connector UID present
 - `eve info` discovery clean
-- the compiled `limits.maxInputTokensPerSession`, reported as explicit,
-  explicit uncapped, inherited `40,000,000`, or unverifiable
 - port 2000 free (a running dev server makes `eve eval` exit early)
 
 Exit code 1 on any failure — usable as a CI preflight.
@@ -61,12 +59,6 @@ refreshes a stale `/etc/cron.daily/kyb-docker-prune` and an existing generated
 systemd unit, warning before replacement and printing an exact manual repair
 command if non-interactive sudo is unavailable. A missing systemd unit is not
 created implicitly, and refreshing an existing unit does not restart the agent.
-
-New `--host=exe` agents explicitly set
-`limits: { maxInputTokensPerSession: 40_000_000 }`, freezing the certified Eve
-0.49.0 effective default for subscription-backed sessions. Vercel templates do
-not inject this setting. `kyb upgrade` reports the compiled effective value
-read-only and never rewrites user-owned `agent/agent.ts`.
 
 ## Design notes
 

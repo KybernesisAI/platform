@@ -87,8 +87,6 @@ export class BuzzRelay {
   private refusal: string | null = null;
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
-  /** Signed messages created before authentication; preserve identity and send once connected. */
-  private readonly pendingEvents: NostrEvent[] = [];
   private cursor = now();
 
   private readonly url: string;
@@ -212,7 +210,6 @@ export class BuzzRelay {
       this.backoff = 5_000;
       this.refusal = null;
       this.log(`authenticated as ${this.key.publicKey.slice(0, 12)}…`);
-      for (const event of this.pendingEvents.splice(0)) this.send(["EVENT", event]);
       this.keepPresent();
       this.poll();
       return;
@@ -241,9 +238,10 @@ export class BuzzRelay {
     this.onMessage(event);
   }
 
-  private send(frame: unknown[]): void {
-    if (this.socket?.readyState !== WebSocket.OPEN) return;
+  private send(frame: unknown[]): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
     this.socket.send(JSON.stringify(frame));
+    return true;
   }
 
   /**
@@ -261,14 +259,8 @@ export class BuzzRelay {
     this.pollTimer = setTimeout(() => this.poll(), this.pollMs);
   }
 
-  publish(event: { kind: number; tags: string[][]; content: string }): NostrEvent {
-    const signed = finalizeEvent({ created_at: now(), ...event }, this.key.secretKey) as NostrEvent;
-    if (this.authenticated && this.socket?.readyState === WebSocket.OPEN) {
-      this.send(["EVENT", signed]);
-    } else {
-      this.pendingEvents.push(signed);
-    }
-    return signed;
+  publish(event: { kind: number; tags: string[][]; content: string }): boolean {
+    return this.send(["EVENT", finalizeEvent({ created_at: now(), ...event }, this.key.secretKey)]);
   }
 
   setPresence(status: PresenceStatus): void {
@@ -289,7 +281,7 @@ export class BuzzRelay {
     return () => clearInterval(timer);
   }
 
-  reply(channel: string, text: string, replyTo?: NostrEvent): NostrEvent {
+  reply(channel: string, text: string, replyTo?: NostrEvent): boolean {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
       tags.push(["e", replyTo.id], ["p", replyTo.pubkey]);

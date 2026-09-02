@@ -1,347 +1,297 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
-import { ClientError } from "eve/client";
-
-import { SessionStore } from "../dist/sessions.js";
 import {
-  SessionCoordinator,
+  followPendingConversation,
+  formatInputRequests,
   invalidInputReply,
-  renderInputRequests,
-} from "../dist/turn.js";
+  needsPendingFollower,
+  resolveInputReply,
+  respondToPendingConversation,
+} from "../dist/hitl.js";
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
-const event = (type, data, id = `${type}-${Math.random()}`) => ({ type, data, meta: { id, at: new Date().toISOString() } });
-const nostr = (id, tags = []) => ({ id, pubkey: "a".repeat(64), created_at: 1, kind: 9, tags, content: "", sig: "" });
-
-class EventLog {
-  events = [];
-  waiters = [];
-  emit(value) {
-    this.events.push(value);
-    for (const wake of this.waiters.splice(0)) wake();
-  }
-  session(id, calls) {
-    let index = 0;
-    const thisLog = this;
-    return {
-      get state() { return { sessionId: id, streamIndex: index }; },
-      async *stream({ startIndex = 0, follow = true, signal } = {}) {
-        let cursor = startIndex;
-        index = startIndex;
-        try {
-          while (true) {
-            while (cursor < thisLog.events.length) {
-              const value = thisLog.events[cursor++];
-              yield value;
-            }
-            if (!follow || signal?.aborted) return;
-            await new Promise((resolve) => {
-              const wake = () => resolve();
-              thisLog.waiters.push(wake);
-              signal?.addEventListener("abort", wake, { once: true });
-            });
-          }
-        } finally {
-          // Matches Eve 0.49: handle state advances only when the generator ends.
-          index = cursor;
-        }
-      },
-      async send(message) {
-        calls.sent.push(message);
-        if (calls.sendError) throw calls.sendError;
-        return responseWithoutResult();
-      },
-      async respond(responses) {
-        calls.responses.push(responses);
-        return responseWithoutResult();
-      },
-    };
-  }
-}
-
-function responseWithoutResult() {
-  return {
-    result() { throw new Error("the initiating response must not own room delivery"); },
-    async *[Symbol.asyncIterator]() {},
-  };
-}
-
-function setup() {
-  const file = join(mkdtempSync(join(tmpdir(), "buzz-hitl-")), "sessions.json");
-  const store = new SessionStore(file);
-  store.set("relay", "channel", {
-    id: "session-1",
-    streamIndex: 0,
-    speakerPubkey: "speaker",
-    pendingPrompts: [],
-    deliveredTurnIds: [],
-  });
-  const log = new EventLog();
-  const calls = { sent: [], responses: [], attaches: 0, sendError: null, creates: 0 };
-  const client = {
-    sessions: {
-      attach(id) {
-        calls.attaches += 1;
-        return log.session(id, calls);
-      },
-      async create(input) {
-        calls.creates += 1;
-        if (!calls.createResult) throw new Error("unexpected create");
-        return calls.createResult(input);
-      },
-    },
-  };
-  const replies = [];
-  let promptSequence = 0;
-  const relay = {
-    reply(channel, text, replyTo) {
-      const posted = nostr(`posted-${++promptSequence}`);
-      replies.push({ channel, text, replyTo, posted });
-      return posted;
-    },
-    typingIn() { return () => {}; },
-  };
-  const coordinator = new SessionCoordinator({
-    sessions: store,
-    clientFor: () => client,
-    relayFor: () => relay,
-  });
-  return { store, log, calls, replies, coordinator };
-}
-
-const approval = {
-  kind: "tool-approval",
-  requestId: "approval-1",
-  prompt: "Approve deleting the branch?",
-  display: "confirmation",
+const request = {
+  action: { callId: "call-1", input: {}, kind: "tool-call", toolName: "ask_question" },
   allowFreeform: false,
-  action: { kind: "tool-call", callId: "call-1", toolName: "delete", input: { branch: "old" } },
-  options: [
-    { id: "approve", label: "Approve", description: "Delete it", style: "danger" },
-    { id: "cancel", label: "Cancel", description: "Keep it", style: "default" },
-  ],
-};
-
-const freeform = {
+  display: "select",
   kind: "question",
-  requestId: "question-1",
-  prompt: "What name should I use?",
-  display: "text",
-  allowFreeform: true,
-  action: { kind: "tool-call", callId: "call-2", toolName: "ask_question", input: {} },
+  options: [
+    { id: "safe", label: "Continue safely", description: "Keep the current session" },
+    { id: "reset", label: "Start over", description: "Open a fresh session" },
+  ],
+  prompt: "How should I continue?",
+  requestId: "request-1",
 };
 
-test("generic HITL rendering includes every prompt, option, description, and reply instruction", () => {
-  const text = renderInputRequests([
-    approval,
-    freeform,
-    { ...approval, kind: "session-limit", requestId: "limit-1", prompt: "Continue this long session?" },
-  ]);
-  assert.match(text, /Approve deleting the branch/);
-  assert.match(text, /Approve — Delete it \[approve\]/);
-  assert.match(text, /What name should I use/);
-  assert.match(text, /Continue this long session/);
-  assert.match(text, /Reply to this prompt/);
-});
+function event(type, data = {}) {
+  return { type, data, meta: { at: new Date(0).toISOString(), id: `${type}-1` } };
+}
 
-test("a visible prompt is persisted and only a reply reference routes text as HITL", async () => {
-  const { coordinator, log, store, replies, calls } = setup();
-  await coordinator.ensureFollower("relay", "channel", "speaker");
-  log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }));
-  log.emit(event("input.requested", { requests: [approval], sequence: 1, stepIndex: 0, turnId: "turn-1" }));
-  await tick();
-
-  const prompt = replies[0].posted;
-  assert.equal(store.get("relay", "channel").pendingPrompts[0].promptEventId, prompt.id);
-  assert.equal(await coordinator.respondToPrompt("relay", "channel", "speaker", "approve", nostr("ordinary")), "ordinary");
-  assert.equal(calls.responses.length, 0, "ordinary text is not stolen by a pending approval");
-
-  const invalid = nostr("invalid", [["e", prompt.id]]);
-  assert.equal(await coordinator.respondToPrompt("relay", "channel", "speaker", "maybe", invalid), "invalid");
-  assert.match(coordinator.correctionFor("relay", "channel", invalid), /Approve/);
-
-  const valid = nostr("valid", [["e", prompt.id]]);
-  assert.equal(await coordinator.respondToPrompt("relay", "channel", "speaker", "1", valid), "submitted");
-  assert.deepEqual(calls.responses[0], [{ requestId: "approval-1", optionId: "approve" }]);
-  coordinator.stop();
-});
-
-test("option IDs, labels, indexes, and allowed freeform resolve against the referenced batch", async () => {
-  for (const [text, request, expected] of [
-    ["approve", approval, { requestId: "approval-1", optionId: "approve" }],
-    ["Cancel", approval, { requestId: "approval-1", optionId: "cancel" }],
-    ["2", approval, { requestId: "approval-1", optionId: "cancel" }],
-    ["Project Atlas", freeform, { requestId: "question-1", text: "Project Atlas" }],
-  ]) {
-    const { coordinator, log, replies, calls } = setup();
-    await coordinator.ensureFollower("relay", "channel", "speaker");
-    log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }));
-    log.emit(event("input.requested", { requests: [request], sequence: 1, stepIndex: 0, turnId: "turn-1" }));
-    await tick();
-    const reply = nostr("answer", [["e", replies[0].posted.id]]);
-    assert.equal(await coordinator.respondToPrompt("relay", "channel", "speaker", text, reply), "submitted");
-    assert.deepEqual(calls.responses[0], [expected]);
-    coordinator.stop();
-  }
-});
-
-test("input.resolved clears persisted prompt mappings authoritatively", async () => {
-  const { coordinator, log, store } = setup();
-  await coordinator.ensureFollower("relay", "channel", "speaker");
-  log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }));
-  log.emit(event("input.requested", { requests: [approval], sequence: 1, stepIndex: 0, turnId: "turn-1" }));
-  await tick();
-  assert.equal(store.get("relay", "channel").pendingPrompts.length, 1);
-  log.emit(event("input.resolved", {
-    resolutions: [{ kind: "tool-approval", outcome: "approved", requestId: "approval-1" }],
-    sequence: 1,
-    stepIndex: 1,
-    turnId: "turn-1",
-  }));
-  await tick();
-  assert.equal(store.get("relay", "channel").pendingPrompts.length, 0);
-  coordinator.stop();
-});
-
-test("the persisted cursor advances while Eve's follow generator remains open and prevents restart replay", async () => {
-  const { coordinator, log, store, replies, calls } = setup();
-  await coordinator.ensureFollower("relay", "channel", "speaker");
-  log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }, "event-1"));
-  log.emit(event("input.requested", { requests: [approval], sequence: 1, stepIndex: 0, turnId: "turn-1" }, "event-2"));
-  log.emit(event("turn.completed", { sequence: 1, turnId: "turn-1" }, "event-3"));
-  await tick();
-
-  assert.equal(store.get("relay", "channel").streamIndex, 3);
-  assert.equal(replies.length, 1);
-  const originalPromptId = store.get("relay", "channel").pendingPrompts[0].promptEventId;
-  coordinator.stop();
-
-  const restarted = new SessionCoordinator({
-    sessions: store,
-    clientFor: () => ({
-      sessions: {
-        attach(id) {
-          calls.attaches += 1;
-          return log.session(id, calls);
-        },
-      },
-    }),
-    relayFor: () => ({
-      reply(channel, text, replyTo) {
-        const posted = nostr(`replayed-${replies.length + 1}`);
-        replies.push({ channel, text, replyTo, posted });
-        return posted;
-      },
-      typingIn() { return () => {}; },
-    }),
-  });
-  await restarted.ensureFollower("relay", "channel", "speaker");
-  await tick();
-
-  assert.equal(replies.length, 1, "restart starts after the durable tail instead of reposting history");
-  assert.equal(store.get("relay", "channel").pendingPrompts[0].promptEventId, originalPromptId);
-  restarted.stop();
-});
-
-test("the durable follower posts only the final non-empty message and delivers out-of-band resumes", async () => {
-  const { coordinator, log, replies } = setup();
-  await coordinator.ensureFollower("relay", "channel", "speaker");
-  log.emit(event("turn.started", { sequence: 2, turnId: "external-turn" }));
-  log.emit(event("message.completed", { message: "intermediate", finishReason: "tool-calls", sequence: 2, stepIndex: 0, turnId: "external-turn" }));
-  log.emit(event("message.completed", { message: "final answer", finishReason: "stop", sequence: 2, stepIndex: 1, turnId: "external-turn" }));
-  log.emit(event("turn.completed", { sequence: 2, turnId: "external-turn" }));
-  await tick();
-
-  assert.equal(replies.length, 1);
-  assert.equal(replies[0].text, "final answer");
-  assert.equal(replies[0].replyTo, undefined, "an external continuation must not invent a Buzz reply anchor");
-  coordinator.stop();
-});
-
-test("local sends keep their Buzz anchor while the initiating response result is never consumed", async () => {
-  const { coordinator, log, replies, calls } = setup();
-  const asked = nostr("asked");
-  await coordinator.submitMessage("relay", "channel", "speaker", "hello", asked);
-  log.emit(event("turn.started", { sequence: 1, turnId: "local-turn" }));
-  log.emit(event("message.completed", { message: "hello back", finishReason: "stop", sequence: 1, stepIndex: 0, turnId: "local-turn" }));
-  log.emit(event("turn.completed", { sequence: 1, turnId: "local-turn" }));
-  await tick();
-
-  assert.deepEqual(calls.sent, ["hello"]);
-  assert.equal(replies.length, 1);
-  assert.equal(replies[0].replyTo.id, "asked");
-  coordinator.stop();
-});
-
-test("one follower is reused per channel and stop ends its typing lifecycle", async () => {
-  const { coordinator, log, calls } = setup();
-  await coordinator.ensureFollower("relay", "channel", "speaker");
-  const attaches = calls.attaches;
-  await coordinator.ensureFollower("relay", "channel", "another-speaker");
-  assert.equal(calls.attaches, attaches);
-  log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }));
-  await tick();
-  coordinator.stop();
-});
-
-test("HTTP 400 preserves the session and cannot steal the next successful turn's anchor", async () => {
-  const { coordinator, store, calls, log, replies } = setup();
-  const rejected = nostr("rejected-anchor");
-  calls.sendError = new ClientError(400, "invalid part");
-  await assert.rejects(
-    coordinator.submitMessage("relay", "channel", "speaker", "bad", rejected),
-    (error) => error instanceof ClientError && error.status === 400,
-  );
-  assert.equal(store.get("relay", "channel").id, "session-1");
-  assert.equal(calls.creates, 0);
-
-  calls.sendError = null;
-  const accepted = nostr("accepted-anchor");
-  await coordinator.submitMessage("relay", "channel", "speaker", "good", accepted);
-  log.emit(event("turn.started", { sequence: 2, turnId: "accepted-turn" }));
-  log.emit(event("message.completed", { message: "accepted answer", finishReason: "stop", sequence: 2, stepIndex: 0, turnId: "accepted-turn" }));
-  log.emit(event("turn.completed", { sequence: 2, turnId: "accepted-turn" }));
-  await tick();
-
-  assert.equal(replies.at(-1).replyTo.id, "accepted-anchor");
-  assert.notEqual(replies.at(-1).replyTo.id, "rejected-anchor");
-  coordinator.stop();
-});
-
-test("a non-400 stale session aborts the old follower and creates a replacement", async () => {
-  const { coordinator, store, calls, log } = setup();
-  calls.sendError = new ClientError(404, "gone");
-  calls.createResult = () => {
-    calls.sendError = null;
-    return {
-      session: { state: { sessionId: "session-2", streamIndex: 0 } },
-      response: responseWithoutResult(),
-    };
+function fakeSession(events, startIndex = 7) {
+  let index = startIndex;
+  return {
+    get state() {
+      return { sessionId: "session-1", streamIndex: index };
+    },
+    async *stream(options) {
+      assert.equal(options.follow, true);
+      assert.equal(options.startIndex, startIndex);
+      for (const item of events) {
+        index += 1;
+        yield item;
+      }
+    },
   };
-  await coordinator.submitMessage("relay", "channel", "speaker", "retry", nostr("retry"));
-  assert.equal(store.get("relay", "channel").id, "session-2");
-  assert.equal(calls.creates, 1);
-  log.emit(event("turn.started", { sequence: 1, turnId: "replacement" }));
-  coordinator.stop();
+}
+
+test("HITL prompts show numbered labels, stable IDs, descriptions and reply instructions", () => {
+  const rendered = formatInputRequests([request]);
+  assert.match(rendered, /How should I continue\?/);
+  assert.match(rendered, /1\. Continue safely \[safe\] — Keep the current session/);
+  assert.match(rendered, /2\. Start over \[reset\]/);
+  assert.match(rendered, /option number, option ID, or exact label/);
 });
 
-test("pending prompts survive a SessionStore restart", () => {
-  const file = join(mkdtempSync(join(tmpdir(), "buzz-pending-")), "sessions.json");
-  const first = new SessionStore(file);
-  first.set("relay", "channel", {
+test("option ID, exact label and 1-based number use Eve response resolution", () => {
+  assert.deepEqual(resolveInputReply("safe", [request]), [{ requestId: "request-1", optionId: "safe" }]);
+  assert.deepEqual(resolveInputReply("Continue safely", [request]), [{ requestId: "request-1", optionId: "safe" }]);
+  assert.deepEqual(resolveInputReply("2", [request]), [{ requestId: "request-1", optionId: "reset" }]);
+});
+
+test("empty and invalid closed-choice replies stay pending with actionable instructions", () => {
+  assert.equal(resolveInputReply("", [request]), null);
+  assert.equal(resolveInputReply("something else", [request]), null);
+  assert.match(invalidInputReply([request]), /still need a valid answer/);
+  assert.match(invalidInputReply([request]), /1\. Continue safely/);
+});
+
+test("freeform requests accept text while multiple requests require a response for every request", () => {
+  const freeform = { ...request, requestId: "free", options: undefined, allowFreeform: true };
+  assert.deepEqual(resolveInputReply("my own answer", [freeform]), [{ requestId: "free", text: "my own answer" }]);
+  assert.equal(resolveInputReply("safe", [request, freeform])?.length, 2);
+  assert.equal(resolveInputReply("my own answer", [request, freeform]), null);
+});
+
+test("the follower persists cursors and is the publisher for out-of-band resumed output", async () => {
+  const states = [];
+  const messages = [];
+  const prompts = [];
+  const session = fakeSession([
+    event("input.resolved", { resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }] }),
+    event("message.completed", { finishReason: "stop", message: "Resumed answer", sequence: 2, stepIndex: 1, turnId: "turn-1" }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ]);
+
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: (state) => states.push(structuredClone(state)),
+      onInputRequested: (requests) => prompts.push(requests),
+      onMessage: (message) => messages.push(message),
+    },
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(messages, ["Resumed answer"]);
+  assert.deepEqual(prompts, []);
+  assert.equal(states.at(-1).streamIndex, 10);
+  assert.equal(states.at(-1).pendingInputRequests, undefined);
+  assert.equal(states.at(-1).speakerPublicKey, "speaker");
+});
+
+test("the follower handles another HITL round and does not terminate at its waiting boundary", async () => {
+  const second = { ...request, requestId: "request-2", prompt: "One more choice?" };
+  const states = [];
+  const prompts = [];
+  const session = fakeSession([
+    event("input.resolved", { resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }] }),
+    event("input.requested", { requests: [second], sequence: 2, stepIndex: 1, turnId: "turn-1" }),
+    event("session.waiting", { continuationToken: "session-1", wait: "next-user-message" }),
+  ]);
+
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: (state) => states.push(structuredClone(state)),
+      onInputRequested: (requests) => prompts.push(requests),
+      onMessage: () => assert.fail("a repeated HITL round has no assistant reply yet"),
+    },
+    new AbortController().signal,
+  );
+
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0][0].requestId, "request-2");
+  assert.equal(states.at(-1).pendingInputRequests[0].requestId, "request-2");
+});
+
+
+test("a disconnect after input.resolved keeps durable supervision until recovered output is published", async () => {
+  let durable = {
+    id: "session-1",
+    streamIndex: 7,
+    pendingInputRequests: [request],
+    speakerPublicKey: "speaker",
+  };
+  const messages = [];
+  const disconnected = {
+    state: { sessionId: "session-1", streamIndex: 7 },
+    async *stream() {
+      yield event("input.resolved", {
+        resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }],
+      });
+      throw new Error("stream disconnected");
+    },
+  };
+
+  await assert.rejects(
+    () => followPendingConversation(
+      disconnected,
+      durable,
+      {
+        onState: async (state) => { durable = structuredClone(state); },
+        onInputRequested: () => assert.fail("the original request was already resolved"),
+        onMessage: () => assert.fail("the stream disconnected before output"),
+      },
+      new AbortController().signal,
+    ),
+    /stream disconnected/,
+  );
+
+  assert.equal(durable.streamIndex, 8, "recovery resumes after the accepted input resolution");
+  assert.equal(durable.pendingInputRequests, undefined);
+  assert.equal(durable.resumeInFlight, true, "resolved input remains durably supervised");
+  assert.equal(needsPendingFollower(durable), true);
+
+  const recovered = fakeSession([
+    event("message.completed", {
+      finishReason: "stop",
+      message: "Recovered resumed answer",
+      sequence: 2,
+      stepIndex: 1,
+      turnId: "turn-1",
+    }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ], durable.streamIndex);
+
+  await followPendingConversation(
+    recovered,
+    durable,
+    {
+      onState: async (state) => { durable = structuredClone(state); },
+      onInputRequested: () => assert.fail("recovery should continue the resolved turn"),
+      onMessage: async (message) => {
+        assert.equal(durable.resumeInFlight, true, "supervision clears only after publication succeeds");
+        messages.push(message);
+      },
+    },
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(messages, ["Recovered resumed answer"]);
+  assert.equal(durable.streamIndex, 10);
+  assert.equal(durable.resumeInFlight, undefined);
+  assert.equal(durable.pendingInputRequests, undefined);
+  assert.equal(needsPendingFollower(durable), false, "a restart cannot publish the completed output again");
+});
+
+test("a failed relay publication retains resume supervision for another follower", async () => {
+  let durable = {
     id: "session-1",
     streamIndex: 8,
-    pendingPrompts: [{ promptEventId: "prompt-1", requests: [approval] }],
-    deliveredTurnIds: [],
-  });
-  const second = new SessionStore(file);
-  assert.equal(second.get("relay", "channel").pendingPrompts[0].requests[0].requestId, "approval-1");
+    resumeInFlight: true,
+    speakerPublicKey: "speaker",
+  };
+  const recovered = fakeSession([
+    event("message.completed", {
+      finishReason: "stop",
+      message: "Retry this publication",
+      sequence: 2,
+      stepIndex: 1,
+      turnId: "turn-1",
+    }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ], durable.streamIndex);
+
+  await assert.rejects(
+    () => followPendingConversation(
+      recovered,
+      durable,
+      {
+        onState: async (state) => { durable = structuredClone(state); },
+        onInputRequested: () => assert.fail("no new request expected"),
+        onMessage: async () => { throw new Error("relay unavailable"); },
+      },
+      new AbortController().signal,
+    ),
+    /relay unavailable/,
+  );
+
+  assert.equal(durable.streamIndex, 8, "the unpublished message remains replayable");
+  assert.equal(durable.resumeInFlight, true);
+  assert.equal(needsPendingFollower(durable), true);
 });
 
-test("invalid guidance does not invent options for a freeform-only request", () => {
-  assert.match(invalidInputReply([freeform]), /non-empty written answer/);
+
+test("submitting a channel reply uses ClientSession.respond without consuming duplicate output", async () => {
+  const calls = [];
+  const session = {
+    async respond(responses, options) {
+      calls.push({ responses, options });
+      return { result: () => assert.fail("the follower, not respond(), must publish resumed output") };
+    },
+  };
+  const responses = [{ requestId: "request-1", optionId: "safe" }];
+
+  await respondToPendingConversation(session, responses, "relay-a", "channel-1");
+
+  assert.deepEqual(calls, [{
+    responses,
+    options: {
+      clientContext: { buzzCommunity: "relay-a", buzzChannel: "channel-1" },
+      streamReconnectPolicy: { reconnect: false },
+    },
+  }]);
+});
+
+test("the follower awaits serialized durable state before any resumed publication", async () => {
+  let releaseState;
+  const stateStored = new Promise((resolve) => { releaseState = resolve; });
+  let reachedState = false;
+  let published = false;
+  const run = followPendingConversation(
+    fakeSession([
+      event("input.resolved", {
+        resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }],
+      }),
+      event("message.completed", {
+        finishReason: "stop",
+        message: "Ordered answer",
+        sequence: 2,
+        stepIndex: 1,
+        turnId: "turn-1",
+      }),
+      event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+    ]),
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: async (state) => {
+        if (state.resumeInFlight && !reachedState) {
+          reachedState = true;
+          await stateStored;
+        }
+      },
+      onInputRequested: () => assert.fail("no repeated request expected"),
+      onMessage: () => { published = true; },
+    },
+    new AbortController().signal,
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reachedState, true);
+  assert.equal(published, false, "publication cannot race ahead of serialized state persistence");
+  releaseState();
+  await run;
+  assert.equal(published, true);
 });

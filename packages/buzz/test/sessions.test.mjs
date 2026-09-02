@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,4 +96,49 @@ test("the file is written atomically, so a restart mid-write cannot truncate it"
   // The temp file must not survive: a leftover means the rename never happened.
   assert.equal(existsSync(`${file}.tmp`), false);
   assert.equal(existsSync(file), true);
+});
+
+test("pending HITL requests, cursor and public identity survive restart without bearer credentials", () => {
+  const file = join(dir(), "sessions.json");
+  const request = {
+    action: { callId: "call", input: {}, kind: "tool-call", toolName: "ask_question" },
+    allowFreeform: false,
+    display: "select",
+    kind: "question",
+    options: [{ id: "yes", label: "Yes" }],
+    prompt: "Continue?",
+    requestId: "request",
+  };
+  const first = new SessionStore(file);
+  first.set("relay-a", "channel-1", {
+    id: "wrun_pending",
+    streamIndex: 17,
+    pendingInputRequests: [request],
+    speakerPublicKey: "abcdef",
+  });
+
+  const text = readFileSync(file, "utf8");
+  assert.doesNotMatch(text, /bearer|token/i);
+  const second = new SessionStore(file);
+  assert.deepEqual(second.get("relay-a", "channel-1")?.pendingInputRequests, [request]);
+  assert.equal(second.get("relay-a", "channel-1")?.speakerPublicKey, "abcdef");
+  assert.deepEqual(second.entries().map(({ community, channel }) => ({ community, channel })), [
+    { community: "relay-a", channel: "channel-1" },
+  ]);
+});
+
+test("resume-in-flight supervision survives restart after Eve accepts HITL input", () => {
+  const file = join(dir(), "sessions.json");
+  const first = new SessionStore(file);
+  first.set("relay-a", "channel-1", {
+    id: "wrun_resumed",
+    streamIndex: 18,
+    resumeInFlight: true,
+    speakerPublicKey: "abcdef",
+  });
+
+  const resumed = new SessionStore(file).get("relay-a", "channel-1");
+  assert.equal(resumed?.resumeInFlight, true);
+  assert.equal(resumed?.streamIndex, 18);
+  assert.equal(resumed?.speakerPublicKey, "abcdef");
 });

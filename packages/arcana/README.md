@@ -176,6 +176,15 @@ Options: `url` (the MCP endpoint), `recall: { enabled, minWords, limit (default 
 `capture: { enabled, minWords }`, `tools`, `resolveWorkspace(ctx)` (choose the
 brain per operation from VERIFIED session context, as the extension does), `log`.
 
+**Known limitation (2026-09-02).** Automatic recall puts the closest matches
+in front of the model before it looks anything up. In a brain that holds
+several near-identical entries — Kyber's eval brain has one canary codename
+per past run — the model answered from the look-alikes even after the tool
+search ran, and the cross-session recall eval failed 1/4 with the slot on and
+passed 4/4 without it. Fewer results and the "confirm exact values with the
+tools" line did not change that. Keep the slot opt-in on agents whose brains
+contain families of similar identifiers, or scope it to a curated brain.
+
 Arcana partitions by **workspace**, not by eve's scope: one `kb_` key reaches
 one brain. The scope eve resolved is recorded as a tag on captured memories and
 keys the recalled message, so attribution follows the principal, but isolation

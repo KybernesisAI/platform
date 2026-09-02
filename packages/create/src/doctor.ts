@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
-import { formatSessionInputLimit, inspectEveManifest } from "./session-limit.js";
+import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -47,6 +47,27 @@ export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Ch
         : `Docker sandbox template unavailable: ${issue.subject}`,
     detail: issue.detail,
   }));
+}
+
+export function agentInputLimitDoctorCheck(limit: AgentInputLimit): Check {
+  switch (limit.kind) {
+    case "explicit-numeric":
+      return { verdict: "pass", label: `Eve max input tokens/session: ${limit.value.toLocaleString("en-US")} (explicit)` };
+    case "explicit-uncapped":
+      return { verdict: "pass", label: "Eve max input tokens/session: uncapped (explicit)" };
+    case "inherited":
+      return {
+        verdict: "warn",
+        label: `Eve max input tokens/session: ${limit.value.toLocaleString("en-US")} (inherited default)`,
+        detail: "set limits.maxInputTokensPerSession explicitly in the root agent; use false only when the host policy intentionally permits an uncapped session",
+      };
+    case "unresolved":
+      return {
+        verdict: "warn",
+        label: "Eve max input tokens/session: unresolved",
+        detail: limit.reason,
+      };
+  }
 }
 
 /**
@@ -554,22 +575,20 @@ export async function doctor(): Promise<void> {
    * `env` here is the same merged view every other check reads: .env.local
    * underneath, the real environment on top.
    */
-  const info = inspectEveManifest(cwd, env);
+  const info = inspectEveAgent(cwd, env);
   if (info === null) {
     add(
       "fail",
       "eve info failed",
       "run: set -a && . ./.env.local && set +a && npx eve info --json — the agent's own error is in that output",
     );
-    add("warn", "limits.maxInputTokensPerSession unverifiable", "eve discovery did not complete");
+    add("warn", "Eve max input tokens/session: unresolved", "eve info failed before the compiled root policy could be inspected");
   } else {
     const diag = info.diagnostics;
-    if (diag?.errors === 0) add("pass", `eve discovery clean (${diag.warnings} warnings)`);
+    if (diag && diag.errors === 0) add("pass", `eve discovery clean (${diag.warnings} warnings)`);
     else add("fail", `eve discovery: ${diag ? `${diag.errors} errors` : "unparsed"}`, "npx eve info --json");
-    add(
-      info.limit.status === "unverifiable" ? "warn" : "pass",
-      formatSessionInputLimit(info.limit),
-    );
+    const limitCheck = agentInputLimitDoctorCheck(info.limit);
+    add(limitCheck.verdict, limitCheck.label, limitCheck.detail);
   }
   const portBusy = capture("lsof", ["-ti", ":2000"]);
   if (portBusy && portBusy.trim()) add("warn", "port 2000 in use", "eve eval exits early while a dev server runs — kill it first");
