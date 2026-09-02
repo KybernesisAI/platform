@@ -47,12 +47,21 @@ Run inside an agent project. Checks, with pass/warn/fail per line:
 
 Exit code 1 on any failure — usable as a CI preflight.
 
-## `kyb upgrade [--skip-eval]`
+## `kyb upgrade [--skip-eval] [--yes]`
 
 Compares installed `@kybernesis/*` versions against npm, installs what's
 behind, typechecks, then **runs the eval suite as the gate** — prints
 "deploy" only on green. This is the maintenance-retainer loop as a command:
 package improvement → `kyb upgrade` per client → green → `npx eve deploy`.
+
+Before an eve version change, upgrade reads `.eve/.workflow-data/runs`, prints
+`This will reset N open conversations`, lists matching persisted Buzz channel
+sessions when available, and requires explicit confirmation. Noninteractive
+runs fail closed unless `--yes` (or `-y`) is supplied. The warning is still printed with
+`--yes` and is not bypassed by `--skip-eval`. Existing direct `eve eval` scripts
+are migrated to `kyb-eval`; custom scripts are left untouched with a manual fix.
+The wrapper counts corruption diagnostics beside the eval result and turns a
+nominally green eve exit into a failure when condemned durable state was seen.
 
 On self-hosted agents, upgrade also reconciles package-owned host artifacts. It
 refreshes a stale `/etc/cron.daily/kyb-docker-prune` and an existing generated

@@ -28,7 +28,8 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "node ../../scripts/prepublish.mjs"
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "devDependencies": {
     "@types/node": "24.x",
@@ -45,5 +46,8 @@
     "type": "git",
     "url": "https://github.com/KybernesisAI/platform.git",
     "directory": "packages/evals"
+  },
+  "bin": {
+    "kyb-eval": "./dist/cli.js"
   }
 }

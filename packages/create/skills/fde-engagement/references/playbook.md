@@ -1229,7 +1229,7 @@ to `acme-eval` and evals never write into a real brain:
 
 ```jsonc
 "scripts": {
-  "eval": "ARCANA_COMPANY_WORKSPACE=acme-eval ARCANA_DM_WORKSPACE=acme-eval ARCANA_FINANCE_WORKSPACE=acme-eval ARCANA_ENGINEERING_WORKSPACE=acme-eval eve eval",
+  "eval": "ARCANA_COMPANY_WORKSPACE=acme-eval ARCANA_DM_WORKSPACE=acme-eval ARCANA_FINANCE_WORKSPACE=acme-eval ARCANA_ENGINEERING_WORKSPACE=acme-eval kyb-eval",
   "typecheck": "tsc"
 }
 ```
