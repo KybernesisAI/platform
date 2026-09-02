@@ -30,18 +30,24 @@ class EventLog {
     return {
       get state() { return { sessionId: id, streamIndex: index }; },
       async *stream({ startIndex = 0, follow = true, signal } = {}) {
+        let cursor = startIndex;
         index = startIndex;
-        while (true) {
-          while (index < thisLog.events.length) {
-            const value = thisLog.events[index++];
-            yield value;
+        try {
+          while (true) {
+            while (cursor < thisLog.events.length) {
+              const value = thisLog.events[cursor++];
+              yield value;
+            }
+            if (!follow || signal?.aborted) return;
+            await new Promise((resolve) => {
+              const wake = () => resolve();
+              thisLog.waiters.push(wake);
+              signal?.addEventListener("abort", wake, { once: true });
+            });
           }
-          if (!follow || signal?.aborted) return;
-          await new Promise((resolve) => {
-            const wake = () => resolve();
-            thisLog.waiters.push(wake);
-            signal?.addEventListener("abort", wake, { once: true });
-          });
+        } finally {
+          // Matches Eve 0.49: handle state advances only when the generator ends.
+          index = cursor;
         }
       },
       async send(message) {
@@ -201,6 +207,46 @@ test("input.resolved clears persisted prompt mappings authoritatively", async ()
   coordinator.stop();
 });
 
+test("the persisted cursor advances while Eve's follow generator remains open and prevents restart replay", async () => {
+  const { coordinator, log, store, replies, calls } = setup();
+  await coordinator.ensureFollower("relay", "channel", "speaker");
+  log.emit(event("turn.started", { sequence: 1, turnId: "turn-1" }, "event-1"));
+  log.emit(event("input.requested", { requests: [approval], sequence: 1, stepIndex: 0, turnId: "turn-1" }, "event-2"));
+  log.emit(event("turn.completed", { sequence: 1, turnId: "turn-1" }, "event-3"));
+  await tick();
+
+  assert.equal(store.get("relay", "channel").streamIndex, 3);
+  assert.equal(replies.length, 1);
+  const originalPromptId = store.get("relay", "channel").pendingPrompts[0].promptEventId;
+  coordinator.stop();
+
+  const restarted = new SessionCoordinator({
+    sessions: store,
+    clientFor: () => ({
+      sessions: {
+        attach(id) {
+          calls.attaches += 1;
+          return log.session(id, calls);
+        },
+      },
+    }),
+    relayFor: () => ({
+      reply(channel, text, replyTo) {
+        const posted = nostr(`replayed-${replies.length + 1}`);
+        replies.push({ channel, text, replyTo, posted });
+        return posted;
+      },
+      typingIn() { return () => {}; },
+    }),
+  });
+  await restarted.ensureFollower("relay", "channel", "speaker");
+  await tick();
+
+  assert.equal(replies.length, 1, "restart starts after the durable tail instead of reposting history");
+  assert.equal(store.get("relay", "channel").pendingPrompts[0].promptEventId, originalPromptId);
+  restarted.stop();
+});
+
 test("the durable follower posts only the final non-empty message and delivers out-of-band resumes", async () => {
   const { coordinator, log, replies } = setup();
   await coordinator.ensureFollower("relay", "channel", "speaker");
@@ -242,15 +288,27 @@ test("one follower is reused per channel and stop ends its typing lifecycle", as
   coordinator.stop();
 });
 
-test("HTTP 400 preserves the session mapping", async () => {
-  const { coordinator, store, calls } = setup();
+test("HTTP 400 preserves the session and cannot steal the next successful turn's anchor", async () => {
+  const { coordinator, store, calls, log, replies } = setup();
+  const rejected = nostr("rejected-anchor");
   calls.sendError = new ClientError(400, "invalid part");
   await assert.rejects(
-    coordinator.submitMessage("relay", "channel", "speaker", "bad", nostr("bad")),
+    coordinator.submitMessage("relay", "channel", "speaker", "bad", rejected),
     (error) => error instanceof ClientError && error.status === 400,
   );
   assert.equal(store.get("relay", "channel").id, "session-1");
   assert.equal(calls.creates, 0);
+
+  calls.sendError = null;
+  const accepted = nostr("accepted-anchor");
+  await coordinator.submitMessage("relay", "channel", "speaker", "good", accepted);
+  log.emit(event("turn.started", { sequence: 2, turnId: "accepted-turn" }));
+  log.emit(event("message.completed", { message: "accepted answer", finishReason: "stop", sequence: 2, stepIndex: 0, turnId: "accepted-turn" }));
+  log.emit(event("turn.completed", { sequence: 2, turnId: "accepted-turn" }));
+  await tick();
+
+  assert.equal(replies.at(-1).replyTo.id, "accepted-anchor");
+  assert.notEqual(replies.at(-1).replyTo.id, "rejected-anchor");
   coordinator.stop();
 });
 

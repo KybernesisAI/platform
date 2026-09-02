@@ -130,8 +130,9 @@ export class SessionCoordinator {
   ): Promise<void> {
     const existing = this.#sessions.get(community, channel);
     if (existing) {
+      let runtime: FollowerRuntime | undefined;
       try {
-        const runtime = await this.ensureFollower(community, channel, pubkey);
+        runtime = await this.ensureFollower(community, channel, pubkey);
         runtime.anchors.push(anchor);
         this.#sessions.update(community, channel, (stored) => ({ ...stored, speakerPubkey: pubkey }));
         const session = this.#clientFor(pubkey).sessions.attach(existing.id, {
@@ -143,6 +144,10 @@ export class SessionCoordinator {
         this.#drain(response);
         return;
       } catch (error) {
+        if (runtime) {
+          const index = runtime.anchors.lastIndexOf(anchor);
+          if (index >= 0) runtime.anchors.splice(index, 1);
+        }
         if (error instanceof ClientError && error.status === 400) throw error;
         this.#log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
         this.replaceSession(community, channel);
@@ -288,16 +293,21 @@ export class SessionCoordinator {
         try {
           if (first) {
             let caughtUp = 0;
+            let cursor = stored.streamIndex;
             for await (const event of session.stream({
               follow: false,
               startIndex: stored.streamIndex,
               signal: runtime.abort.signal,
               streamReconnectPolicy: { reconnect: false },
             })) {
-              caughtUp += 1;
               this.#project(community, channel, runtime, event);
-              this.#persistCursor(community, channel, session.state.streamIndex);
+              cursor += 1;
+              caughtUp += 1;
+              this.#persistCursor(community, channel, cursor);
             }
+            // Eve 0.49 updates ClientSession.state only when its generator closes.
+            // The locally counted absolute cursor is authoritative while following.
+            this.#persistCursor(community, channel, cursor);
             if (caughtUp > 0) this.#log(`caught up on ${caughtUp} unread event(s) in ${channel.slice(0, 8)}`);
             first = false;
             ready();
@@ -307,6 +317,7 @@ export class SessionCoordinator {
           const following = this.#clientFor(latest.speakerPubkey ?? pubkey).sessions.attach(latest.id, {
             streamIndex: latest.streamIndex,
           });
+          let cursor = latest.streamIndex;
           for await (const event of following.stream({
             follow: true,
             startIndex: latest.streamIndex,
@@ -314,8 +325,10 @@ export class SessionCoordinator {
             streamReconnectPolicy: { reconnect: false },
           })) {
             this.#project(community, channel, runtime, event);
-            this.#persistCursor(community, channel, following.state.streamIndex);
+            cursor += 1;
+            this.#persistCursor(community, channel, cursor);
           }
+          this.#persistCursor(community, channel, cursor);
           if (!runtime.abort.signal.aborted) await new Promise((resolve) => setTimeout(resolve, 500));
         } catch (error) {
           if (runtime.abort.signal.aborted) return;
