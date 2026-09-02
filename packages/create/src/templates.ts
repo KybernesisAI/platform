@@ -734,11 +734,22 @@ import { arcanaMemory } from "@kybernesis/arcana/memory";
  * Capture is off: this agent remembers deliberately through arcana_remember.
  * Set capture: { enabled: true } for an agent that should learn passively.
  */
+const COMPANY = process.env.ARCANA_COMPANY_WORKSPACE!;
+const DM = process.env.ARCANA_DM_WORKSPACE ?? COMPANY;
+
 export default defineMemory({
   description: "Durable company memory in Arcana: people, decisions, projects, preferences.",
   provider: arcanaMemory({
-    apiKey: process.env.ARCANA_API_KEY!,
-    workspace: process.env.ARCANA_COMPANY_WORKSPACE!,${options.extensionMounted ? "\n    // The Arcana extension already mounts the full arcana_* tool set.\n    tools: false," : ""}
+    // Keys are workspace-scoped. The eval script points every workspace at the
+    // -eval brain, which has its own key; the same choice the extension makes.
+    apiKey:
+      (COMPANY.endsWith("-eval") ? process.env.ARCANA_EVAL_API_KEY : undefined) ??
+      process.env.ARCANA_API_KEY!,
+    workspace: COMPANY,
+    // A DM is a private surface with its own brain; verified from session auth,
+    // never from the message.
+    resolveWorkspace: (ctx) =>
+      ctx.session.auth.current?.attributes.surface === "dm" ? DM : undefined,${options.extensionMounted ? "\n    // The Arcana extension already mounts the full arcana_* tool set.\n    tools: false," : ""}
   }),
   scope: byPrincipal,
 });

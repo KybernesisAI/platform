@@ -29,6 +29,8 @@ test("kyb add memory writes an Arcana slot once, and leaves the tools to the ext
     assert.match(slot, /scope: byPrincipal/);
     assert.match(slot, /tools: false/);
     assert.match(slot, /ARCANA_COMPANY_WORKSPACE/);
+    assert.match(slot, /ARCANA_EVAL_API_KEY/);
+    assert.match(slot, /surface === "dm"/);
 
     writeFileSync(join(withExt, "agent/memory/arcana.ts"), "authored");
     addMemory(withExt);
