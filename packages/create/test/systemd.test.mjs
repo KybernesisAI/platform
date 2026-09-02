@@ -88,3 +88,21 @@ test("upgrade migrates the restart only when a systemd unit for this checkout ex
     rmSync(systemd, { recursive: true, force: true });
   }
 });
+
+test("a build gate added as a drop-in counts as the unit's own", async () => {
+  const { findMatchingAgentServiceUnit } = await import("../dist/systemd.js");
+  const a = app("export default manage({});\n");
+  const systemd = mkdtempSync(join(tmpdir(), "kyb-systemd-dropin-"));
+  try {
+    writeFileSync(join(systemd, "kyber-agent.service"), `[Service]\nUser=exedev\nWorkingDirectory=${a.cwd}\nEnvironment=PORT=8000\n`);
+    mkdirSync(join(systemd, "kyber-agent.service.d"));
+    writeFileSync(join(systemd, "kyber-agent.service.d/build-gate.conf"), "[Service]\nExecStartPre=/bin/bash -lc 'set -a && . ./.env.local && set +a && npx eve build'\n");
+    const unit = findMatchingAgentServiceUnit(a.cwd, systemd);
+    assert.ok(unit);
+    assert.match(unit.contents, /npx eve build/);
+    assert.equal(unit.values.name, "kyber");
+  } finally {
+    a.cleanup();
+    rmSync(systemd, { recursive: true, force: true });
+  }
+});

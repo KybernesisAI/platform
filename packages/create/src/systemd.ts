@@ -106,6 +106,17 @@ export interface InstalledAgentService {
   mode: number;
 }
 
+function dropIns(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".conf"))
+      .sort()
+      .map((name) => readFileSync(join(dir, name), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 export function findMatchingAgentServiceUnit(
   cwd: string,
   systemdDir = "/etc/systemd/system",
@@ -113,7 +124,9 @@ export function findMatchingAgentServiceUnit(
   try {
     for (const file of readdirSync(systemdDir).filter((entry) => entry.endsWith("-agent.service"))) {
       const path = join(systemdDir, file);
-      const contents = readFileSync(path, "utf8");
+      // The effective unit is the file plus its drop-ins (<unit>.d/*.conf, in
+      // name order) — a build gate added through `systemctl edit` counts.
+      const contents = [readFileSync(path, "utf8"), ...dropIns(`${path}.d`)].join("\n");
       const values = parseAgentServiceUnit(path, contents);
       if (values && resolve(values.app) === resolve(cwd)) {
         return { path, contents, values, mode: statSync(path).mode & 0o777 };
