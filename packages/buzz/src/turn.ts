@@ -61,8 +61,26 @@ export async function answerTurn(
     try {
       const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
 
-      // Move to the true end before speaking. This repairs a cursor left behind
-      // by an interrupted turn without changing the durable session identity.
+      /**
+       * Move to the true end of the conversation before speaking.
+       *
+       * `send()` opens its response stream at the position the handle already
+       * holds and stops at the FIRST turn boundary it meets. If anything is
+       * still unread there — the tail of a turn that outlived its reader, a
+       * turn that was running when the bridge restarted — that boundary
+       * belongs to the older turn. The read ends on it, this turn's answer is
+       * never collected, and the stored position stays one turn behind.
+       *
+       * Which makes it permanent: every later turn reads the previous turn's
+       * tail. The channel answers nothing, then answers a question from ten
+       * minutes ago, and a fresh conversation elsewhere works perfectly —
+       * because a fresh conversation has nothing left over to trip on.
+       *
+       * Draining first costs one bounded read of only what is unread, and it
+       * repairs a position that has already drifted rather than requiring
+       * anyone to notice. Non-following, so it ends at the tail instead of
+       * waiting for the future.
+       */
       let unread = 0;
       for await (const _ of session.stream({ follow: false, startIndex: existing.streamIndex })) {
         unread += 1;
@@ -81,9 +99,9 @@ export async function answerTurn(
       });
       return result.message ?? "";
     } catch (error) {
-      // A malformed turn does not make its durable session stale. Let the
-      // bridge report the failed answer while preserving continuity for the
-      // next valid message.
+      // A malformed turn does not make its durable session stale. Rethrow so
+      // the bridge can tell the room (see `rejectedTurnReply`), and keep the
+      // mapping so the next valid message continues the same conversation.
       if (error instanceof ClientError && error.status === 400) throw error;
 
       log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
@@ -101,4 +119,22 @@ export async function answerTurn(
     streamIndex: created.session.state.streamIndex,
   });
   return reply;
+}
+
+/**
+ * What the room is told when eve refuses the turn itself.
+ *
+ * A 400 means the request was malformed — a part eve does not accept, a body
+ * it could not parse — not that the agent failed to think of an answer. The
+ * session survives it (`answerTurn` keeps the mapping), but the person who
+ * sent the message is still waiting, and a log line nobody is reading is not
+ * an answer. Returns `null` for anything that is not a request rejection, so
+ * the caller's ordinary failure path stays as it was.
+ */
+export function rejectedTurnReply(error: unknown): string | null {
+  if (!(error instanceof ClientError) || error.status !== 400) return null;
+  const detail = String(error.message ?? "").split("\n")[0].trim().slice(0, 160);
+  return detail
+    ? `I couldn't read that message (${detail}). Try sending it again, or as plain text.`
+    : "I couldn't read that message. Try sending it again, or as plain text.";
 }

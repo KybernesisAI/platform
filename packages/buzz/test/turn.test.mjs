@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { ClientError } from "eve/client";
 import { SessionStore } from "../dist/sessions.js";
-import { answerTurn, composeMessage } from "../dist/turn.js";
+import { answerTurn, composeMessage, rejectedTurnReply } from "../dist/turn.js";
 
 const imageRef = { url: "https://relay.example/image" };
 const image = {
@@ -153,4 +153,17 @@ test("a non-400 stale session error retains the reset-and-create fallback", asyn
   assert.equal(createdInput.message, "retry me");
   assert.equal(store.get("relay", "channel").id, "session-new");
   assert.equal(logs.some((message) => message.includes("starting a new one")), true);
+});
+
+test("a request rejection becomes words for the room, not a log line", () => {
+  const reply = rejectedTurnReply(new ClientError(400, JSON.stringify({ error: "Invalid message part: image" })));
+
+  assert.match(reply, /couldn't read that message/);
+  assert.match(reply, /Invalid message part: image/);
+});
+
+test("only a 400 is reported as a rejected turn; other failures keep their own path", () => {
+  assert.equal(rejectedTurnReply(new ClientError(404, "gone")), null);
+  assert.equal(rejectedTurnReply(new Error("socket hang up")), null);
+  assert.equal(rejectedTurnReply(undefined), null);
 });

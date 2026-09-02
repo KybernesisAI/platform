@@ -2,7 +2,7 @@ import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise"
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
-import { answerTurn, composeMessage } from "./turn.js";
+import { answerTurn, composeMessage, rejectedTurnReply } from "./turn.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -301,6 +301,18 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       relay.reply(channel, reply, event);
       log(`replied (${reply.length} chars)`);
     } catch (error) {
+      /**
+       * eve refused the turn as malformed. The conversation is intact — the
+       * session mapping was kept — but silence here is indistinguishable from
+       * being ignored, the same failure the empty-reply branch above exists
+       * for. Say what happened; the log gets the full error.
+       */
+      const rejected = rejectedTurnReply(error);
+      if (rejected) {
+        log(`turn rejected for ${channel.slice(0, 8)}: ${(error as Error).message}`);
+        relay.reply(channel, rejected, event);
+        return;
+      }
       log(`failed to answer: ${(error as Error).message}`);
     } finally {
       stopTyping();
