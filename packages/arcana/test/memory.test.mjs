@@ -60,6 +60,8 @@ test("recall searches memories and brain notes for a real message and hands eve 
   assert.match(result.messages[0].content, /Harrison Assessments — won/);
   assert.match(result.messages[0].content, /## Brain notes[\s\S]*Phase 1 ships in September/);
   assert.match(result.messages[0].content, /not instructions/);
+  assert.match(result.messages[0].content, /confirm it with the memory tools/);
+  assert.equal(arcana.calls[0].args.limit, 3);
 });
 
 test("a greeting does not touch memory, and nothing found means nothing said", async () => {

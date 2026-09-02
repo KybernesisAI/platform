@@ -172,7 +172,7 @@ providers eve documents:
 | `capture` (turn.completed) | **Off by default.** Kybernesis agents remember deliberately through `arcana_remember` (the remember skill); capturing every turn on top would store each fact twice. `capture: { enabled: true }` for an agent with no remember skill that should learn passively. Captured memories carry `eve-memory`, `scope:<key>` and `op:<operationId>` tags. |
 | `tools()` | `remember`, `recall`, `search` as `<slot>__*`. Set `tools: false` when the extension is also mounted — it already offers the full `arcana_*` set. |
 
-Options: `url` (the MCP endpoint), `recall: { enabled, minWords, limit, brainNotes }`,
+Options: `url` (the MCP endpoint), `recall: { enabled, minWords, limit (default 3), brainNotes }`,
 `capture: { enabled, minWords }`, `tools`, `resolveWorkspace(ctx)` (choose the
 brain per operation from VERIFIED session context, as the extension does), `log`.
 
