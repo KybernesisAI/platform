@@ -415,7 +415,17 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   }
 
   console.log(bold(`\nInstalling: ${toUpgrade.join(", ")}\n`));
-  run("npm", ["install", ...toUpgrade], { cwd });
+  /**
+   * One install, with peers relaxed. Every @kybernesis package peers on a
+   * narrow eve range, and eve moves with them: the installed set demands the
+   * old eve, the new set demands the new one, and npm's resolver refuses
+   * either order — eve first, packages first, or all at once — under strict
+   * peers (seen on Kyber moving 0.38 → 0.49: ERESOLVE all three ways). The
+   * set being installed is exactly the certified combination, so relaxing
+   * peer resolution for this one command changes nothing about what ends up
+   * on disk; the version check above is what guards correctness.
+   */
+  run("npm", ["install", ...toUpgrade, "--legacy-peer-deps"], { cwd });
 
   /**
    * Repairs run AFTER the install, not before.
