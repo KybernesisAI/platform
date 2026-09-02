@@ -36,6 +36,8 @@ export const KIND_DM_OPEN = 41010;
  */
 export const TYPING_INTERVAL_MS = 3_000;
 export const PRESENCE_INTERVAL_MS = 60_000;
+/** Enough overlap for same-second redelivery without retaining every event forever. */
+export const MAX_SEEN_EVENT_IDS = 10_000;
 
 export type NostrEvent = {
   id: string;
@@ -78,6 +80,7 @@ export class BuzzRelay {
   private authenticated = false;
   private presenceTimer: ReturnType<typeof setInterval> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   /** How long to wait before the next attempt, and what was last refused. */
   private backoff = 5_000;
@@ -128,6 +131,10 @@ export class BuzzRelay {
     this.closed = true;
     if (this.presenceTimer) clearInterval(this.presenceTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.presenceTimer = null;
+    this.pollTimer = null;
+    this.reconnectTimer = null;
     try {
       this.socket?.close();
     } catch {
@@ -137,6 +144,11 @@ export class BuzzRelay {
 
   private reconnect(): void {
     if (this.closed) return;
+    if (this.presenceTimer) clearInterval(this.presenceTimer);
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.presenceTimer = null;
+    this.pollTimer = null;
+    if (this.reconnectTimer) return;
     // Backs off rather than hammering. A membership refusal is the common case
     // here — an agent whose invite has not happened yet — and it is not
     // something a retry a second from now can fix, though a retry eventually
@@ -144,7 +156,10 @@ export class BuzzRelay {
     const wait = this.backoff;
     this.backoff = Math.min(this.backoff * 2, 60_000);
     this.log(`disconnected; reconnecting in ${Math.round(wait / 1000)}s`);
-    setTimeout(() => this.connect(), wait);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, wait);
   }
 
   private receive(data: string): void {
@@ -212,7 +227,14 @@ export class BuzzRelay {
     if (!event || event.pubkey === this.key.publicKey) return;
     if (this.seen.has(event.id)) return;
     this.seen.add(event.id);
-    if (event.created_at >= this.cursor) this.cursor = event.created_at + 1;
+    if (this.seen.size > MAX_SEEN_EVENT_IDS) {
+      const oldest = this.seen.values().next().value;
+      if (oldest) this.seen.delete(oldest);
+    }
+    // Nostr timestamps have one-second precision and `since` is inclusive. Keep
+    // the latest second in the next poll; the seen set removes redelivery while
+    // allowing another event created during that same second to arrive.
+    if (event.created_at > this.cursor) this.cursor = event.created_at;
     this.onMessage(event);
   }
 

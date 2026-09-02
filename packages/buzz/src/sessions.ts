@@ -33,9 +33,11 @@ const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 export class SessionStore {
   #file: string;
   #entries = new Map<string, StoredSession>();
+  #onError: (message: string) => void;
 
-  constructor(file: string) {
+  constructor(file: string, options: { onError?: (message: string) => void } = {}) {
     this.#file = file;
+    this.#onError = options.onError ?? (() => {});
     this.#load();
   }
 
@@ -71,9 +73,10 @@ export class SessionStore {
           this.#entries.set(key, value);
         }
       }
-    } catch {
+    } catch (error) {
       // A corrupt store is not worth refusing to start over. Losing the mapping
       // costs conversation history; refusing to start costs the whole agent.
+      this.#onError(`could not load Buzz session store ${this.#file}: ${(error as Error).message}`);
     }
   }
 
@@ -87,9 +90,10 @@ export class SessionStore {
       const tmp = `${this.#file}.tmp`;
       writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.#entries)), { mode: 0o600 });
       renameSync(tmp, this.#file);
-    } catch {
+    } catch (error) {
       // Best effort: an agent that cannot write its store still answers, it
       // just forgets across restarts — which is where this started.
+      this.#onError(`could not write Buzz session store ${this.#file}: ${(error as Error).message}`);
     }
   }
 }

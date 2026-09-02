@@ -2,6 +2,8 @@ import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise"
 import { fetchMedia, isImage, parseMedia, type MediaRef } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 /**
  * What one turn can carry: prose, or prose with the things attached to it.
@@ -99,9 +101,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
    * had no context, while the old session sat intact holding a reply nobody was
    * left to read.
    */
-  const sessions = new SessionStore(
-    process.env.BUZZ_SESSIONS_FILE ?? ".buzz-sessions.json",
-  );
+  const legacySessionsFile = ".buzz-sessions.json";
+  const sessionsFile =
+    process.env.BUZZ_SESSIONS_FILE ??
+    (existsSync(legacySessionsFile)
+      ? legacySessionsFile
+      : join(dirname(options.keyFile), "buzz-sessions.json"));
+  const sessions = new SessionStore(sessionsFile, { onError: log });
   if (sessions.size > 0) log(`resumed ${sessions.size} conversation(s) from the last run`);
   /** Who has already been sent a link, so a room full of strangers is not a room full of spam. */
   const invited = new Map<string, number>();

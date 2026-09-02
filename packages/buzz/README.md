@@ -60,6 +60,7 @@ sessions are keyed by channel.
 | `BUZZ_RELAY` | The workspace relay (`wss://…`) — or several, comma-separated |
 | `BUZZ_AGENT_URL` | Where the agent listens (default `http://127.0.0.1:8000`) |
 | `BUZZ_KEYFILE` | The agent's key (default `~/.kybernesis/buzz-agent.json`) |
+| `BUZZ_SESSIONS_FILE` | Channel-to-session continuity store (default beside the key file; an existing legacy `.buzz-sessions.json` is reused) |
 | `KYBERNESIS_ISSUER` | The control plane |
 | `KYBERNESIS_AGENT_CREDENTIAL` | This agent's credential |
 

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { BuzzRelay, KIND_MESSAGE, KIND_PRESENCE, KIND_REACTION, KIND_TYPING } from "../dist/relay.js";
+import {
+  BuzzRelay,
+  KIND_MESSAGE,
+  KIND_PRESENCE,
+  KIND_REACTION,
+  KIND_TYPING,
+  MAX_SEEN_EVENT_IDS,
+} from "../dist/relay.js";
 import { loadOrCreateKey } from "../dist/keys.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,10 +54,10 @@ after(() => {
   for (const relay of opened) relay.close();
 });
 
-function connected(onMessage = () => {}) {
+function connected(onMessage = () => {}, options = {}) {
   const previous = globalThis.WebSocket;
   globalThis.WebSocket = FakeSocket;
-  const relay = new BuzzRelay({ url: "wss://relay.example.com", key, onMessage });
+  const relay = new BuzzRelay({ url: "wss://relay.example.com", key, onMessage, ...options });
   relay.connect();
   const socket = FakeSocket.last;
   globalThis.WebSocket = previous;
@@ -115,6 +122,73 @@ test("the agent never answers itself, and never answers the same message twice",
   socket.deliver(["EVENT", "sub", fromOther]);
 
   assert.deepEqual(seen, ["b"], "own events are noise; redelivery is not a second question");
+});
+
+test("polling keeps the latest second inclusive so messages sharing a timestamp are not skipped", async () => {
+  const received = [];
+  const { relay, socket } = connected((event) => received.push(event.id), { pollMs: 5 });
+  authenticate(socket);
+
+  const createdAt = Math.floor(Date.now() / 1000);
+  socket.deliver(["EVENT", "sub", {
+    id: "same-second-a",
+    pubkey: "f".repeat(64),
+    created_at: createdAt,
+    kind: 9,
+    tags: [],
+    content: "first",
+    sig: "",
+  }]);
+  await new Promise((resolve) => setTimeout(resolve, 12));
+
+  const polls = socket.sent.filter((frame) => frame[0] === "REQ");
+  assert.equal(polls.at(-1)[2].since, createdAt);
+  relay.close();
+});
+
+test("disconnect stops the old polling loop before reconnecting", async () => {
+  const { relay, socket } = connected(() => {}, { pollMs: 5 });
+  authenticate(socket);
+  await new Promise((resolve) => setTimeout(resolve, 12));
+  socket.emit("close");
+  const pollsAtDisconnect = socket.sent.filter((frame) => frame[0] === "REQ").length;
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(
+    socket.sent.filter((frame) => frame[0] === "REQ").length,
+    pollsAtDisconnect,
+  );
+  relay.close();
+});
+
+test("redelivery memory is bounded for a long-running bridge", () => {
+  const received = [];
+  const { relay, socket } = connected((event) => received.push(event.id));
+  authenticate(socket);
+  const createdAt = Math.floor(Date.now() / 1000);
+
+  for (let index = 0; index <= MAX_SEEN_EVENT_IDS; index += 1) {
+    socket.deliver(["EVENT", "sub", {
+      id: `event-${index}`,
+      pubkey: "f".repeat(64),
+      created_at: createdAt,
+      kind: 9,
+      tags: [],
+      content: "message",
+      sig: "",
+    }]);
+  }
+  socket.deliver(["EVENT", "sub", {
+    id: "event-0",
+    pubkey: "f".repeat(64),
+    created_at: createdAt,
+    kind: 9,
+    tags: [],
+    content: "message",
+    sig: "",
+  }]);
+
+  assert.equal(received.length, MAX_SEEN_EVENT_IDS + 2);
+  relay.close();
 });
 
 test("typing is scoped to its channel and stops when told", () => {
