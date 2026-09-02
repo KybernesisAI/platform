@@ -58,25 +58,63 @@ test("follower starts at the durable cursor and delivers an out-of-band answer o
   assert.equal(progress.at(-1).streamIndex, 10);
 });
 
-test("a repeated HITL request replaces pending state and is rendered once", async () => {
+test("a repeated HITL park restarts at its cursor and later delivers out of band", async () => {
   const prompts = [];
-  const progress = [];
-  const result = await followPendingSession({
-    client: clientWith([
-      { type: "input.resolved", data: { resolutions: [], sequence: 1, stepIndex: 1, turnId: "turn" }, meta },
-      { type: "input.requested", data: { requests: [nextRequest], sequence: 1, stepIndex: 2, turnId: "turn" }, meta },
+  const messages = [];
+  const pendingStates = [];
+  const starts = [];
+  const streams = [
+    [
+      { type: "input.resolved", data: { resolutions: [], sequence: 1, stepIndex: 1, turnId: "turn-1" }, meta },
+      { type: "input.requested", data: { requests: [nextRequest], sequence: 1, stepIndex: 2, turnId: "turn-1" }, meta },
       { type: "session.waiting", data: { continuationToken: "session", wait: "next-user-message" }, meta },
-    ], {}),
-    session: { id: "session", streamIndex: 2, pending: [request], speaker: "speaker", updated: 1 },
+    ],
+    [
+      { type: "input.resolved", data: { resolutions: [], sequence: 2, stepIndex: 1, turnId: "turn-2" }, meta },
+      { type: "message.completed", data: { message: "answer after second park", finishReason: "stop", sequence: 2, stepIndex: 2, turnId: "turn-2" }, meta },
+      { type: "session.waiting", data: { continuationToken: "session", wait: "next-user-message" }, meta },
+    ],
+  ];
+  let durable = { id: "session", streamIndex: 2, pending: [request], speaker: "speaker", updated: 1 };
+  const client = {
+    sessions: {
+      attach() {
+        const events = streams.shift();
+        assert.ok(events, "the follower must attach once for each parked boundary");
+        return {
+          async *stream(options) {
+            starts.push(options.startIndex);
+            for (const event of events) yield event;
+          },
+        };
+      },
+    },
+  };
+  const follow = () => followPendingSession({
+    client,
+    session: durable,
     signal: new AbortController().signal,
-    onProgress: (value) => progress.push(value),
+    onProgress: ({ streamIndex, pending }) => {
+      pendingStates.push(pending);
+      durable = { ...durable, streamIndex, pending };
+    },
     onPrompt: (requests) => prompts.push(requests),
-    onMessage: () => assert.fail("session parked again"),
+    onMessage: (message) => {
+      messages.push(message);
+      durable = { ...durable, pending: [] };
+    },
   });
 
-  assert.equal(result, "ended");
+  assert.equal(await follow(), "parked");
+  assert.deepEqual(durable.pending, [nextRequest]);
   assert.deepEqual(prompts, [[nextRequest]]);
-  assert.deepEqual(progress.at(-1).pending, [nextRequest]);
+
+  assert.equal(await follow(), "settled");
+  assert.deepEqual(starts, [2, 5]);
+  assert.deepEqual(messages, ["answer after second park"]);
+  assert.equal(pendingStates.some((pending) => pending.length === 0), true);
+  assert.deepEqual(durable.pending, []);
+  assert.equal(streams.length, 0);
 });
 
 test("aborting a follower prevents later delivery", async () => {

@@ -192,7 +192,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
               sessions.set(community, channel, {
                 id: latest.id,
                 streamIndex,
-                pending: pending.length > 0 ? pending : latest.pending,
+                pending,
                 speaker: latest.speaker,
               });
             },
@@ -213,7 +213,18 @@ export function buzzBridge(options: BuzzBridgeOptions) {
               log(`parked session failed in ${channel.slice(0, 8)}: ${message}`);
             }),
           });
-          if (result !== "ended") return;
+          if (result === "aborted") return;
+
+          // Eve closes a follow stream at every session.waiting boundary. A
+          // repeated HITL park therefore needs a fresh attach at the cursor we
+          // just persisted; returning here would leave durable pending input
+          // with no process watching for its eventual answer.
+          const latest = sessions.get(community, channel);
+          if (!latest?.pending?.length || !latest.speaker) return;
+          if (result === "parked") {
+            delay = 250;
+            continue;
+          }
         } catch (error) {
           log(`pending follower for ${channel.slice(0, 8)} disconnected: ${(error as Error).message}`);
         }

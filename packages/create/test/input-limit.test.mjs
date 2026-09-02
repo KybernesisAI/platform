@@ -6,7 +6,9 @@ import { test } from "node:test";
 
 import {
   EVE_DEFAULT_MAX_INPUT_TOKENS_PER_SESSION,
+  discoverEffectiveInputLimit,
   formatEffectiveInputLimit,
+  parseEveInfoJson,
   readEffectiveInputLimit,
   resolveEffectiveInputLimit,
 } from "../dist/input-limit.js";
@@ -51,4 +53,47 @@ test("exe scaffolds author the certified session limit while Vercel scaffolds st
   const vercel = hostAgentTs("vercel", "anthropic/claude-sonnet-5");
   assert.match(exe, /limits: \{ maxInputTokensPerSession: 40_000_000 \}/);
   assert.doesNotMatch(vercel, /maxInputTokensPerSession/);
+});
+
+
+test("eve info parsing rejects arrays and malformed diagnostics or artifacts", () => {
+  assert.equal(parseEveInfoJson("[]"), null);
+  assert.equal(parseEveInfoJson(JSON.stringify({ diagnostics: {}, artifacts: null })), null);
+  assert.equal(parseEveInfoJson(JSON.stringify({ diagnostics: { errors: 0, warnings: "0" }, artifacts: null })), null);
+  assert.equal(parseEveInfoJson(JSON.stringify({ diagnostics: null, artifacts: {} })), null);
+  assert.deepEqual(
+    parseEveInfoJson(JSON.stringify({
+      diagnostics: { errors: 0, warnings: 2 },
+      artifacts: { compiledManifest: "/tmp/manifest.json", extra: true },
+      other: "allowed",
+    })),
+    {
+      diagnostics: { errors: 0, warnings: 2 },
+      artifacts: { compiledManifest: "/tmp/manifest.json" },
+    },
+  );
+});
+
+test("failed eve discovery surfaces the command stderr in the unresolved limit", () => {
+  const result = discoverEffectiveInputLimit("/agent", {}, () => ({
+    status: 1,
+    stdout: "",
+    stderr: "Agent compile failed: EXE_MODEL is not set\n",
+  }));
+  assert.equal(result.info, null);
+  assert.equal(result.limit.kind, "unresolved");
+  assert.match(result.limit.reason, /Agent compile failed: EXE_MODEL is not set/);
+});
+
+test("successful commands with unexpected JSON shape are not treated as discovery", () => {
+  const result = discoverEffectiveInputLimit("/agent", {}, () => ({
+    status: 0,
+    stdout: JSON.stringify({ diagnostics: "clean", artifacts: [] }),
+    stderr: "",
+  }));
+  assert.equal(result.info, null);
+  assert.deepEqual(result.limit, {
+    kind: "unresolved",
+    reason: "eve info returned JSON with an unexpected shape",
+  });
 });

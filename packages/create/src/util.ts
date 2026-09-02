@@ -31,17 +31,40 @@ export function run(
   return ok;
 }
 
+export interface CaptureResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}
+
+/** Capture both streams for callers that need to explain a failed command. */
+export function captureResult(
+  command: string,
+  args: string[],
+  cwd?: string,
+  extraEnv?: Record<string, string>,
+): CaptureResult {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    ...(result.error ? { error: result.error.message } : {}),
+  };
+}
+
 export function capture(
   command: string,
   args: string[],
   cwd?: string,
   extraEnv?: Record<string, string>,
 ): string | null {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
-  });
+  const result = captureResult(command, args, cwd, extraEnv);
   return result.status === 0 ? result.stdout : null;
 }
 

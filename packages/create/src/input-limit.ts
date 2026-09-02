@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { capture } from "./util.js";
+import { captureResult, type CaptureResult } from "./util.js";
 
 export const EVE_DEFAULT_MAX_INPUT_TOKENS_PER_SESSION = 40_000_000;
 
@@ -8,23 +8,29 @@ export type EffectiveInputLimit =
   | { kind: "uncapped"; inherited: false }
   | { kind: "unresolved"; reason: string };
 
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 /** Resolve the root limit from eve's compiled manifest, never source regexes. */
 export function resolveEffectiveInputLimit(manifest: unknown): EffectiveInputLimit {
-  if (!manifest || typeof manifest !== "object") {
+  if (!isPlainObject(manifest)) {
     return { kind: "unresolved", reason: "compiled manifest is not an object" };
   }
-  const config = Reflect.get(manifest, "config");
-  if (!config || typeof config !== "object") {
+  const config = manifest.config;
+  if (!isPlainObject(config)) {
     return { kind: "unresolved", reason: "compiled manifest has no root config" };
   }
-  const limits = Reflect.get(config, "limits");
+  const limits = config.limits;
   if (limits === undefined) {
     return { kind: "numeric", value: EVE_DEFAULT_MAX_INPUT_TOKENS_PER_SESSION, inherited: true };
   }
-  if (!limits || typeof limits !== "object") {
+  if (!isPlainObject(limits)) {
     return { kind: "unresolved", reason: "compiled root limits are malformed" };
   }
-  const value = Reflect.get(limits, "maxInputTokensPerSession");
+  const value = limits.maxInputTokensPerSession;
   if (value === undefined) {
     return { kind: "numeric", value: EVE_DEFAULT_MAX_INPUT_TOKENS_PER_SESSION, inherited: true };
   }
@@ -48,8 +54,28 @@ export interface EveInfoJson {
 
 export function parseEveInfoJson(text: string): EveInfoJson | null {
   try {
-    const value = JSON.parse(text) as EveInfoJson;
-    return value && typeof value === "object" ? value : null;
+    const value: unknown = JSON.parse(text);
+    if (!isPlainObject(value)) return null;
+
+    const diagnostics = value.diagnostics;
+    const validDiagnostics = diagnostics === null || (
+      isPlainObject(diagnostics) &&
+      Number.isInteger(diagnostics.errors) && Number(diagnostics.errors) >= 0 &&
+      Number.isInteger(diagnostics.warnings) && Number(diagnostics.warnings) >= 0
+    );
+    const artifacts = value.artifacts;
+    const validArtifacts = artifacts === null || (
+      isPlainObject(artifacts) && typeof artifacts.compiledManifest === "string"
+    );
+    if (!validDiagnostics || !validArtifacts) return null;
+    return {
+      diagnostics: diagnostics === null
+        ? null
+        : { errors: Number(diagnostics.errors), warnings: Number(diagnostics.warnings) },
+      artifacts: artifacts === null
+        ? null
+        : { compiledManifest: String(artifacts.compiledManifest) },
+    };
   } catch {
     return null;
   }
@@ -66,11 +92,33 @@ export function readEffectiveInputLimit(info: EveInfoJson | null): EffectiveInpu
   }
 }
 
+type CaptureEveInfo = (
+  command: string,
+  args: string[],
+  cwd?: string,
+  env?: Record<string, string>,
+) => CaptureResult;
+
+function commandFailure(result: CaptureResult): string {
+  const detail = (result.stderr || result.error || result.stdout).trim().replace(/\s+/g, " ").slice(0, 500);
+  return detail ? `eve info failed: ${detail}` : `eve info failed with status ${result.status ?? "unknown"}`;
+}
+
 export function discoverEffectiveInputLimit(
   cwd: string,
   env?: Record<string, string>,
+  captureEveInfo: CaptureEveInfo = captureResult,
 ): { info: EveInfoJson | null; limit: EffectiveInputLimit } {
-  const output = capture("npx", ["eve", "info", "--json"], cwd, env);
-  const info = output === null ? null : parseEveInfoJson(output);
+  const output = captureEveInfo("npx", ["eve", "info", "--json"], cwd, env);
+  if (output.status !== 0) {
+    return { info: null, limit: { kind: "unresolved", reason: commandFailure(output) } };
+  }
+  const info = parseEveInfoJson(output.stdout);
+  if (info === null) {
+    return {
+      info: null,
+      limit: { kind: "unresolved", reason: "eve info returned JSON with an unexpected shape" },
+    };
+  }
   return { info, limit: readEffectiveInputLimit(info) };
 }

@@ -1,6 +1,8 @@
 import type { Client, InputRequest, MessageStreamEvent } from "eve/client";
 import type { StoredSession } from "./sessions.js";
 
+export type FollowPendingResult = "settled" | "parked" | "aborted" | "ended";
+
 export interface FollowPendingOptions {
   client: Client;
   session: StoredSession;
@@ -12,12 +14,17 @@ export interface FollowPendingOptions {
 }
 
 /**
- * Follow one parked session from its durable cursor until it resumes or fails.
+ * Follow one parked session from its durable cursor to the next session boundary.
+ *
+ * A boundary that parks on another input request returns `parked`, telling the
+ * bridge to attach a fresh follow stream at the persisted cursor. Eve closes a
+ * follow stream at `session.waiting`; continuing the iterator cannot watch the
+ * next response.
  *
  * Progress is persisted before external delivery. That ordering prevents a
  * restarted bridge from posting the same durable completion a second time.
  */
-export async function followPendingSession(options: FollowPendingOptions): Promise<"settled" | "aborted" | "ended"> {
+export async function followPendingSession(options: FollowPendingOptions): Promise<FollowPendingResult> {
   const handle = options.client.sessions.attach(options.session.id, {
     streamIndex: options.session.streamIndex,
   });
@@ -42,6 +49,9 @@ export async function followPendingSession(options: FollowPendingOptions): Promi
       if (event.type === "input.resolved" || event.type === "turn.started") pending = [];
       if (event.type === "message.completed" && event.data.message) message = event.data.message;
 
+      // Persist the exact state, including an empty pending array after eve has
+      // resolved the request. Restoring the old request here would accept a
+      // second answer for input the session is no longer waiting on.
       await options.onProgress({ streamIndex, pending });
 
       if (event.type === "session.failed") {
@@ -49,7 +59,7 @@ export async function followPendingSession(options: FollowPendingOptions): Promi
         return "settled";
       }
       if (event.type === "session.completed" || event.type === "session.waiting") {
-        if (pending.length > 0) continue;
+        if (pending.length > 0) return "parked";
         if (message) await options.onMessage(message);
         return "settled";
       }
