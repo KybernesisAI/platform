@@ -369,7 +369,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
         `resolved, so this is not a clean bill of health.`)}\n` +
         `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
     );
-    reconcileSystemdService(cwd, deps);
+    repairManageRestart(cwd, deps);
     return;
   }
 

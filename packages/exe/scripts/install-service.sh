@@ -151,30 +151,8 @@ echo "install-service: ${NAME}-agent installed and started"
 echo "  logs:   tail -f ${APP}/cli.log"
 echo "  status: systemctl status ${NAME}-agent"
 
-case "$RESTART_STATE" in
-  migrated)
-    echo "  manage: migrated agent/channels/kyb.ts to: ${RESTART_COMMAND}"
-    ;;
-  custom)
-    echo >&2
-    echo "install-service: WARNING — preserved customized restartCommand in agent/channels/kyb.ts." >&2
-    echo "  systemd now owns this agent. A command that invokes scripts/eve-server.sh can start" >&2
-    echo "  a second server against the same durable store. Review it and use exactly:" >&2
-    echo "    restartCommand: \"${RESTART_COMMAND}\"," >&2
-    echo "  This requires passwordless/noninteractive sudo; verify with:" >&2
-    echo "    ${RESTART_COMMAND}" >&2
-    echo "  Unlike eve-server.sh, systemctl restart does not wait for an in-flight turn;" >&2
-    echo "  an install during a conversation can interrupt that turn." >&2
-    ;;
-  missing)
-    if [ -f "$MANAGE_FILE" ]; then
-      echo >&2
-      echo "install-service: WARNING — management routes have no restartCommand." >&2
-      echo "  Add this exact line to agent/channels/kyb.ts so Studio installs become live" >&2
-      echo "  without creating a second, independently supervised server:" >&2
-      echo "    restartCommand: \"${RESTART_COMMAND}\"," >&2
-      echo "  This requires passwordless/noninteractive sudo. systemctl restart also does" >&2
-      echo "  not wait for an in-flight turn, so an install can interrupt that turn." >&2
-    fi
-    ;;
-esac
+# Studio installs restart the agent through agent/channels/kyb.ts. With systemd
+# owning the process that must be `sudo -n systemctl restart <name>-agent`;
+# `kyb upgrade` migrates the scaffolded eve-server.sh command and reports any
+# other value with the exact line to use.
+echo "  studio: run 'kyb upgrade' once so Studio installs restart through systemd"
