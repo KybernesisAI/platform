@@ -154,6 +154,29 @@ const RENEW_WITHIN_MS = 15 * 60_000;
  * authentication for no reason a user could see — which is exactly the failure
  * we spent a day chasing on the control plane.
  */
+/**
+ * Drop OpenAI's `safety_identifier` from an outgoing chat body.
+ *
+ * eve (0.45+) fills the identifier on every call whose provider looks like
+ * OpenAI — and through `createOpenAI` this one does — but xAI is not OpenAI,
+ * and an OpenAI-compatible endpoint that validates its parameters answers an
+ * unknown one with HTTP 400 rather than ignoring it (the exe gateway does
+ * exactly that). Anything that is not a JSON object body passes through
+ * untouched.
+ */
+export function withoutSafetyIdentifier(body: BodyInit | null | undefined): BodyInit | null | undefined {
+  if (typeof body !== "string") return body;
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return body;
+    if (!("safety_identifier" in parsed)) return body;
+    const { safety_identifier: _dropped, ...rest } = parsed as Record<string, unknown>;
+    return JSON.stringify(rest);
+  } catch {
+    return body;
+  }
+}
+
 export function grokSubscription<TModel>(options: GrokSubscriptionOptions<TModel>): TModel {
   const baseURL = options.baseURL ?? process.env.XAI_API_URL ?? "https://api.x.ai/v1";
 
@@ -182,7 +205,7 @@ export function grokSubscription<TModel>(options: GrokSubscriptionOptions<TModel
     const { key } = readGrokCredential(options.authPath);
     const headers = new Headers(init?.headers);
     headers.set("authorization", `Bearer ${key}`);
-    return await globalThis.fetch(input, { ...init, headers });
+    return await globalThis.fetch(input, { ...init, headers, body: withoutSafetyIdentifier(init?.body) });
   };
 
   const provider = options.createOpenAI({

@@ -114,13 +114,30 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
     doStream: (o: CallOptions) => unknown;
   };
 
-  const forceStoreFalse = (o: CallOptions): CallOptions => ({
-    ...o,
-    providerOptions: {
-      ...o.providerOptions,
-      openai: { ...(o.providerOptions?.openai ?? {}), store: false },
-    },
-  });
+  /**
+   * Shape every call for the gateway, whatever the harness asked for.
+   *
+   * `store: false` — the gateway is not OpenAI's stateful Responses store.
+   *
+   * No `safetyIdentifier` — eve (0.45+) fills OpenAI's end-user safety
+   * identifier on every call whose provider looks like OpenAI, and the
+   * `@ai-sdk/openai` client forwards it as `safety_identifier`. The exe
+   * gateway rejects the parameter outright (HTTP 400 "Unsupported parameter:
+   * safety_identifier"), which failed every turn of every eval the first
+   * time eve 0.47.7 ran here. The identifier is a fingerprint eve computes for
+   * OpenAI's abuse monitoring; the gateway does its own accounting per
+   * integration, so nothing is lost by leaving it out.
+   */
+  const forceStoreFalse = (o: CallOptions): CallOptions => {
+    const { safetyIdentifier: _dropped, ...openai } = o.providerOptions?.openai ?? {};
+    return {
+      ...o,
+      providerOptions: {
+        ...o.providerOptions,
+        openai: { ...openai, store: false },
+      },
+    };
+  };
 
   /**
    * Answer a non-streaming call by streaming and collecting the result.
