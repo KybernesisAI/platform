@@ -12,8 +12,16 @@ export function lineHasCorruption(line: string): boolean {
   return CORRUPTION_MARKERS.some((marker) => line.includes(marker));
 }
 
+/**
+ * How many lines after a `CorruptedEventLogError` its `code CORRUPTED_EVENT_LOG`
+ * detail can trail. eve prints the two as one block per condemned run; counting
+ * both would report twice as many runs as were lost.
+ */
+const ERROR_BLOCK_LINES = 8;
+
 export class CorruptionLineCounter {
   #partial = "";
+  #sinceError = Number.POSITIVE_INFINITY;
   count = 0;
 
   push(chunk: string | Buffer): void {
@@ -29,7 +37,17 @@ export class CorruptionLineCounter {
   }
 
   #count(line: string): void {
-    if (lineHasCorruption(line)) this.count += 1;
+    this.#sinceError += 1;
+    if (line.includes("CorruptedEventLogError")) {
+      this.count += 1;
+      this.#sinceError = 0;
+      return;
+    }
+    // A bare code line belongs to the error just above it; on its own it is a run.
+    if (line.includes("CORRUPTED_EVENT_LOG") && this.#sinceError > ERROR_BLOCK_LINES) {
+      this.count += 1;
+      this.#sinceError = 0;
+    }
   }
 }
 
