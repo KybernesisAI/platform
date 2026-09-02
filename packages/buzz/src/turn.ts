@@ -133,6 +133,15 @@ export async function answerTurn(
     }
   }
 
+  // Every fresh conversation is logged, whatever the reason. The silent case
+  // used to be the common one: after a bridge restart the map was empty, the
+  // message fell straight through to create(), and eight exchanges of context
+  // vanished without a line anyone could read (KYB-502).
+  log(
+    existing
+      ? `starting a new conversation in ${channel.slice(0, 8)} (the previous session could not continue)`
+      : `starting a new conversation in ${channel.slice(0, 8)} (no session on record for this channel)`,
+  );
   const created = await client.sessions.create({
     message,
     clientContext: { buzzCommunity: community, buzzChannel: channel },
