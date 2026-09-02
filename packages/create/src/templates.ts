@@ -710,3 +710,37 @@ export default defineEvalConfig({
 });
 `;
 }
+
+/**
+ * An eve 0.49 memory slot backed by Arcana.
+ *
+ * Written by `kyb add memory`. The slot gives the agent recall before every
+ * turn without a skill telling the model to go and look; capture stays off
+ * because the remember skill already stores facts deliberately. When the
+ * Arcana extension is mounted the slot offers no tools of its own — the
+ * extension's `arcana_*` set is the same brain through the same key.
+ */
+export function arcanaMemorySlotTs(options: { extensionMounted: boolean }): string {
+  return `import { defineMemory } from "eve/memory";
+import { byPrincipal } from "eve/memory/scope";
+import { arcanaMemory } from "@kybernesis/arcana/memory";
+
+/**
+ * Recall before every turn, from the company brain. eve resolves who the
+ * memory belongs to (byPrincipal: the authenticated caller; local-dev while
+ * developing) and delivers what Arcana finds as one message the model sees
+ * before it answers. Greetings and other short turns skip recall.
+ *
+ * Capture is off: this agent remembers deliberately through arcana_remember.
+ * Set capture: { enabled: true } for an agent that should learn passively.
+ */
+export default defineMemory({
+  description: "Durable company memory in Arcana: people, decisions, projects, preferences.",
+  provider: arcanaMemory({
+    apiKey: process.env.ARCANA_API_KEY!,
+    workspace: process.env.ARCANA_COMPANY_WORKSPACE!,${options.extensionMounted ? "\n    // The Arcana extension already mounts the full arcana_* tool set.\n    tools: false," : ""}
+  }),
+  scope: byPrincipal,
+});
+`;
+}
