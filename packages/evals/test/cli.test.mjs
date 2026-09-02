@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +60,19 @@ test("line parser handles chunk boundaries, final unterminated lines, and counts
   counter.push("LogError and CORRUPTED_EVENT_LOG\nclean\nCORRUPTED_");
   counter.push("EVENT_LOG");
   counter.finish();
-  assert.equal(counter.count, 2);
+  // The trailing bare code line sits right under the error, so it is the same run.
+  assert.equal(counter.count, 1);
+});
+
+test("eve's two-line block per condemned run counts as one run, and a bare code line far from any error counts on its own", () => {
+  const counter = new CorruptionLineCounter();
+  const block = (id) =>
+    `[workflow-sdk] Error while running workflow\n  CorruptedEventLogError\n  run    ${id}\n  code   CORRUPTED_EVENT_LOG\n`;
+  counter.push(block("wrun_A") + block("wrun_B"));
+  counter.push(Array(20).fill("progress").join("\n") + "\n");
+  counter.push("status CORRUPTED_EVENT_LOG for wrun_C\n");
+  counter.finish();
+  assert.equal(counter.count, 3);
 });
 
 test("normal output places the condemnation count beside Results and turns child zero into failure", () => {
@@ -99,7 +111,8 @@ test("clean evals exit zero, report zero, and forward args, environment, and cwd
     assert.match(result.stdout, /Condemned runs: 0\nResults:/);
     const recorded = JSON.parse(readFileSync(record, "utf8"));
     assert.deepEqual(recorded.argv, ["eval", "--strict", "--junit", ".eve/junit.xml"]);
-    assert.equal(recorded.cwd, dir);
+    // macOS keeps its temp dir behind a symlink (/var → /private/var); the child reports the real path.
+    assert.equal(realpathSync(recorded.cwd), realpathSync(dir));
     assert.equal(recorded.probe, "forwarded");
   } finally {
     cleanup();
