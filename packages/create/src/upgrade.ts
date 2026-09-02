@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
+import { repairManageRestart } from "./systemd.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
 
@@ -368,6 +369,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
         `resolved, so this is not a clean bill of health.`)}\n` +
         `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
     );
+    repairManageRestart(cwd, deps);
     return;
   }
 
@@ -377,6 +379,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     // up. An agent can sit at latest for weeks with a capability switched off.
     repairBuzzSetup(cwd, deps);
     repairHostArtifacts(cwd, deps);
+    repairManageRestart(cwd, deps);
     return;
   }
 
@@ -394,6 +397,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
    */
   repairBuzzSetup(cwd, deps);
   repairHostArtifacts(cwd, deps);
+  repairManageRestart(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {

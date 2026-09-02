@@ -13,12 +13,16 @@
 # limit and sat "starting" forever while nobody noticed it was down. A unit is a
 # small file that encodes several expensive lessons, so it belongs in the
 # package with the lessons written down next to it.
-set -u
+set -euo pipefail
 
 APP=${EVE_APP_DIR:-$(pwd)}
 NAME=${AGENT_NAME:-$(basename "$APP")}
 PORT=${PORT:-8000}
 UNIT=/etc/systemd/system/${NAME}-agent.service
+RESTART_COMMAND="sudo -n systemctl restart ${NAME}-agent"
+MANAGE_FILE="$APP/agent/channels/kyb.ts"
+LEGACY_RESTART_COMMAND='bash scripts/eve-server.sh restart'
+SYSTEMD_RESTART_COMMAND="$RESTART_COMMAND"
 
 # The first line of every unit this script writes. `kyb upgrade` refreshes a
 # unit only when it carries this line: a unit written by hand — every host from
@@ -43,8 +47,17 @@ WorkingDirectory=${APP}
 # Sourced the same way scripts/eve-server.sh does it, because \`eve start\` does
 # NOT read .env.local the way \`eve dev\` does: set -a exports what the file
 # assigns, and without it every credential in there is invisible to the server.
+# Build before every start, so a restart never serves whatever .output was
+# last written — a package bump, a pulled commit or a Studio install becomes
+# the running agent the moment the service comes back. A failed build stops
+# the start (systemd will not run ExecStart after a failed ExecStartPre), and
+# with Restart=always that shows up as the crash loop below rather than as an
+# agent quietly running old code.
+ExecStartPre=/bin/bash -lc 'set -a && . ./.env.local && set +a && npx eve build'
 ExecStart=/bin/bash -lc 'set -a && . ./.env.local && set +a && exec npx eve start --host 0.0.0.0'
 Environment=PORT=${PORT}
+# A build with sandbox templates to prewarm can take several minutes.
+TimeoutStartSec=900
 Restart=always
 RestartSec=15
 # A crash loop should be loud rather than infinite: five failures inside five
@@ -137,3 +150,9 @@ sudo_command systemctl restart "${NAME}-agent" || exit 1
 echo "install-service: ${NAME}-agent installed and started"
 echo "  logs:   tail -f ${APP}/cli.log"
 echo "  status: systemctl status ${NAME}-agent"
+
+# Studio installs restart the agent through agent/channels/kyb.ts. With systemd
+# owning the process that must be `sudo -n systemctl restart <name>-agent`;
+# `kyb upgrade` migrates the scaffolded eve-server.sh command and reports any
+# other value with the exact line to use.
+echo "  studio: run 'kyb upgrade' once so Studio installs restart through systemd"

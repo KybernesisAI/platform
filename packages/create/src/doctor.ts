@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { pathToFileURL } from "node:url";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
+import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -74,6 +75,7 @@ async function head(url: string, headers?: Record<string, string>): Promise<numb
 
 export async function doctor(): Promise<void> {
   const cwd = process.cwd();
+  const installedAgentService = findMatchingAgentServiceUnit(cwd);
   const checks: Check[] = [];
   const add = (verdict: Verdict, label: string, detail?: string) =>
     checks.push({ verdict, label, detail });
@@ -298,13 +300,27 @@ export async function doctor(): Promise<void> {
      * operator that warnings here are decoration.
      */
     const supervisor = join(cwd, "scripts/eve-server.sh");
-    if (existsSync(supervisor)) {
-      add("pass", "scripts/eve-server.sh present (exports .env.local, starts via the eve CLI)");
+    if (installedAgentService) {
+      if (installedAgentService.contents.includes(
+        "ExecStartPre=/bin/bash -lc 'set -a && . ./.env.local && set +a && npx eve build'",
+      )) {
+        add("pass", `systemd ${installedAgentService.values.name}-agent builds before every start`);
+      } else {
+        add(
+          "fail",
+          `systemd ${installedAgentService.values.name}-agent has no build-before-start gate`,
+          "run kyb upgrade to refresh an unchanged package unit; if customized, move overrides to `sudo systemctl edit " +
+            `${installedAgentService.values.name}-agent` +
+            "` and follow the exact repair command it prints",
+        );
+      }
+    } else if (existsSync(supervisor)) {
+      add("pass", "scripts/eve-server.sh present (exports .env.local, builds if stale, starts via the eve CLI)");
     } else {
       add(
         "warn",
         "self-hosted: export .env.local into the server process",
-        "eve start does NOT read it; use the supervision script from @kybernesis/exe (scripts/eve-server.sh)",
+        "eve start does NOT read it; install systemd with node_modules/@kybernesis/exe/scripts/install-service.sh",
       );
       add(
         "warn",
@@ -476,17 +492,13 @@ export async function doctor(): Promise<void> {
     // remaining requirement (a writable working copy) is a property of the
     // host, and on a read-only bundle the routes refuse with that reason.
     const manageFile = join(cwd, "agent/channels/kyb.ts");
-    const restartWired =
-      existsSync(manageFile) && /^\s*restartCommand\s*:/m.test(readFileSync(manageFile, "utf8"));
-    if (restartWired) {
-      add("pass", "management routes can restart the agent after an install");
-    } else {
-      add(
-        "warn",
-        "management routes have no restartCommand",
-        "installing edits this repo and rebuilds; without a restart the response says a restart is still required. Set restartCommand in agent/channels/kyb.ts (self-hosted: \"bash scripts/eve-server.sh restart\")",
-      );
-    }
+    const manageSource = existsSync(manageFile) ? readFileSync(manageFile, "utf8") : "";
+    const restartCommand = /\brestartCommand\s*:\s*["'`]([^"'`]+)["'`]/m.exec(manageSource)?.[1];
+    const diagnosis = diagnoseManageRestart(
+      installedAgentService?.values.name ?? null,
+      restartCommand,
+    );
+    add(diagnosis.verdict, diagnosis.label, diagnosis.detail);
   }
 
   // ── engineer subagent (build capability scoped to a subagent) ──────────
