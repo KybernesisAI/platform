@@ -8,6 +8,7 @@ import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, bold, capture, dim, green, red, run, yellow } from "./util.js";
+import { discoverEffectiveInputLimit, formatEffectiveInputLimit } from "./input-limit.js";
 
 /**
  * Which packages to upgrade: every `@kybernesis/*` this agent depends on.
@@ -387,6 +388,11 @@ export async function upgrade(skipEval: boolean): Promise<void> {
       );
     }
   }
+
+  const inputLimit = discoverEffectiveInputLimit(cwd).limit;
+  console.log(
+    `\n  ${inputLimit.kind === "unresolved" ? yellow("!") : green("✓")} ${formatEffectiveInputLimit(inputLimit)}`,
+  );
 
   if (toUpgrade.length === 0 && unresolved.length > 0) {
     // Saying everything is current, having just failed to check several

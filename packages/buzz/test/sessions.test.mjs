@@ -97,3 +97,39 @@ test("the file is written atomically, so a restart mid-write cannot truncate it"
   assert.equal(existsSync(`${file}.tmp`), false);
   assert.equal(existsSync(file), true);
 });
+
+test("pending HITL state and follower identity survive restart and can be enumerated", () => {
+  const file = join(dir(), "sessions.json");
+  const request = {
+    requestId: "request-1",
+    kind: "question",
+    prompt: "Continue?",
+    action: { kind: "tool-call", callId: "call-1", toolName: "ask_question", input: {} },
+    options: [{ id: "yes", label: "Yes" }],
+  };
+  const first = new SessionStore(file);
+  first.set("relay-a", "channel-1", {
+    id: "wrun_pending",
+    streamIndex: 12,
+    pending: [request],
+    speaker: "speaker-pubkey",
+  });
+
+  const second = new SessionStore(file);
+  assert.equal(second.pending().length, 1);
+  assert.equal(second.pending()[0].community, "relay-a");
+  assert.equal(second.pending()[0].channel, "channel-1");
+  assert.deepEqual(second.pending()[0].session.pending, [request]);
+  assert.equal(second.pending()[0].session.speaker, "speaker-pubkey");
+});
+
+test("old session records without routing or pending fields remain readable", () => {
+  const file = join(dir(), "sessions.json");
+  writeFileSync(file, JSON.stringify({
+    "relay-old|channel-old": { id: "wrun_old_shape", streamIndex: 3, updated: Date.now() },
+  }));
+  const store = new SessionStore(file);
+  assert.equal(store.entries()[0].community, "relay-old");
+  assert.equal(store.entries()[0].channel, "channel-old");
+  assert.equal(store.pending().length, 0);
+});

@@ -2,7 +2,16 @@ import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise"
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
-import { answerTurn, composeMessage, rejectedTurnReply } from "./turn.js";
+import {
+  answerTurn,
+  composeMessage,
+  formatInputRequests,
+  rejectedTurnReply,
+  resolveInputReply,
+  respondTurn,
+  type TurnOutcome,
+} from "./turn.js";
+import { followPendingSession } from "./pending.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -147,6 +156,108 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     return queued;
   }
 
+  /** One durable follower only while a channel is parked for human input. */
+  const followers = new Map<string, { controller: AbortController; task: Promise<void> }>();
+  let stopping = false;
+
+  async function stopFollower(community: string, channel: string): Promise<void> {
+    const key = SessionStore.key(community, channel);
+    const follower = followers.get(key);
+    if (!follower) return;
+    follower.controller.abort();
+    await follower.task;
+  }
+
+  function startFollower(community: string, channel: string): void {
+    const key = SessionStore.key(community, channel);
+    if (stopping || followers.has(key)) return;
+    const stored = sessions.get(community, channel);
+    const relay = relays.get(community);
+    if (!stored?.pending?.length || !stored.speaker || !relay) return;
+
+    const controller = new AbortController();
+    const task = (async () => {
+      let delay = 250;
+      while (!controller.signal.aborted && !stopping) {
+        const current = sessions.get(community, channel);
+        if (!current?.pending?.length || !current.speaker) return;
+        try {
+          const result = await followPendingSession({
+            client: clientFor(current.speaker),
+            session: current,
+            signal: controller.signal,
+            onProgress: ({ streamIndex, pending }) => {
+              const latest = sessions.get(community, channel);
+              if (!latest) return;
+              sessions.set(community, channel, {
+                id: latest.id,
+                streamIndex,
+                pending: pending.length > 0 ? pending : latest.pending,
+                speaker: latest.speaker,
+              });
+            },
+            onPrompt: (requests) => serialize(channel, async () => {
+              relay.reply(channel, formatInputRequests(requests));
+              log(`asked for input in ${channel.slice(0, 8)}`);
+            }),
+            onMessage: (message) => serialize(channel, async () => {
+              const latest = sessions.get(community, channel);
+              if (!latest) return;
+              sessions.set(community, channel, { id: latest.id, streamIndex: latest.streamIndex });
+              relay.reply(channel, message);
+              log(`delivered resumed reply (${message.length} chars)`);
+            }),
+            onFailed: (message) => serialize(channel, async () => {
+              const latest = sessions.get(community, channel);
+              if (latest) sessions.set(community, channel, { id: latest.id, streamIndex: latest.streamIndex });
+              log(`parked session failed in ${channel.slice(0, 8)}: ${message}`);
+            }),
+          });
+          if (result !== "ended") return;
+        } catch (error) {
+          log(`pending follower for ${channel.slice(0, 8)} disconnected: ${(error as Error).message}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, 5_000);
+      }
+    })().finally(() => {
+      if (followers.get(key)?.controller === controller) followers.delete(key);
+    });
+    followers.set(key, { controller, task });
+  }
+
+  function deliverOutcome(
+    relay: BuzzRelay,
+    community: string,
+    channel: string,
+    speaker: string,
+    result: TurnOutcome,
+    replyTo?: NostrEvent,
+  ): boolean {
+    if (result.inputRequests.length > 0 || result.status === "waiting") {
+      if (result.inputRequests.length === 0) {
+        log(`session ${result.sessionId} reported waiting without input requests`);
+        return false;
+      }
+      sessions.set(community, channel, {
+        id: result.sessionId,
+        streamIndex: result.streamIndex,
+        pending: result.inputRequests,
+        speaker,
+      });
+      relay.reply(channel, formatInputRequests(result.inputRequests), replyTo);
+      log(`asked for input in ${channel.slice(0, 8)}`);
+      return true;
+    }
+
+    sessions.set(community, channel, { id: result.sessionId, streamIndex: result.streamIndex });
+    if (result.message) {
+      relay.reply(channel, result.message, replyTo);
+      log(`replied (${result.message.length} chars)`);
+    }
+    return false;
+  }
+
   /**
    * Where this conversation is happening, handed to the agent with the turn.
    *
@@ -274,32 +385,42 @@ export function buzzBridge(options: BuzzBridgeOptions) {
      * "I got a file I cannot read" is a worse answer than the truth only if
      * you never wanted the truth.
      */
-    const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
     void relay.react(event.id, SEEN);
     const stopTyping = relay.typingIn(channel);
     try {
-      const reply = await serialize(channel, () =>
-        answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log),
-      );
-      if (!reply) {
-        /**
-         * Silence is the worst answer available.
-         *
-         * An empty result used to end here, with a line in a log nobody was
-         * reading. In a room that is indistinguishable from the agent ignoring
-         * you — so people ask again, which is how one unanswered question
-         * became five, none of which looked like a fault to anyone watching.
-         */
-        log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
-        relay.reply(
-          channel,
-          "I didn't get an answer back for that one — ask me again and I'll retry.",
-          event,
+      const parked = sessions.get(from, channel);
+      if (parked?.pending?.length) {
+        const responses = attachments.length === 0
+          ? resolveInputReply(text, parked.pending)
+          : [];
+        if (responses.length === 0) {
+          // Invalid input is still input for the parked turn. Never enqueue it as
+          // a new message behind the request it failed to answer.
+          relay.reply(channel, `I still need an answer to continue.\n\n${formatInputRequests(parked.pending)}`, event);
+          return;
+        }
+        await stopFollower(from, channel);
+        const result = await serialize(channel, () =>
+          respondTurn(clientFor(event.pubkey), sessions, channel, responses, from),
         );
+        if (deliverOutcome(relay, from, channel, event.pubkey, result, event)) {
+          startFollower(from, channel);
+        }
         return;
       }
-      relay.reply(channel, reply, event);
-      log(`replied (${reply.length} chars)`);
+
+      const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
+      const result = await serialize(channel, () =>
+        answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log),
+      );
+      if (deliverOutcome(relay, from, channel, event.pubkey, result, event)) {
+        startFollower(from, channel);
+        return;
+      }
+      if (!result.message) {
+        log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
+        relay.reply(channel, "I didn't get an answer back for that one.", event);
+      }
     } catch (error) {
       /**
        * eve refused the turn as malformed. The conversation is intact — the
@@ -327,6 +448,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     relays: urls,
     start(): void {
       for (const relay of relays.values()) relay.connect();
+      for (const { community, channel } of sessions.pending()) startFollower(community, channel);
       log(
         urls.length > 1
           ? `listening on ${urls.length} communities — turns run as whoever sent them`
@@ -335,6 +457,8 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     },
     /** Say goodbye rather than letting presence lapse: a stopped agent should not look online. */
     stop(): void {
+      stopping = true;
+      for (const follower of followers.values()) follower.controller.abort();
       for (const relay of relays.values()) relay.setPresence("offline");
       setTimeout(() => {
         for (const relay of relays.values()) relay.close();

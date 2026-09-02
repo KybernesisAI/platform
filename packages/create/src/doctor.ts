@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
+import { discoverEffectiveInputLimit, formatEffectiveInputLimit } from "./input-limit.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -553,19 +554,22 @@ export async function doctor(): Promise<void> {
    * `env` here is the same merged view every other check reads: .env.local
    * underneath, the real environment on top.
    */
-  const info = capture("npx", ["eve", "info"], cwd, env);
-  if (info === null) {
+  const discovery = discoverEffectiveInputLimit(cwd, env);
+  if (discovery.info === null) {
     add(
       "fail",
       "eve info failed",
-      "run: set -a && . ./.env.local && set +a && npx eve info — the agent's own error is in that output",
+      "run: set -a && . ./.env.local && set +a && npx eve info --json — the agent's own error is in that output",
     );
+  } else {
+    const diag = discovery.info.diagnostics;
+    if (diag && diag.errors === 0) add("pass", `eve discovery clean (${diag.warnings} warnings)`);
+    else add("fail", `eve discovery: ${diag ? `${diag.errors} errors` : "unparsed"}`, "npx eve info --json");
   }
-  else {
-    const diag = /Diagnostics\s+(\d+) errors?, (\d+) warnings?/.exec(info);
-    if (diag && diag[1] === "0") add("pass", `eve discovery clean (${diag[2]} warnings)`);
-    else add("fail", `eve discovery: ${diag ? `${diag[1]} errors` : "unparsed"}`, "npx eve info");
-  }
+  add(
+    discovery.limit.kind === "unresolved" ? "warn" : "pass",
+    formatEffectiveInputLimit(discovery.limit),
+  );
   const portBusy = capture("lsof", ["-ti", ":2000"]);
   if (portBusy && portBusy.trim()) add("warn", "port 2000 in use", "eve eval exits early while a dev server runs — kill it first");
   else add("pass", "port 2000 free (eve eval can boot its own server)");

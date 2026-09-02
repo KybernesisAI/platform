@@ -1,7 +1,10 @@
 import {
   ClientError,
   createDataUrlFilePart,
+  resolveTextToResponses,
   type Client,
+  type InputRequest,
+  type InputResponse,
   type SendTurnInput,
 } from "eve/client";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
@@ -9,6 +12,15 @@ import { SessionStore } from "./sessions.js";
 
 /** A message shape accepted by the certified eve client's send contract. */
 export type TurnMessage = SendTurnInput["message"];
+
+/** Everything the bridge needs to deliver or continue a completed request. */
+export interface TurnOutcome {
+  message: string;
+  status: "completed" | "failed" | "waiting";
+  inputRequests: readonly InputRequest[];
+  sessionId: string;
+  streamIndex: number;
+}
 
 /** Convert one inbound Buzz message into an eve-compatible turn. */
 export async function composeMessage(
@@ -47,6 +59,19 @@ export async function composeMessage(
   return parts;
 }
 
+function outcome(
+  result: { message?: string; status: TurnOutcome["status"]; inputRequests?: readonly InputRequest[]; sessionId?: string },
+  session: { state: { sessionId: string; streamIndex: number } },
+): TurnOutcome {
+  return {
+    message: result.message ?? "",
+    status: result.status,
+    inputRequests: result.inputRequests ?? [],
+    sessionId: result.sessionId ?? session.state.sessionId,
+    streamIndex: session.state.streamIndex,
+  };
+}
+
 /** Continue a channel's existing conversation, replacing it only when it is stale. */
 export async function answerTurn(
   client: Client,
@@ -55,32 +80,19 @@ export async function answerTurn(
   message: TurnMessage,
   community: string,
   log: (message: string) => void = () => {},
-): Promise<string> {
+): Promise<TurnOutcome> {
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
       const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
 
-      /**
-       * Move to the true end of the conversation before speaking.
-       *
-       * `send()` opens its response stream at the position the handle already
-       * holds and stops at the FIRST turn boundary it meets. If anything is
-       * still unread there — the tail of a turn that outlived its reader, a
-       * turn that was running when the bridge restarted — that boundary
-       * belongs to the older turn. The read ends on it, this turn's answer is
-       * never collected, and the stored position stays one turn behind.
-       *
-       * Which makes it permanent: every later turn reads the previous turn's
-       * tail. The channel answers nothing, then answers a question from ten
-       * minutes ago, and a fresh conversation elsewhere works perfectly —
-       * because a fresh conversation has nothing left over to trip on.
-       *
-       * Draining first costs one bounded read of only what is unread, and it
-       * repairs a position that has already drifted rather than requiring
-       * anyone to notice. Non-following, so it ends at the tail instead of
-       * waiting for the future.
-       */
+      // A pending request is never a normal turn. The bridge routes replies to
+      // respondTurn before this function, so reaching this guard means a caller
+      // violated that ordering boundary. Refuse rather than batch behind HITL.
+      if (existing.pending?.length) {
+        throw new Error("cannot send a normal Buzz message while input is pending");
+      }
+
       let unread = 0;
       for await (const _ of session.stream({ follow: false, startIndex: existing.streamIndex })) {
         unread += 1;
@@ -93,16 +105,15 @@ export async function answerTurn(
         clientContext: { buzzCommunity: community, buzzChannel: channel },
       });
       const result = await response.result();
+      const value = outcome(result, session);
       sessions.set(community, channel, {
         id: existing.id,
-        streamIndex: session.state.streamIndex,
+        streamIndex: value.streamIndex,
       });
-      return result.message ?? "";
+      return value;
     } catch (error) {
-      // A malformed turn does not make its durable session stale. Rethrow so
-      // the bridge can tell the room (see `rejectedTurnReply`), and keep the
-      // mapping so the next valid message continues the same conversation.
       if (error instanceof ClientError && error.status === 400) throw error;
+      if (sessions.get(community, channel)?.pending?.length) throw error;
 
       log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
       sessions.delete(community, channel);
@@ -113,24 +124,62 @@ export async function answerTurn(
     message,
     clientContext: { buzzCommunity: community, buzzChannel: channel },
   });
-  const reply = (await created.response.result()).message ?? "";
+  const result = await created.response.result();
+  const value = outcome(result, created.session);
   sessions.set(community, channel, {
-    id: created.session.state.sessionId,
-    streamIndex: created.session.state.streamIndex,
+    id: value.sessionId,
+    streamIndex: value.streamIndex,
   });
-  return reply;
+  return value;
 }
 
-/**
- * What the room is told when eve refuses the turn itself.
- *
- * A 400 means the request was malformed — a part eve does not accept, a body
- * it could not parse — not that the agent failed to think of an answer. The
- * session survives it (`answerTurn` keeps the mapping), but the person who
- * sent the message is still waiting, and a log line nobody is reading is not
- * an answer. Returns `null` for anything that is not a request rejection, so
- * the caller's ordinary failure path stays as it was.
- */
+/** Answer a parked turn without sending a new user message. */
+export async function respondTurn(
+  client: Client,
+  sessions: SessionStore,
+  channel: string,
+  inputResponses: readonly InputResponse[],
+  community: string,
+): Promise<TurnOutcome> {
+  const existing = sessions.get(community, channel);
+  if (!existing) throw new Error("cannot answer input for a Buzz session that no longer exists");
+  const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
+  const response = await session.respond(inputResponses, {
+    clientContext: { buzzCommunity: community, buzzChannel: channel },
+  });
+  const result = await response.result();
+  const value = outcome(result, session);
+  sessions.set(community, channel, {
+    id: existing.id,
+    streamIndex: value.streamIndex,
+  });
+  return value;
+}
+
+/** Map Buzz plain text exactly as eve's own channel adapters do. */
+export function resolveInputReply(text: string, requests: readonly InputRequest[]): readonly InputResponse[] {
+  return resolveTextToResponses(text, requests);
+}
+
+/** Render HITL controls into the plain text Buzz rooms support. */
+export function formatInputRequests(requests: readonly InputRequest[]): string {
+  const blocks = requests.map((request, requestIndex) => {
+    const heading = requests.length > 1 ? `Question ${requestIndex + 1}: ${request.prompt}` : request.prompt;
+    const options = request.options ?? [];
+    const choices = options.map((option, index) =>
+      `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`,
+    );
+    const instruction = options.length > 0
+      ? request.allowFreeform
+        ? "Reply with a number, option name, option id, or your own answer."
+        : "Reply with a number, option name, or option id."
+      : "Reply with your answer.";
+    return [heading, ...choices, instruction].join("\n");
+  });
+  return blocks.join("\n\n");
+}
+
+/** What the room is told when eve refuses the turn itself. */
 export function rejectedTurnReply(error: unknown): string | null {
   if (!(error instanceof ClientError) || error.status !== 400) return null;
   const detail = String(error.message ?? "").split("\n")[0].trim().slice(0, 160);
