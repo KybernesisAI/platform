@@ -11,6 +11,7 @@ Kybernesis. Eve is the plumbing; this is the moat.
 | [`@kybernesis/arcana`](./packages/arcana) | Durable Arcana memory through an MCP connection, recall/remember/brain-note skills, per-session workspace selection, and recall-first instructions |
 | [`@kybernesis/enterprise`](./packages/enterprise) | Control-plane identity verification and per-agent grant enforcement for governed user and agent-to-agent requests |
 | [`@kybernesis/multiplayer`](./packages/multiplayer) | Shared Slack conversations with per-speaker identity, attributed thread context, mentionless continuation, DM resets, and verified DM/channel surface helpers |
+| [`@kybernesis/buzz`](./packages/buzz) | Membership in a Buzz workspace as a full participant: per-speaker verified identity through the control plane, self-service identity linking, presence, typing and seen signals, image attachments, session continuity across restarts, and projects/issues/PRs/notes as tools |
 | [`@kybernesis/evals`](./packages/evals) | Composable smoke, memory, safety, routing, and optional engineer evaluation suites, plus tool-result helpers |
 | [`@kybernesis/engineer`](./packages/engineer) | A vision-verified engineering extension with sandbox screenshot and artifact-delivery tools, build/ship skills, and credential-safe git/branch helpers |
 | [`@kybernesis/dispatch`](./packages/dispatch) | Declared remote-agent edges and receiver channels with principal forwarding, pinned trusted peers, and optional control-plane-governed discovery and authentication |
