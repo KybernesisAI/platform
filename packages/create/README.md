@@ -54,6 +54,12 @@ behind, typechecks, then **runs the eval suite as the gate** — prints
 "deploy" only on green. This is the maintenance-retainer loop as a command:
 package improvement → `kyb upgrade` per client → green → `npx eve deploy`.
 
+On self-hosted agents, upgrade also reconciles package-owned host artifacts. It
+refreshes a stale `/etc/cron.daily/kyb-docker-prune` and an existing generated
+systemd unit, warning before replacement and printing an exact manual repair
+command if non-interactive sudo is unavailable. A missing systemd unit is not
+created implicitly, and refreshing an existing unit does not restart the agent.
+
 ## Design notes
 
 - **Zero runtime dependencies** — node builtins only (`spawnSync`, `readline`,
