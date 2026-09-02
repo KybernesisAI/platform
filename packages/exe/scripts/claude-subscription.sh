@@ -166,8 +166,9 @@ case "${1:-}" in
     if [ "$state" = "200" ]; then
       echo "  ✓ ${NAME}: signed in, answering on 127.0.0.1:${PORT}"
     else
-      credentials_on_disk
-      case $? in
+      credential_rc=0
+      credentials_on_disk || credential_rc=$?
+      case $credential_rc in
         0) echo "  ! ${NAME}: signed in, but this process has not loaded it (/ready → ${state}). Run 'reload'." ;;
         1) echo "  ✗ ${NAME}: running but NOT signed in (/ready → ${state}). Run 'login'." ;;
         *) echo "  ✗ ${NAME}: not ready (/ready → ${state}). Run 'reload' first; if that does not fix it, 'login'." ;;
