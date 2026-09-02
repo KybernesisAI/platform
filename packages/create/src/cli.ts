@@ -11,6 +11,7 @@
  *   kyb deploy            put this repo on its host and restart it, with proof
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
  *     --skip-eval           skip the eval gate (not for production changes)
+ *     --yes, -y             confirm an eve upgrade noninteractively
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -77,7 +78,7 @@ const COMMANDS: Record<string, string> = {
   credential: "Write the agent credential onto a host (--local to stay here).",
   register: "Register this agent with the control plane (--name, --url).",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
-  upgrade: "Bring @kybernesis packages and eve to the certified versions (--skip-eval).",
+  upgrade: "Bring @kybernesis packages and eve to certified versions (--skip-eval, --yes).",
   tui: "Talk to your agents in the terminal.",
   version: "Print the version of this tool.",
 };
@@ -152,7 +153,10 @@ switch (command) {
     tui(rest);
     break;
   case "upgrade":
-    await upgrade(rest.includes("--skip-eval"));
+    await upgrade({
+      skipEval: rest.includes("--skip-eval"),
+      yes: rest.includes("--yes") || rest.includes("-y"),
+    });
     break;
   case "--version":
   case "-v":
@@ -217,6 +221,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --no-env          ${dim("do not send .env.local (host manages its own secrets)")}
   ${bold("kyb upgrade")}         bump @kybernesis/* packages, gated on evals
       --skip-eval       ${dim("skip the eval gate")}
+      --yes, -y          ${dim("confirm an eve version change noninteractively")}
 
 Registry: https://registry.kybernesis.ai · Docs: the FDE playbook
 `);

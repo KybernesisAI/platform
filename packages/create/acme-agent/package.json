@@ -11,7 +11,7 @@
     "dev": "eve dev",
     "start": "eve start",
     "typecheck": "tsc",
-    "eval": "ARCANA_COMPANY_WORKSPACE=acme-agent-eval ARCANA_DM_WORKSPACE=acme-agent-eval eve eval"
+    "eval": "ARCANA_COMPANY_WORKSPACE=acme-agent-eval ARCANA_DM_WORKSPACE=acme-agent-eval kyb-eval"
   },
   "dependencies": {
     "@kybernesis/arcana": "^0.4.0",

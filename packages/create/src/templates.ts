@@ -233,7 +233,7 @@ export function evalScript(name: string, depts: string[]): string {
       (d) => `ARCANA_${d.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_WORKSPACE=${name}-eval`,
     ),
   ];
-  return `${overrides.join(" ")} eve eval`;
+  return `${overrides.join(" ")} kyb-eval`;
 }
 
 // ── Channels ────────────────────────────────────────────────────────────

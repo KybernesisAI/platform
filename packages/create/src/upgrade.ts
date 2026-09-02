@@ -9,6 +9,12 @@ import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./remov
 
 import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
+import {
+  confirmEveUpgrade,
+  inspectBuzzSessions,
+  inspectDurableRuns,
+  reconcileEvalScript,
+} from "./upgrade-sessions.js";
 
 /**
  * Which packages to upgrade: every `@kybernesis/*` this agent depends on.
@@ -366,7 +372,83 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   });
 }
 
-export async function upgrade(skipEval: boolean): Promise<void> {
+export interface UpgradeOptions {
+  skipEval?: boolean;
+  yes?: boolean;
+}
+
+function repairEvalCommand(cwd: string): void {
+  const packagePath = join(cwd, "package.json");
+  const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as { scripts?: Record<string, string> };
+  const result = reconcileEvalScript(pkg.scripts?.eval);
+  if (result.kind === "updated") {
+    pkg.scripts = { ...pkg.scripts, eval: result.script };
+    writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+    console.log(`  ${green("+")} updated scripts.eval to run through kyb-eval`);
+    return;
+  }
+  if (result.kind === "current") return;
+  const current = result.kind === "custom" ? result.script : "(missing)";
+  console.log(
+    `  ${yellow("!")} scripts.eval is not a recognized direct eve eval command, so it was left unchanged.\n` +
+      `    Manual remediation: make this command invoke kyb-eval instead of eve eval, preserving its setup and arguments.\n` +
+      `    Current scripts.eval: ${dim(JSON.stringify(current))}`,
+  );
+}
+
+function upgradeEnvironment(cwd: string): Record<string, string | undefined> {
+  const envPath = join(cwd, ".env.local");
+  const env: Record<string, string | undefined> = {
+    ...(existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {}),
+    ...process.env,
+  };
+  if (!env.BUZZ_SESSIONS_FILE && !env.BUZZ_KEYFILE) {
+    const unit = capture("sh", [
+      "-c",
+      "grep -ohE 'BUZZ_(SESSIONS_FILE|KEYFILE)=[^ \" ]+' /etc/systemd/system/*buzz-bridge.service 2>/dev/null | head -1",
+    ]);
+    const [name, ...value] = (unit ?? "").trim().split("=");
+    if (name && value.length > 0) env[name] = value.join("=").replace(/^\"|\"$/g, "");
+  }
+  return env;
+}
+
+async function approveEveChange(cwd: string, yes: boolean, hasBuzz: boolean): Promise<boolean> {
+  const durable = inspectDurableRuns(cwd);
+  console.log(bold(`\nThis will reset ${durable.runningRunIds.length} open conversations`));
+  if (durable.issues.length > 0) {
+    console.log(
+      `  ${yellow("!")} Durable-store inspection was incomplete; the count includes only readable records ` +
+        `whose status is exactly "running".`,
+    );
+    for (const issue of durable.issues) console.log(`    ${dim(issue)}`);
+  }
+
+  if (hasBuzz) {
+    const buzz = inspectBuzzSessions(cwd, upgradeEnvironment(cwd), durable.runningRunIds);
+    if (buzz.matches.length > 0) {
+      console.log("  Buzz-bound open conversations:");
+      for (const match of buzz.matches) {
+        console.log(`    ${match.runId} ${dim(`(${match.community} | ${match.channel})`)}`);
+      }
+    } else if (buzz.issue) {
+      console.log(`  ${yellow("!")} Buzz session metadata unavailable: ${buzz.issue}`);
+    } else {
+      console.log(`  ${dim("No open durable conversations were matched to Buzz session metadata.")}`);
+    }
+  }
+
+  const approved = await confirmEveUpgrade({ yes });
+  if (!approved) {
+    console.log(
+      `\n${red("Eve upgrade cancelled before installation.")} ` +
+        `${dim("Pass --yes for deliberate noninteractive use.")}\n`,
+    );
+  }
+  return approved;
+}
+
+export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   const cwd = process.cwd();
   const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
@@ -375,8 +457,6 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   warnIfStale();
   // Read-only: report the compiled effective policy, never rewrite agent/agent.ts.
   reportAgentInputLimit(cwd);
-  // Env-only, so it is safe before anything is installed.
-  repairLocalQueueTimeouts(cwd, deps);
   const toUpgrade: string[] = [];
   const unresolved: string[] = [];
   for (const name of kybernesisPackages(deps)) {
@@ -419,6 +499,14 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     }
   }
 
+  if (eveChanged && !(await approveEveChange(cwd, options.yes === true, Boolean(deps["@kybernesis/buzz"])))) {
+    process.exitCode = 1;
+    return;
+  }
+
+  // Repairs write project or host state, so a destructive eve change is approved first.
+  repairLocalQueueTimeouts(cwd, deps);
+
   if (toUpgrade.length === 0 && unresolved.length > 0) {
     // Saying everything is current, having just failed to check several
     // packages, is the worst available answer: it is the sentence someone
@@ -429,6 +517,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
         `resolved, so this is not a clean bill of health.`)}\n` +
         `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
     );
+    repairEvalCommand(cwd);
     repairManageRestart(cwd, deps);
     return;
   }
@@ -441,6 +530,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     repairRemovedDefaultTools(cwd);
     repairSandboxCleanupHooks(cwd, deps);
     repairHostArtifacts(cwd, deps);
+    repairEvalCommand(cwd);
     repairManageRestart(cwd, deps);
     return;
   }
@@ -471,6 +561,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
   repairRemovedDefaultTools(cwd);
   repairSandboxCleanupHooks(cwd, deps);
   repairHostArtifacts(cwd, deps);
+  repairEvalCommand(cwd);
   repairManageRestart(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
@@ -480,7 +571,7 @@ export async function upgrade(skipEval: boolean): Promise<void> {
     console.log(infoOk ? green("  ✓ eve discovery clean after framework upgrade") : red("  ✗ eve info failed after framework upgrade — inspect before going further"));
   }
 
-  if (skipEval) {
+  if (options.skipEval) {
     console.log(yellow("\nEval gate SKIPPED (--skip-eval). Run `npm run eval` before deploying.\n"));
     return;
   }

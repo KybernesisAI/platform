@@ -42,11 +42,11 @@ a hermetic-workspace script in `package.json`:
 
 ```jsonc
 "scripts": {
-  "eval": "ARCANA_COMPANY_WORKSPACE=<client>-eval ARCANA_DM_WORKSPACE=<client>-eval eve eval"
+  "eval": "ARCANA_COMPANY_WORKSPACE=<client>-eval ARCANA_DM_WORKSPACE=<client>-eval kyb-eval"
 }
 ```
 
-Run `npm run eval` locally; `eve eval --strict --junit .eve/junit.xml` in CI.
+Run `npm run eval` locally; `kyb-eval --strict --junit .eve/junit.xml` in CI. The wrapper forwards every argument to the project-local `eve eval`, reports `Condemned runs: N`, and fails when corruption diagnostics were observed even if eve itself exits 0. With `--json`, stdout remains JSON and the count is written to stderr.
 
 ## What the baseline covers
 
