@@ -20,6 +20,8 @@
 # WHAT IS NEVER TOUCHED: volumes (a Claude subscription sign-in lives in one),
 # any image a running container depends on, and any session container younger
 # than the cutoff — that one might be a turn in flight.
+#
+# KYB_PRUNE_DRY_RUN=1 reports every decision and removes nothing.
 set -u
 
 CUTOFF_HOURS="${KYB_PRUNE_SESSION_HOURS:-24}"
@@ -41,19 +43,23 @@ if [ -n "$cutoff" ]; then
       # lexically against the cutoff because both are zero-padded UTC.
       when=$(echo "$created" | awk '{print $1" "$2}')
       if [ "$when" \< "$cutoff" ]; then
-        echo "removing stale session container ${name} (created ${when})"
-        docker rm -f "$name" >/dev/null 2>&1
+        if [ -n "${KYB_PRUNE_DRY_RUN:-}" ]; then
+          echo "would remove stale session container ${name} (created ${when})"
+        else
+          echo "removing stale session container ${name} (created ${when})"
+          docker rm -f "$name" >/dev/null 2>&1
+        fi
       fi
     done
 fi
 
 # 2. Whatever is already stopped.
-docker container prune -f
+[ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker container prune -f
 
 # 3. Build cache — nothing depends on it, and a Rust or browser build leaves GBs.
-docker builder prune -af
+[ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker builder prune -af
 
-# 4. Sandbox templates: keep the current set, drop superseded ones.
+# 4. Sandbox templates: keep each checkout's current set, drop superseded ones.
 #
 #    NOT "unused images older than N hours". Docker protects an image a
 #    container is USING, but a warm template with no session running is not in
@@ -72,30 +78,57 @@ docker builder prune -af
 #    template like the browser one lags the rest), plus anything built in the
 #    last two days, and remove what came before. That is exactly the pile-up
 #    this job exists for: forty images built in a week, superseded within hours.
+#
+#    PER CHECKOUT, not per daemon. A template tag is
+#      eve-sbx-tpl-docker-<app dir hash>-<config hash>-<runtime hash>
+#    and the first hash is the checkout the template belongs to. Two checkouts
+#    share one Docker daemon (an agent and its eval copy — Kyber's host runs
+#    both), and they prewarm on different days. Judged daemon-wide, the eval
+#    checkout's newer batch made production's whole set look superseded, and
+#    an earlier version of this rule deleted all thirteen of them. The "newest
+#    batch" is therefore worked out separately for each app-dir hash, so one
+#    checkout rebuilding can never cost another its templates.
 GRACE_HOURS="${KYB_PRUNE_TEMPLATE_GRACE_HOURS:-48}"
-newest=$(docker images --filter 'reference=eve-sandbox-template' --format '{{.CreatedAt}}' 2>/dev/null |
-  sort -r | head -1 | awk '{print $1" "$2}')
-if [ -n "$newest" ]; then
-  newest_epoch=$(date -u -d "$newest" +%s 2>/dev/null || echo 0)
-  cutoff_epoch=$(date -u -d "${GRACE_HOURS} hours ago" +%s 2>/dev/null || echo 0)
+DRY_RUN="${KYB_PRUNE_DRY_RUN:-}"
+grace_epoch=$(date -u -d "${GRACE_HOURS} hours ago" +%s 2>/dev/null || echo 0)
+templates=$(mktemp)
+# One line per template image: <app hash> <epoch> <tag> <id>. Anything that is
+# not shaped like an eve template tag is grouped under "-" and judged together,
+# which is the old daemon-wide rule and the safest fallback.
+docker images --filter 'reference=eve-sandbox-template' --format '{{.Tag}}\t{{.CreatedAt}}\t{{.ID}}' 2>/dev/null |
+  while IFS="$(printf '\t')" read -r tag created image; do
+    [ -z "$image" ] && continue
+    when=$(echo "$created" | awk '{print $1" "$2}')
+    when_epoch=$(date -u -d "$when" +%s 2>/dev/null || echo 0)
+    app=$(echo "$tag" | awk -F- 'NF >= 7 && $1 == "eve" && $2 == "sbx" && $3 == "tpl" { print $5 }')
+    echo "${app:--} ${when_epoch} ${tag} ${image}"
+  done > "$templates"
+awk '{print $1}' "$templates" | sort -u | while read -r app; do
+  [ -z "$app" ] && continue
+  newest_epoch=$(awk -v a="$app" '$1 == a {print $2}' "$templates" | sort -n | tail -1)
   batch_epoch=$((newest_epoch - 3600))
+  cutoff_epoch=$grace_epoch
   # Whichever window is more generous wins: the current batch is never at risk.
   [ "$batch_epoch" -lt "$cutoff_epoch" ] && cutoff_epoch=$batch_epoch
-  docker images --filter 'reference=eve-sandbox-template' --format '{{.CreatedAt}}\t{{.ID}}' 2>/dev/null |
-    while IFS="$(printf '\t')" read -r created image; do
-      [ -z "$image" ] && continue
-      when=$(echo "$created" | awk '{print $1" "$2}')
-      when_epoch=$(date -u -d "$when" +%s 2>/dev/null || echo 0)
+  total=$(awk -v a="$app" '$1 == a' "$templates" | wc -l | tr -d ' ')
+  echo "templates for ${app}: ${total}, newest $(date -u -d "@${newest_epoch}" +%FT%TZ 2>/dev/null), keeping from $(date -u -d "@${cutoff_epoch}" +%FT%TZ 2>/dev/null)"
+  awk -v a="$app" '$1 == a {print $2" "$3" "$4}' "$templates" |
+    while read -r when_epoch tag image; do
       if [ "$when_epoch" -lt "$cutoff_epoch" ]; then
-        # An image a container still references refuses to go, which is correct:
-        # never break a live session to reclaim space.
-        docker rmi "$image" >/dev/null 2>&1 && echo "removed superseded sandbox template ${image} (${when})"
+        if [ -n "$DRY_RUN" ]; then
+          echo "would remove superseded sandbox template ${tag} (${image})"
+        else
+          # An image a container still references refuses to go, which is
+          # correct: never break a live session to reclaim space.
+          docker rmi "$image" >/dev/null 2>&1 && echo "removed superseded sandbox template ${tag} (${image})"
+        fi
       fi
     done
-fi
+done
+rm -f "$templates"
 
 # 5. Dangling layers — untagged, unreferenced, and nothing will ever want them.
-docker image prune -f
+[ -n "${KYB_PRUNE_DRY_RUN:-}" ] || docker image prune -f
 
 df -h / | tail -1
 echo "=== done ==="
