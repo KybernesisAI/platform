@@ -295,3 +295,22 @@ test("the follower awaits serialized durable state before any resumed publicatio
   await run;
   assert.equal(published, true);
 });
+
+test("a resumed turn that ends more than one step with prose is published whole, once", async () => {
+  const messages = [];
+  const session = fakeSession([
+    event("input.resolved", { resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }] }),
+    event("message.completed", { finishReason: "stop", message: "The answer.", sequence: 2, stepIndex: 1, turnId: "turn-1" }),
+    event("message.completed", { finishReason: "stop", message: "Standing by.", sequence: 3, stepIndex: 2, turnId: "turn-1" }),
+    event("turn.completed", { sequence: 4, turnId: "turn-1" }),
+  ]);
+
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    { onState: () => {}, onInputRequested: () => {}, onMessage: (message) => messages.push(message) },
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(messages, ["The answer.\n\nStanding by."]);
+});

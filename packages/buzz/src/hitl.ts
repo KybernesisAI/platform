@@ -157,8 +157,12 @@ export async function followPendingConversation(
         break;
       }
       case "message.completed":
+        // A resumed turn can end more than one step with prose (the answer, then a wrap-up line).
+        // The room gets the whole turn, not whichever message happened to come last.
         if (streamEvent.data.finishReason !== "tool-calls" && streamEvent.data.message) {
-          completedMessage = streamEvent.data.message;
+          completedMessage = completedMessage
+            ? `${completedMessage}\n\n${streamEvent.data.message}`
+            : streamEvent.data.message;
         }
         // The durable cursor remains before unpublished output. A restarted
         // follower may replay this event safely because it is the sole publisher.
