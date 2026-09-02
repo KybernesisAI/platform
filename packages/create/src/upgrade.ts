@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
-import { repairManageRestart } from "./systemd.js";
+import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
@@ -15,26 +16,6 @@ import {
   inspectDurableRuns,
   reconcileEvalScript,
 } from "./upgrade-sessions.js";
-
-/**
- * Which packages to upgrade: every `@kybernesis/*` this agent depends on.
- *
- * @remarks
- * This was a fixed list of six, written when there were six. Four more shipped
- * afterwards — connectors, local, manage and exe — and an agent using them was
- * told "everything is at latest certified versions" while holding versions from
- * months earlier. A hardcoded list does not fail loudly when it falls behind;
- * it just quietly stops covering things, and the command that reports it is the
- * same one that is wrong.
- *
- * Reading the manifest cannot fall behind. A package added tomorrow is covered
- * by an upgrade run today.
- */
-function kybernesisPackages(deps: Record<string, string>): string[] {
-  return Object.keys(deps)
-    .filter((name) => name.startsWith("@kybernesis/"))
-    .sort();
-}
 
 function versionLt(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
@@ -448,84 +429,240 @@ async function approveEveChange(cwd: string, yes: boolean, hasBuzz: boolean): Pr
   return approved;
 }
 
+type DependencySection = "dependencies" | "devDependencies";
+
+interface UpgradeTarget {
+  name: string;
+  section: DependencySection;
+  currentRange: string;
+  installedVersion: string;
+  targetVersion: string;
+  installedEvePeer?: string;
+  targetEvePeer?: string;
+}
+
+interface CommandResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function commandResult(command: string, args: string[], cwd: string, print = true): CommandResult {
+  console.log(dim(`  $ ${command} ${args.join(" ")}`));
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", env: process.env });
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  if (print) {
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+  }
+  return { status: result.status ?? 1, stdout, stderr };
+}
+
+function fail(message: string): void {
+  console.error(red(message));
+  process.exitCode = 1;
+}
+
+function majorMinor(version: string): [number, number] | null {
+  const match = /^(\d+)\.(\d+)(?:\.|$)/.exec(version);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return Number.isSafeInteger(major) && Number.isSafeInteger(minor) ? [major, minor] : null;
+}
+
+function installedPackageValue(cwd: string, name: string, expression: string): string | null {
+  const packageName = JSON.stringify(`${name}/package.json`);
+  return capture("node", ["-p", `require(${packageName})${expression}`], cwd)?.trim() || null;
+}
+
+function targetEvePeer(name: string, version: string): string | undefined {
+  return capture("npm", ["view", `${name}@${version}`, "peerDependencies.eve"])?.trim() || undefined;
+}
+
+function dependencyEntries(pkg: Record<string, unknown>): Array<{ name: string; section: DependencySection; range: string }> {
+  const entries: Array<{ name: string; section: DependencySection; range: string }> = [];
+  for (const section of ["dependencies", "devDependencies"] as const) {
+    const values = pkg[section] as Record<string, string> | undefined;
+    for (const [name, range] of Object.entries(values ?? {})) {
+      if (name === "eve" || name.startsWith("@kybernesis/")) entries.push({ name, section, range });
+    }
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name) || a.section.localeCompare(b.section));
+}
+
+function rewriteManifest(cwd: string, pkg: Record<string, unknown>, targets: UpgradeTarget[]): void {
+  for (const target of targets) {
+    const section = pkg[target.section] as Record<string, string>;
+    section[target.name] = `^${target.targetVersion}`;
+  }
+  writeFileSync(join(cwd, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
+}
+
+function recoveryGuidance(targets: UpgradeTarget[], bridgeUnit?: string): void {
+  console.log(
+    `\n${yellow("The dependency tree was not verified. Complete the clean install before using it:")}\n` +
+      `  1. Ensure every root @kybernesis/* and eve range in package.json is the resolved ^version.\n` +
+      `  2. ${dim("rm -rf node_modules")}\n` +
+      `  3. ${dim("rm -f package-lock.json")}\n` +
+      `  4. ${dim("npm install")}\n` +
+      `  5. ${dim("npm ls eve")}`,
+  );
+  const peerChanges = targets.filter(
+    (target) =>
+      target.name.startsWith("@kybernesis/") &&
+      target.installedEvePeer !== target.targetEvePeer &&
+      (target.installedEvePeer !== undefined || target.targetEvePeer !== undefined),
+  );
+  if (peerChanges.length > 0) {
+    console.log("\n  Published Eve peer metadata changed for these root packages:");
+    for (const target of peerChanges) {
+      console.log(
+        `    ${target.name}: ${target.installedVersion} peers on ${target.installedEvePeer ?? "(none)"}; ` +
+          `${target.targetVersion} peers on ${target.targetEvePeer ?? "(none)"}`,
+      );
+    }
+    console.log(dim("  These are metadata facts, not an attribution of npm's reported conflict."));
+  }
+  if (bridgeUnit) {
+    console.log(`\n  The Buzz bridge remains stopped until the tree is verified. Then run:\n    ${dim(`sudo -n systemctl start ${bridgeUnit}`)}`);
+  }
+}
+
+function buzzBridgeUnit(cwd: string): string | null {
+  const systemdDir = process.env.KYB_SYSTEMD_DIR;
+  const match = findMatchingAgentServiceUnit(cwd, systemdDir || undefined);
+  return match ? `${match.values.name}-buzz-bridge.service` : null;
+}
+
+function stopActiveBridge(cwd: string, unit: string | null): string | null | false {
+  if (!unit) return null;
+  const active = commandResult("systemctl", ["is-active", "--quiet", unit], cwd, false);
+  if (active.status !== 0) return null;
+  const stopped = commandResult("sudo", ["-n", "systemctl", "stop", unit], cwd);
+  if (stopped.status === 0) return unit;
+  fail(`Could not stop the active Buzz bridge. Run exactly:\n  sudo -n systemctl stop ${unit}`);
+  return false;
+}
+
+function startStoppedBridge(cwd: string, unit: string): boolean {
+  const started = commandResult("sudo", ["-n", "systemctl", "start", unit], cwd);
+  if (started.status === 0) return true;
+  fail(
+    `Could not restart the Buzz bridge. Run exactly:\n` +
+      `  sudo -n systemctl start ${unit}\n` +
+      `  systemctl status ${unit}`,
+  );
+  return false;
+}
+
 export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   const cwd = process.cwd();
-  const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
-  const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
+  const packagePath = join(cwd, "package.json");
+  const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
+  const deps = {
+    ...((pkg.dependencies as Record<string, string> | undefined) ?? {}),
+    ...((pkg.devDependencies as Record<string, string> | undefined) ?? {}),
+  };
 
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   warnIfStale();
-  // Read-only: report the compiled effective policy, never rewrite agent/agent.ts.
   reportAgentInputLimit(cwd);
-  const toUpgrade: string[] = [];
-  const unresolved: string[] = [];
-  for (const name of kybernesisPackages(deps)) {
-    if (!deps[name]) continue;
-    const installed = capture("node", ["-p", `require('${name}/package.json').version`], cwd)?.trim();
-    const latest = capture("npm", ["view", name, "version"])?.trim();
-    if (!installed || !latest) {
-      console.log(`  ${yellow("!")} ${name}: could not resolve versions`);
-      unresolved.push(name);
+
+  const entries = dependencyEntries(pkg);
+  const installedVersions = new Map<string, string>();
+  const targetVersions = new Map<string, string>();
+  const installedPeers = new Map<string, string | undefined>();
+  const targetPeers = new Map<string, string | undefined>();
+  const unresolved = new Set<string>();
+
+  for (const name of [...new Set(entries.map((entry) => entry.name))]) {
+    const installed = installedPackageValue(cwd, name, ".version");
+    if (!installed) {
+      console.log(`  ${yellow("!")} ${name}: could not resolve installed version`);
+      unresolved.add(name);
       continue;
     }
-    if (installed === latest) console.log(`  ${green("✓")} ${name}@${installed} ${dim("(latest)")}`);
-    else {
-      console.log(`  ${yellow("↑")} ${name}: ${installed} → ${latest}`);
-      toUpgrade.push(`${name}@${latest}`);
-    }
-  }
+    installedVersions.set(name, installed);
 
-  // eve itself: upgrade to the KYBERNESIS-CERTIFIED version, never blindly to
-  // npm latest. Certification happens in the platform repo — packages are
-  // tested against a new eve, then the pin in @kybernesis/create advances,
-  // then this command carries client agents there behind their eval gate.
-  let eveChanged = false;
-  const eveInstalled = capture("node", ["-p", "require('eve/package.json').version"], cwd)?.trim();
-  const eveLatest = capture("npm", ["view", "eve", "version"])?.trim();
-  if (eveInstalled) {
-    if (versionLt(eveInstalled, EVE_VERSION)) {
-      console.log(`  ${yellow("↑")} eve: ${eveInstalled} → ${EVE_VERSION} ${dim("(Kybernesis-certified)")}`);
-      toUpgrade.push(`eve@${EVE_VERSION}`);
-      eveChanged = true;
-    } else if (versionLt(EVE_VERSION, eveInstalled)) {
-      console.log(`  ${yellow("!")} eve@${eveInstalled} is AHEAD of the certified ${EVE_VERSION} ${dim("— unsupported territory")}`);
-    } else {
-      console.log(`  ${green("✓")} eve@${eveInstalled} ${dim("(certified)")}`);
+    const target = name === "eve" ? EVE_VERSION : capture("npm", ["view", name, "version"])?.trim();
+    if (!target) {
+      console.log(`  ${yellow("!")} ${name}: could not resolve target version`);
+      unresolved.add(name);
+      continue;
     }
-    if (eveLatest && versionLt(EVE_VERSION, eveLatest)) {
+    targetVersions.set(name, target);
+
+    if (name.startsWith("@kybernesis/")) {
+      installedPeers.set(name, installedPackageValue(cwd, name, ".peerDependencies?.eve || ''") ?? undefined);
+      targetPeers.set(name, targetEvePeer(name, target));
+    }
+
+    if (installed === target) {
+      console.log(`  ${green("✓")} ${name}@${installed} ${dim(name === "eve" ? "(certified)" : "(latest)")}`);
+    } else if (name === "eve" && versionLt(EVE_VERSION, installed)) {
+      console.log(`  ${yellow("!")} eve@${installed} is AHEAD of the certified ${EVE_VERSION} ${dim("— unsupported territory")}`);
+    } else {
       console.log(
-        dim(`    note: eve@${eveLatest} exists upstream; ${EVE_VERSION} is the newest Kybernesis-certified version.`),
+        `  ${yellow("↑")} ${name}: ${installed} → ${target}` +
+          (name === "eve" ? ` ${dim("(Kybernesis-certified)")}` : ""),
       );
     }
   }
+
+  const eveInstalled = installedVersions.get("eve");
+  const eveLatest = capture("npm", ["view", "eve", "version"])?.trim();
+  if (eveLatest && versionLt(EVE_VERSION, eveLatest)) {
+    console.log(dim(`    note: eve@${eveLatest} exists upstream; ${EVE_VERSION} is the newest Kybernesis-certified version.`));
+  }
+
+  if (unresolved.size > 0) {
+    fail(
+      `\nUpgrade planning failed for ${[...unresolved].sort().join(", ")}. ` +
+        `No manifest, dependency tree, or service state was changed.`,
+    );
+    return;
+  }
+
+  const targets: UpgradeTarget[] = entries.map((entry) => ({
+    name: entry.name,
+    section: entry.section,
+    currentRange: entry.range,
+    installedVersion: installedVersions.get(entry.name)!,
+    targetVersion: targetVersions.get(entry.name)!,
+    installedEvePeer: installedPeers.get(entry.name),
+    targetEvePeer: targetPeers.get(entry.name),
+  }));
+
+  const eveTarget = targetVersions.get("eve");
+  const installedMajorMinor = eveInstalled ? majorMinor(eveInstalled) : null;
+  const targetMajorMinor = eveTarget ? majorMinor(eveTarget) : null;
+  if ((eveInstalled && !installedMajorMinor) || (eveTarget && !targetMajorMinor)) {
+    fail(`Cannot safely compare Eve versions ${JSON.stringify(eveInstalled)} and ${JSON.stringify(eveTarget)}.`);
+    return;
+  }
+  const eveChanged = Boolean(eveInstalled && eveTarget && versionLt(eveInstalled, eveTarget));
+  const cleanInstall = Boolean(
+    eveChanged &&
+      installedMajorMinor &&
+      targetMajorMinor &&
+      (installedMajorMinor[0] !== targetMajorMinor[0] || installedMajorMinor[1] !== targetMajorMinor[1]),
+  );
+
+  const changed = [...new Set(targets
+    .filter((target) => target.installedVersion !== target.targetVersion && !(target.name === "eve" && versionLt(target.targetVersion, target.installedVersion)))
+    .map((target) => `${target.name}@${target.targetVersion}`))];
 
   if (eveChanged && !(await approveEveChange(cwd, options.yes === true, Boolean(deps["@kybernesis/buzz"])))) {
     process.exitCode = 1;
     return;
   }
 
-  // Repairs write project or host state, so a destructive eve change is approved first.
   repairLocalQueueTimeouts(cwd, deps);
 
-  if (toUpgrade.length === 0 && unresolved.length > 0) {
-    // Saying everything is current, having just failed to check several
-    // packages, is the worst available answer: it is the sentence someone
-    // repeats to a client. Usually the dependencies are simply not installed
-    // here, which is worth naming rather than hiding behind a green tick.
-    console.log(
-      `\n${yellow(`Checked what could be read. ${unresolved.length} package(s) could not be ` +
-        `resolved, so this is not a clean bill of health.`)}\n` +
-        `  ${dim("Usually: dependencies are not installed here. Run npm install, then kyb upgrade.")}\n`,
-    );
-    repairEvalCommand(cwd);
-    repairManageRestart(cwd, deps);
-    return;
-  }
-
-  if (toUpgrade.length === 0) {
+  if (changed.length === 0) {
     console.log(`\n${green("Everything is at latest certified versions.")}\n`);
-    // Still repair: being on the right versions is not the same as being set
-    // up. An agent can sit at latest for weeks with a capability switched off.
     repairBuzzSetup(cwd, deps);
     repairRemovedDefaultTools(cwd);
     repairSandboxCleanupHooks(cwd, deps);
@@ -535,28 +672,50 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     return;
   }
 
-  console.log(bold(`\nInstalling: ${toUpgrade.join(", ")}\n`));
-  /**
-   * One install, with peers relaxed. Every @kybernesis package peers on a
-   * narrow eve range, and eve moves with them: the installed set demands the
-   * old eve, the new set demands the new one, and npm's resolver refuses
-   * either order — eve first, packages first, or all at once — under strict
-   * peers (seen on Kyber moving 0.38 → 0.49: ERESOLVE all three ways). The
-   * set being installed is exactly the certified combination, so relaxing
-   * peer resolution for this one command changes nothing about what ends up
-   * on disk; the version check above is what guards correctness.
-   */
-  run("npm", ["install", ...toUpgrade, "--legacy-peer-deps"], { cwd });
+  console.log(bold(`\nInstalling: ${changed.join(", ")}\n`));
 
-  /**
-   * Repairs run AFTER the install, not before.
-   *
-   * Both of these copy files out of packages that the install has just put
-   * there — a proxy script, a cron job, a CLI. Running them first meant looking
-   * for a file the older installed version did not ship: the repair found
-   * nothing, said nothing, and only worked on the NEXT upgrade. Which is a
-   * bug that hides itself, because by then it looks like it always worked.
-   */
+  let stoppedBridge: string | null = null;
+  if (cleanInstall && deps["@kybernesis/buzz"]) {
+    const stopped = stopActiveBridge(cwd, buzzBridgeUnit(cwd));
+    if (stopped === false) return;
+    stoppedBridge = stopped;
+  }
+
+  if (cleanInstall) {
+    rewriteManifest(cwd, pkg, targets);
+    try {
+      rmSync(join(cwd, "node_modules"), { recursive: true, force: true });
+      rmSync(join(cwd, "package-lock.json"), { force: true });
+    } catch (error) {
+      fail(`Could not remove npm resolver state: ${(error as Error).message}`);
+      recoveryGuidance(targets, stoppedBridge ?? undefined);
+      return;
+    }
+  }
+
+  const installArgs = cleanInstall ? ["install"] : ["install", ...changed];
+  const installed = commandResult("npm", installArgs, cwd);
+  if (installed.status !== 0) {
+    const output = `${installed.stdout}\n${installed.stderr}`;
+    if (/ERESOLVE/i.test(output)) {
+      console.log(red("\nnpm reported ERESOLVE while installing the planned dependency set."));
+    } else {
+      console.log(red("\nnpm install failed before the dependency tree could be verified."));
+    }
+    recoveryGuidance(targets, stoppedBridge ?? undefined);
+    process.exitCode = 1;
+    return;
+  }
+
+  const validation = commandResult("npm", ["ls", "eve"], cwd);
+  if (validation.status !== 0) {
+    fail("npm ls eve failed. The installed peer tree is not valid.");
+    recoveryGuidance(targets, stoppedBridge ?? undefined);
+    return;
+  }
+
+  if (stoppedBridge && !startStoppedBridge(cwd, stoppedBridge)) return;
+
   repairBuzzSetup(cwd, deps);
   repairRemovedDefaultTools(cwd);
   repairSandboxCleanupHooks(cwd, deps);
@@ -566,7 +725,6 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {
-    // A framework bump must also pass discovery/compile, not just types.
     const infoOk = run("npx", ["eve", "info"], { cwd, allowFail: true, quiet: true });
     console.log(infoOk ? green("  ✓ eve discovery clean after framework upgrade") : red("  ✗ eve info failed after framework upgrade — inspect before going further"));
   }
