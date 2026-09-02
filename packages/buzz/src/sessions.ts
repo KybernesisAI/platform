@@ -12,6 +12,11 @@ export interface StoredSession {
   resumeInFlight?: boolean;
   /** Public identity used to refresh credentials when a follower reattaches. Never a bearer token. */
   speakerPublicKey?: string;
+  /**
+   * Relay event ids of the prompts posted for the pending requests, so a reply to one of them
+   * counts as an answer whether or not it mentions this agent.
+   */
+  promptEventIds?: readonly string[];
   /** When it was last used, so a store that runs for years does not grow forever. */
   updated: number;
 }

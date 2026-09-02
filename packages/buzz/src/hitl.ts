@@ -23,9 +23,9 @@ export function formatInputRequests(requests: readonly InputRequest[]): string {
       );
     }
     if (request.allowFreeform === true || !request.options?.length) {
-      lines.push("", "Reply with an option number, option ID, exact label, or your own answer.");
+      lines.push("", "Reply to this message with an option number, option ID, exact label, or your own answer.");
     } else {
-      lines.push("", "Reply with an option number, option ID, or exact label.");
+      lines.push("", "Reply to this message with an option number, option ID, or exact label.");
     }
     return lines.join("\n");
   }).join("\n\n");

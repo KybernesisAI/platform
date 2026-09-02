@@ -266,12 +266,25 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         // messages so stale state cannot overwrite a newer responder or cursor.
         onState: (state) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
+          const current = sessions.get(community, channel);
+          if (state.pendingInputRequests?.length) {
+            sessions.set(community, channel, { ...state, promptEventIds: current?.promptEventIds });
+            return;
+          }
+          if (current?.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
           sessions.set(community, channel, state);
         }),
         onInputRequested: (requests) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          if (!relay.reply(channel, formatInputRequests(requests))) {
-            throw new Error("Buzz relay is not connected");
+          const promptId = relay.reply(channel, formatInputRequests(requests));
+          if (!promptId) throw new Error("Buzz relay is not connected");
+          relay.watchReplies([promptId]);
+          const current = sessions.get(community, channel);
+          if (current) {
+            sessions.set(community, channel, {
+              ...current,
+              promptEventIds: [...(current.promptEventIds ?? []), promptId],
+            });
           }
           log(`posted another input request in ${channel.slice(0, 8)}`);
         }),
@@ -309,7 +322,14 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     // Addressed by TAG, not by text. A name in prose is a string anyone can type; a p tag is what
     // the client emits when someone actually picks this member out of a mention list.
     const addressed = event.tags.some((t) => t[0] === "p" && t[1] === key.publicKey);
-    if (!channel || !addressed) return;
+    // A reply to a prompt this agent posted is an answer even when it names nobody: people answer
+    // a question by replying to it, not by mentioning the asker. Only while that prompt is open.
+    const repliedTo = event.tags.find((t) => t[0] === "e")?.[1];
+    const open = channel ? sessions.get(from, channel) : undefined;
+    const answersPrompt = Boolean(
+      repliedTo && open?.pendingInputRequests?.length && open.promptEventIds?.includes(repliedTo),
+    );
+    if (!channel || !(addressed || answersPrompt)) return;
 
     const text = String(event.content ?? "").trim();
     const attachments = parseMedia(event);
@@ -341,7 +361,9 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       await serialize(from, channel, async () => {
         const pending = sessions.get(from, channel);
         if (pending?.pendingInputRequests?.length) {
-          const responses = resolveInputReply(text, pending.pendingInputRequests);
+          // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
+          const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
+          const responses = resolveInputReply(answer, pending.pendingInputRequests);
           if (!responses) {
             relay.reply(channel, invalidInputReply(pending.pendingInputRequests), event);
             return;
@@ -386,7 +408,12 @@ export function buzzBridge(options: BuzzBridgeOptions) {
             pendingInputRequests: result.inputRequests,
             speakerPublicKey: event.pubkey,
           });
-          relay.reply(channel, formatInputRequests(result.inputRequests), event);
+          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests), event);
+          if (promptId) {
+            relay.watchReplies([promptId]);
+            const current = sessions.get(from, channel);
+            if (current) sessions.set(from, channel, { ...current, promptEventIds: [promptId] });
+          }
           log(`posted ${result.inputRequests.length} input request(s) in ${channel.slice(0, 8)}`);
           startFollower(from, channel);
           return;
@@ -436,6 +463,9 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       stopped = false;
       for (const relay of relays.values()) relay.connect();
       for (const { community, channel, session } of sessions.entries()) {
+        if (session.pendingInputRequests?.length && session.promptEventIds?.length) {
+          relays.get(community)?.watchReplies(session.promptEventIds);
+        }
         if (needsPendingFollower(session) && session.speakerPublicKey) {
           startFollower(community, channel);
         }

@@ -88,6 +88,8 @@ export class BuzzRelay {
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
   private cursor = now();
+  /** Prompts this agent posted; replies to them are polled for even when they carry no mention. */
+  private readonly replyWatch = new Set<string>();
 
   private readonly url: string;
   private readonly rest: string;
@@ -107,6 +109,15 @@ export class BuzzRelay {
 
   get pubkey(): string {
     return this.key.publicKey;
+  }
+
+  /** Also poll for replies to these events — a person answering a prompt rarely mentions the asker. */
+  watchReplies(ids: Iterable<string>): void {
+    for (const id of ids) this.replyWatch.add(id);
+  }
+
+  unwatchReplies(ids: Iterable<string>): void {
+    for (const id of ids) this.replyWatch.delete(id);
   }
 
   connect(): void {
@@ -253,14 +264,22 @@ export class BuzzRelay {
    * failure — a process that connects, authenticates, logs that it is listening, and silently
    * ignores every message addressed to it.
    */
-  private poll(): void {
+  poll(): void {
     if (this.closed) return;
-    this.send(["REQ", `m${Date.now()}`, { kinds: [KIND_MESSAGE], "#p": [this.key.publicKey], since: this.cursor }]);
+    const filters: Record<string, unknown>[] = [
+      { kinds: [KIND_MESSAGE], "#p": [this.key.publicKey], since: this.cursor },
+    ];
+    if (this.replyWatch.size > 0) {
+      filters.push({ kinds: [KIND_MESSAGE], "#e": [...this.replyWatch], since: this.cursor });
+    }
+    this.send(["REQ", `m${Date.now()}`, ...filters]);
     this.pollTimer = setTimeout(() => this.poll(), this.pollMs);
   }
 
-  publish(event: { kind: number; tags: string[][]; content: string }): boolean {
-    return this.send(["EVENT", finalizeEvent({ created_at: now(), ...event }, this.key.secretKey)]);
+  /** Publish one event; returns its id when it left this process, null when the socket was down. */
+  publish(event: { kind: number; tags: string[][]; content: string }): string | null {
+    const signed = finalizeEvent({ created_at: now(), ...event }, this.key.secretKey);
+    return this.send(["EVENT", signed]) ? signed.id : null;
   }
 
   setPresence(status: PresenceStatus): void {
@@ -281,7 +300,7 @@ export class BuzzRelay {
     return () => clearInterval(timer);
   }
 
-  reply(channel: string, text: string, replyTo?: NostrEvent): boolean {
+  reply(channel: string, text: string, replyTo?: NostrEvent): string | null {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
       tags.push(["e", replyTo.id], ["p", replyTo.pubkey]);
