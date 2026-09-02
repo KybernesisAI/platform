@@ -373,7 +373,7 @@ export async function doctor(): Promise<void> {
         add(
           "warn",
           "no daily docker reclaim on this host",
-          "sandbox images and abandoned session containers accumulate by the gigabyte; `kyb upgrade` installs /etc/cron.daily/kyb-docker-prune",
+          "sandbox templates, build cache, and generic stopped containers accumulate; durable sessions stay protected and terminal hooks remove closed sessions; `kyb upgrade` installs /etc/cron.daily/kyb-docker-prune",
         );
       } else if (percent >= 80) {
         add(

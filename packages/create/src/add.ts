@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { bold, dim, green, red, run, yellow } from "./util.js";
-import { CHANNEL_KINDS, channelPlan, type ChannelKind, type HostKind } from "./templates.js";
+import { CHANNEL_KINDS, arcanaMemorySlotTs, channelPlan, type ChannelKind, type HostKind } from "./templates.js";
 
 /**
  * `kyb add channel <kind>` — put another surface on an agent that already exists.
@@ -20,9 +20,11 @@ import { CHANNEL_KINDS, channelPlan, type ChannelKind, type HostKind } from "./t
  * already an agent, which is all "add" ever meant.
  */
 export async function add(what: string | undefined, rest: string[]): Promise<void> {
+  if (what === "memory") return addMemory();
   if (what !== "channel") {
     console.error(red(`kyb add: don't know how to add "${what ?? ""}".`));
     console.log(dim(`  kyb add channel <${CHANNEL_KINDS.filter((k) => k !== "none").join("|")}>`));
+    console.log(dim(`  kyb add memory   ${dim("— an eve 0.49 memory slot backed by Arcana (recall before every turn)")}`));
     process.exitCode = 1;
     return;
   }
@@ -118,4 +120,33 @@ function appendEnvExample(dir: string, kind: string, lines: string[]): number {
   if (!fresh.length) return 0;
   writeFileSync(path, `${existing.replace(/\n*$/, "\n")}\n# ${kind}\n${fresh.join("\n")}\n`);
   return fresh.length;
+}
+
+/**
+ * `kyb add memory` — recall before every turn, from Arcana, as an eve memory
+ * slot. Needs eve ≥ 0.49 (the memory API) and the Arcana key and workspace
+ * the agent already has; refuses to overwrite a slot someone has authored.
+ */
+export function addMemory(cwd = resolve(process.cwd())): void {
+  if (!existsSync(join(cwd, "package.json")) || !existsSync(join(cwd, "agent"))) {
+    console.error(red("kyb add memory: run this inside an agent directory."));
+    process.exitCode = 1;
+    return;
+  }
+  console.log(bold("kyb add memory"));
+  if (existsSync(join(cwd, "agent/memory.ts"))) {
+    console.log(yellow("  agent/memory.ts exists (the single-slot form); eve allows one form or the other. Leaving it alone."));
+    return;
+  }
+  const target = join(cwd, "agent/memory/arcana.ts");
+  if (existsSync(target)) {
+    console.log(yellow("  agent/memory/arcana.ts already exists — leaving it alone."));
+    return;
+  }
+  const extensionMounted = existsSync(join(cwd, "agent/extensions/arcana.ts"));
+  mkdirSync(join(cwd, "agent/memory"), { recursive: true });
+  writeFileSync(target, arcanaMemorySlotTs({ extensionMounted }));
+  console.log(green("  + agent/memory/arcana.ts"));
+  console.log(dim(`    recall before every turn from ARCANA_COMPANY_WORKSPACE; capture off; ${extensionMounted ? "tools from the extension" : "remember/recall/search as memory__* tools"}`));
+  console.log(dim("    needs eve >= 0.49 and @kybernesis/arcana >= 0.4 — kyb upgrade carries both. Then: npx eve info"));
 }

@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/exe",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "description": "Run eve agents on exe.dev VMs: subscription-backed model access through the LLM integration, process supervision, and an optional Slack binding. Channel-agnostic core.",
   "license": "Apache-2.0",
   "type": "module",
@@ -40,6 +40,10 @@
     "./preview": {
       "types": "./dist/preview.d.ts",
       "default": "./dist/preview.js"
+    },
+    "./sandbox-cleanup": {
+      "types": "./dist/sandbox-cleanup.d.ts",
+      "default": "./dist/sandbox-cleanup.js"
     }
   },
   "scripts": {
@@ -51,11 +55,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.38.3",
+    "eve": "0.49.0",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0",
+    "eve": ">=0.49.0 <0.50.0",
     "zod": "^4"
   },
   "engines": {

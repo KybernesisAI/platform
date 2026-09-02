@@ -37,6 +37,7 @@ import { suiteDir } from "./skills.js";
 import { configureArcana } from "./arcana.js";
 import { upsertEnv } from "./envfile.js";
 import { systemdRestartCommand } from "./systemd.js";
+import { sandboxCleanupScaffoldFiles } from "./sandbox-cleanup.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -392,6 +393,12 @@ export async function init(rawName: string | undefined, options: InitOptions = {
         console.log(yellow(`  ! arcana skills not found at ${skillsSource} — copy them manually`));
       }
     }
+  }
+
+  for (const file of sandboxCleanupScaffoldFiles(host, depts)) {
+    const full = join(dir, file.path);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, file.content);
   }
 
   if (engPlan) {

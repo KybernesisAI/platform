@@ -9,6 +9,8 @@ it: recall-first lookups, proactive fact storage, and two-step brain notes.
 
 ## What ships in the package
 
+- `@kybernesis/arcana/memory` — `arcanaMemory()`, an eve 0.49 memory provider (see below).
+
 | Contribution | What it does |
 | --- | --- |
 | `connections/memory` | MCP connection to `https://mcp.arcana.kybernesis.ai/mcp` (static-key auth + the required `X-Kyberagent-Agent` workspace header) |
@@ -136,6 +138,49 @@ Two rules that save hours:
 2. Memory failures are graceful: a missing/invalid key surfaces as a tool
    error the model reports, never a crash. If memory "doesn't work" after
    deploy, check the env vars in the target environment first.
+
+## eve memory slot (eve ≥ 0.49)
+
+eve 0.49 added first-class memory: a slot file names a provider, eve resolves
+who the memory belongs to from trusted session context, calls the provider to
+**recall** before the model sees a turn and to **capture** after it answers,
+and mounts the provider's tools as `<slot>__<tool>`. Arcana ships as such a
+provider, so an agent gets recall-before-every-turn without a skill telling
+the model to go and look:
+
+```ts title="agent/memory/arcana.ts"
+import { defineMemory } from "eve/memory";
+import { byPrincipal } from "eve/memory/scope";
+import { arcanaMemory } from "@kybernesis/arcana/memory";
+
+export default defineMemory({
+  description: "Durable company memory in Arcana.",
+  provider: arcanaMemory({
+    apiKey: process.env.ARCANA_API_KEY!,
+    workspace: process.env.ARCANA_COMPANY_WORKSPACE!,
+  }),
+  scope: byPrincipal,
+});
+```
+
+What the provider does, and the two defaults that differ from the hosted
+providers eve documents:
+
+| Phase | Behaviour |
+| --- | --- |
+| `recall` (turn.started) | `arcana_search` + `arcana_brain_query` for the message, delivered as **one keyed message** eve replaces each turn. **Skipped for turns under 4 words** — a "hi" must not fan out to memory (the reference eval suite gates exactly that). A memory outage is logged and the turn goes on. |
+| `capture` (turn.completed) | **Off by default.** Kybernesis agents remember deliberately through `arcana_remember` (the remember skill); capturing every turn on top would store each fact twice. `capture: { enabled: true }` for an agent with no remember skill that should learn passively. Captured memories carry `eve-memory`, `scope:<key>` and `op:<operationId>` tags. |
+| `tools()` | `remember`, `recall`, `search` as `<slot>__*`. Set `tools: false` when the extension is also mounted — it already offers the full `arcana_*` set. |
+
+Options: `url` (the MCP endpoint), `recall: { enabled, minWords, limit, brainNotes }`,
+`capture: { enabled, minWords }`, `tools`, `resolveWorkspace(ctx)` (choose the
+brain per operation from VERIFIED session context, as the extension does), `log`.
+
+Arcana partitions by **workspace**, not by eve's scope: one `kb_` key reaches
+one brain. The scope eve resolved is recorded as a tag on captured memories and
+keys the recalled message, so attribution follows the principal, but isolation
+between principals is the workspace's job. Slots and the extension mount can
+coexist; they are independent surfaces over the same brain.
 
 ## Subagents (departments / multiple brains)
 

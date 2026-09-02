@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/enterprise",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Kybernesis enterprise governance for eve agents: control-plane token verification and per-agent grant enforcement (kybernesisAuth).",
   "license": "Apache-2.0",
   "type": "module",
@@ -36,11 +36,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.38.3",
+    "eve": "0.49.0",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0"
+    "eve": ">=0.49.0 <0.50.0"
   },
   "engines": {
     "node": ">=20"

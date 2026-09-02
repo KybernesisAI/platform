@@ -17,7 +17,7 @@
  * outbound Web API calls cannot be routed through the integration even though
  * the underlying adapter supports `apiUrl` and reads `SLACK_API_URL`. Until
  * eve plumbs that through, `SLACK_BOT_TOKEN` must live in the host env.
- * Verified against eve 0.38.3.
+ * Verified against eve 0.38.3; nothing in the changelog through 0.49.0 changes it.
  */
 
 /** Options for {@link forwardedSocketVerifier}. */

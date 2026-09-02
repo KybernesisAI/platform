@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/arcana",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Kybernesis Arcana long-term memory for eve agents: MCP connection, memory skills, and recall-first instructions. Mount once per brain.",
   "license": "Apache-2.0",
   "type": "module",
@@ -23,24 +23,29 @@
     "./tools": {
       "types": "./dist/tools/index.d.ts",
       "default": "./dist/tools/index.mjs"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "default": "./dist/memory/index.js"
     }
   },
   "scripts": {
-    "build": "eve extension build",
-    "prepack": "eve extension build",
-    "typecheck": "tsc",
-    "prepublishOnly": "node ../../scripts/prepublish.mjs"
+    "build": "eve extension build && tsc -p tsconfig.memory.json",
+    "prepack": "eve extension build && tsc -p tsconfig.memory.json",
+    "typecheck": "tsc && tsc -p tsconfig.memory.json --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.38.3",
+    "eve": "0.49.0",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.38.0 <0.39.0"
+    "eve": ">=0.49.0 <0.50.0"
   },
   "engines": {
     "node": "24.x"

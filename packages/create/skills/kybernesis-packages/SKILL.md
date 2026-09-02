@@ -10,7 +10,10 @@ Twelve packages, npm-public under `@kybernesis`, Apache-2.0, monorepo
 then `eve add @kybernesis/<item>`). Each covers one axis:
 
 - **arcana** — memory. Extension mount `arcana({ apiKey, workspace,
-  resolveWorkspace? })`. Workspace-scoped `kb_` keys (403 outside their
+  resolveWorkspace? })`; from eve 0.49 also a memory PROVIDER:
+  `arcanaMemory()` from `@kybernesis/arcana/memory` in an `agent/memory/*.ts`
+  slot (`kyb add memory` writes it) — recall before every turn, skipped
+  under 4 words, capture off by default, tools left to the extension. Workspace-scoped `kb_` keys (403 outside their
   workspace — one key per brain). `resolveWorkspace` only from VERIFIED
   session context, never model output, and only key-reachable workspaces.
   Subagents: local extension mount (`subagents/<id>/extensions/arcana.ts`,
@@ -127,7 +130,7 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   asterisks onto the URL in Slack and breaks it. Coach agents in prose, not
   shell (WAFs eat shell-syntax Slack messages).
 - **ESM packaging**: relative imports need `.js` extensions (tsc doesn't
-  rewrite); eve is a peer dep with an explicit range (`>=0.38.0 <0.39.0`),
+  rewrite); eve is a peer dep with an explicit range (`>=0.49.0 <0.50.0`),
   pinned exactly in devDeps.
 - **Eval fixtures are hardened on purpose** — in-test nonces (eve caches
   compiled eval modules), per-run unique keys (workspaces accumulate),
