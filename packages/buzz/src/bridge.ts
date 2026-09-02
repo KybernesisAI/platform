@@ -7,6 +7,7 @@ import {
   followPendingConversation,
   formatInputRequests,
   invalidInputReply,
+  needsPendingFollower,
   resolveInputReply,
   respondToPendingConversation,
 } from "./hitl.js";
@@ -226,10 +227,18 @@ export function buzzBridge(options: BuzzBridgeOptions) {
 
   /** One abortable durable-stream follower owns each parked conversation. */
   const followers = new Map<string, AbortController>();
+  const followerRestartTimers = new Map<string, NodeJS.Timeout>();
   let stopped = false;
+
+  function clearFollowerRestart(conversation: string): void {
+    const timer = followerRestartTimers.get(conversation);
+    if (timer) clearTimeout(timer);
+    followerRestartTimers.delete(conversation);
+  }
 
   function stopFollower(community: string, channel: string): void {
     const conversation = SessionStore.key(community, channel);
+    clearFollowerRestart(conversation);
     followers.get(conversation)?.abort();
     followers.delete(conversation);
   }
@@ -237,10 +246,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   function startFollower(community: string, channel: string): void {
     if (stopped) return;
     const conversation = SessionStore.key(community, channel);
+    clearFollowerRestart(conversation);
     if (followers.has(conversation)) return;
     const stored = sessions.get(community, channel);
     const relay = relays.get(community);
-    if (!stored?.pendingInputRequests?.length || !stored.speakerPublicKey || !relay) return;
+    if (!stored || !needsPendingFollower(stored) || !stored.speakerPublicKey || !relay) return;
 
     const controller = new AbortController();
     followers.set(conversation, controller);
@@ -251,15 +261,25 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       session,
       stored,
       {
-        onState: (state) => sessions.set(community, channel, state),
-        onInputRequested: (requests) => {
-          relay.reply(channel, formatInputRequests(requests));
+        // A stopped/replaced follower may already have queued a callback. Check
+        // its generation inside the same conversation queue used by inbound
+        // messages so stale state cannot overwrite a newer responder or cursor.
+        onState: (state) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          sessions.set(community, channel, state);
+        }),
+        onInputRequested: (requests) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          if (!relay.reply(channel, formatInputRequests(requests))) {
+            throw new Error("Buzz relay is not connected");
+          }
           log(`posted another input request in ${channel.slice(0, 8)}`);
-        },
-        onMessage: (message) => {
-          relay.reply(channel, message);
+        }),
+        onMessage: (message) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          if (!relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
           log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
-        },
+        }),
         onLog: log,
       },
       controller.signal,
@@ -271,8 +291,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       }
     }).finally(() => {
       if (followers.get(conversation) === controller) followers.delete(conversation);
-      if (!controller.signal.aborted && sessions.get(community, channel)?.pendingInputRequests?.length) {
-        setTimeout(() => startFollower(community, channel), 1_000);
+      const recoverable = sessions.get(community, channel);
+      if (!controller.signal.aborted && recoverable && needsPendingFollower(recoverable)) {
+        const timer = setTimeout(() => {
+          followerRestartTimers.delete(conversation);
+          startFollower(community, channel);
+        }, 1_000);
+        followerRestartTimers.set(conversation, timer);
       }
     });
   }
@@ -335,6 +360,12 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           });
           await respondToPendingConversation(session, responses, from, channel);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
+          return;
+        }
+
+        if (pending?.resumeInFlight) {
+          startFollower(from, channel);
+          relay.reply(channel, "I'm still finishing the resumed request. I'll post the answer here when it is ready.", event);
           return;
         }
 
@@ -405,7 +436,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       stopped = false;
       for (const relay of relays.values()) relay.connect();
       for (const { community, channel, session } of sessions.entries()) {
-        if (session.pendingInputRequests?.length && session.speakerPublicKey) {
+        if (needsPendingFollower(session) && session.speakerPublicKey) {
           startFollower(community, channel);
         }
       }
@@ -420,6 +451,8 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       stopped = true;
       for (const controller of followers.values()) controller.abort();
       followers.clear();
+      for (const timer of followerRestartTimers.values()) clearTimeout(timer);
+      followerRestartTimers.clear();
       for (const relay of relays.values()) relay.setPresence("offline");
       setTimeout(() => {
         for (const relay of relays.values()) relay.close();

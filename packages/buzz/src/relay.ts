@@ -238,9 +238,10 @@ export class BuzzRelay {
     this.onMessage(event);
   }
 
-  private send(frame: unknown[]): void {
-    if (this.socket?.readyState !== WebSocket.OPEN) return;
+  private send(frame: unknown[]): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
     this.socket.send(JSON.stringify(frame));
+    return true;
   }
 
   /**
@@ -258,8 +259,8 @@ export class BuzzRelay {
     this.pollTimer = setTimeout(() => this.poll(), this.pollMs);
   }
 
-  publish(event: { kind: number; tags: string[][]; content: string }): void {
-    this.send(["EVENT", finalizeEvent({ created_at: now(), ...event }, this.key.secretKey)]);
+  publish(event: { kind: number; tags: string[][]; content: string }): boolean {
+    return this.send(["EVENT", finalizeEvent({ created_at: now(), ...event }, this.key.secretKey)]);
   }
 
   setPresence(status: PresenceStatus): void {
@@ -280,12 +281,12 @@ export class BuzzRelay {
     return () => clearInterval(timer);
   }
 
-  reply(channel: string, text: string, replyTo?: NostrEvent): void {
+  reply(channel: string, text: string, replyTo?: NostrEvent): boolean {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
       tags.push(["e", replyTo.id], ["p", replyTo.pubkey]);
     }
-    this.publish({ kind: KIND_MESSAGE, tags, content: text });
+    return this.publish({ kind: KIND_MESSAGE, tags, content: text });
   }
 
   /** Sign one HTTP request as this agent (NIP-98), binding the signature to the body. */

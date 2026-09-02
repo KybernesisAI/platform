@@ -203,6 +203,17 @@ test("typing is scoped to its channel and stops when told", () => {
   stop();
 });
 
+test("reply reports whether the event was accepted by a connected socket", () => {
+  const offline = new BuzzRelay({ url: "wss://relay.example.com", key, onMessage: () => {} });
+  opened.push(offline);
+  assert.equal(offline.reply("channel-1", "not sent"), false);
+
+  const { relay, socket } = connected();
+  authenticate(socket);
+  assert.equal(relay.reply("channel-1", "sent"), true);
+  assert.equal(socket.published(KIND_MESSAGE).at(-1).content, "sent");
+});
+
 test("a reply is anchored to the message it answers and addressed back to its author", () => {
   const { relay, socket } = connected();
   authenticate(socket);

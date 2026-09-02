@@ -5,6 +5,7 @@ import {
   followPendingConversation,
   formatInputRequests,
   invalidInputReply,
+  needsPendingFollower,
   resolveInputReply,
   respondToPendingConversation,
 } from "../dist/hitl.js";
@@ -126,6 +127,113 @@ test("the follower handles another HITL round and does not terminate at its wait
 });
 
 
+test("a disconnect after input.resolved keeps durable supervision until recovered output is published", async () => {
+  let durable = {
+    id: "session-1",
+    streamIndex: 7,
+    pendingInputRequests: [request],
+    speakerPublicKey: "speaker",
+  };
+  const messages = [];
+  const disconnected = {
+    state: { sessionId: "session-1", streamIndex: 7 },
+    async *stream() {
+      yield event("input.resolved", {
+        resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }],
+      });
+      throw new Error("stream disconnected");
+    },
+  };
+
+  await assert.rejects(
+    () => followPendingConversation(
+      disconnected,
+      durable,
+      {
+        onState: async (state) => { durable = structuredClone(state); },
+        onInputRequested: () => assert.fail("the original request was already resolved"),
+        onMessage: () => assert.fail("the stream disconnected before output"),
+      },
+      new AbortController().signal,
+    ),
+    /stream disconnected/,
+  );
+
+  assert.equal(durable.streamIndex, 8, "recovery resumes after the accepted input resolution");
+  assert.equal(durable.pendingInputRequests, undefined);
+  assert.equal(durable.resumeInFlight, true, "resolved input remains durably supervised");
+  assert.equal(needsPendingFollower(durable), true);
+
+  const recovered = fakeSession([
+    event("message.completed", {
+      finishReason: "stop",
+      message: "Recovered resumed answer",
+      sequence: 2,
+      stepIndex: 1,
+      turnId: "turn-1",
+    }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ], durable.streamIndex);
+
+  await followPendingConversation(
+    recovered,
+    durable,
+    {
+      onState: async (state) => { durable = structuredClone(state); },
+      onInputRequested: () => assert.fail("recovery should continue the resolved turn"),
+      onMessage: async (message) => {
+        assert.equal(durable.resumeInFlight, true, "supervision clears only after publication succeeds");
+        messages.push(message);
+      },
+    },
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(messages, ["Recovered resumed answer"]);
+  assert.equal(durable.streamIndex, 10);
+  assert.equal(durable.resumeInFlight, undefined);
+  assert.equal(durable.pendingInputRequests, undefined);
+  assert.equal(needsPendingFollower(durable), false, "a restart cannot publish the completed output again");
+});
+
+test("a failed relay publication retains resume supervision for another follower", async () => {
+  let durable = {
+    id: "session-1",
+    streamIndex: 8,
+    resumeInFlight: true,
+    speakerPublicKey: "speaker",
+  };
+  const recovered = fakeSession([
+    event("message.completed", {
+      finishReason: "stop",
+      message: "Retry this publication",
+      sequence: 2,
+      stepIndex: 1,
+      turnId: "turn-1",
+    }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ], durable.streamIndex);
+
+  await assert.rejects(
+    () => followPendingConversation(
+      recovered,
+      durable,
+      {
+        onState: async (state) => { durable = structuredClone(state); },
+        onInputRequested: () => assert.fail("no new request expected"),
+        onMessage: async () => { throw new Error("relay unavailable"); },
+      },
+      new AbortController().signal,
+    ),
+    /relay unavailable/,
+  );
+
+  assert.equal(durable.streamIndex, 8, "the unpublished message remains replayable");
+  assert.equal(durable.resumeInFlight, true);
+  assert.equal(needsPendingFollower(durable), true);
+});
+
+
 test("submitting a channel reply uses ClientSession.respond without consuming duplicate output", async () => {
   const calls = [];
   const session = {
@@ -145,4 +253,45 @@ test("submitting a channel reply uses ClientSession.respond without consuming du
       streamReconnectPolicy: { reconnect: false },
     },
   }]);
+});
+
+test("the follower awaits serialized durable state before any resumed publication", async () => {
+  let releaseState;
+  const stateStored = new Promise((resolve) => { releaseState = resolve; });
+  let reachedState = false;
+  let published = false;
+  const run = followPendingConversation(
+    fakeSession([
+      event("input.resolved", {
+        resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }],
+      }),
+      event("message.completed", {
+        finishReason: "stop",
+        message: "Ordered answer",
+        sequence: 2,
+        stepIndex: 1,
+        turnId: "turn-1",
+      }),
+      event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+    ]),
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: async (state) => {
+        if (state.resumeInFlight && !reachedState) {
+          reachedState = true;
+          await stateStored;
+        }
+      },
+      onInputRequested: () => assert.fail("no repeated request expected"),
+      onMessage: () => { published = true; },
+    },
+    new AbortController().signal,
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reachedState, true);
+  assert.equal(published, false, "publication cannot race ahead of serialized state persistence");
+  releaseState();
+  await run;
+  assert.equal(published, true);
 });

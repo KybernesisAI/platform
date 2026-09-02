@@ -59,16 +59,36 @@ export async function respondToPendingConversation(
   });
 }
 
+/** A session needs its follower while asking or while resumed output is unpublished. */
+export function needsPendingFollower(session: Pick<StoredSession, "pendingInputRequests" | "resumeInFlight">): boolean {
+  return Boolean(session.pendingInputRequests?.length || session.resumeInFlight);
+}
+
 export interface PendingFollowerCallbacks {
-  /** Persist the latest cursor and pending request set before publishing outward. */
-  onState(state: Omit<StoredSession, "updated">): void;
+  /** Persist the latest cursor and supervision state before publishing outward. */
+  onState(state: Omit<StoredSession, "updated">): void | Promise<void>;
   onInputRequested(requests: readonly InputRequest[]): void | Promise<void>;
   onMessage(message: string): void | Promise<void>;
   onLog?: (message: string) => void;
 }
 
-function withoutPending(state: Omit<StoredSession, "updated">): Omit<StoredSession, "updated"> {
+type MutableStoredSession = Omit<StoredSession, "updated">;
+
+function withPending(
+  state: MutableStoredSession,
+  requests: readonly InputRequest[],
+): MutableStoredSession {
+  const { resumeInFlight: _, ...rest } = state;
+  return { ...rest, pendingInputRequests: requests };
+}
+
+function withResumeInFlight(state: MutableStoredSession): MutableStoredSession {
   const { pendingInputRequests: _, ...rest } = state;
+  return { ...rest, resumeInFlight: true };
+}
+
+function withoutSupervision(state: MutableStoredSession): MutableStoredSession {
+  const { pendingInputRequests: _, resumeInFlight: __, ...rest } = state;
   return rest;
 }
 
@@ -77,32 +97,35 @@ function withoutPending(state: Omit<StoredSession, "updated">): Omit<StoredSessi
  * or reaches a terminal/non-HITL boundary. This follower is the sole publisher
  * of resumed output; callers of `respond()` must not consume or publish its
  * response stream as well.
+ *
+ * The durable `resumeInFlight` marker deliberately survives `input.resolved`.
+ * It is cleared only after the relay publication callback succeeds, so a crash
+ * or disconnect between Eve accepting input and Buzz publishing output can
+ * reattach from the persisted cursor instead of letting a normal stale drain
+ * swallow the resumed answer.
  */
 export async function followPendingConversation(
   session: Pick<ClientSession, "state" | "stream">,
-  initial: Omit<StoredSession, "updated">,
+  initial: MutableStoredSession,
   callbacks: PendingFollowerCallbacks,
   signal: AbortSignal,
 ): Promise<void> {
   let state = { ...initial };
   let streamIndex = initial.streamIndex;
   let completedMessage = "";
-  let published = false;
 
-  const persist = (pending: readonly InputRequest[] | undefined = state.pendingInputRequests) => {
-    state = {
-      ...state,
-      streamIndex,
-      ...(pending?.length ? { pendingInputRequests: pending } : {}),
-    };
-    if (!pending?.length) state = withoutPending(state);
-    callbacks.onState(state);
+  const persist = async () => {
+    state = { ...state, streamIndex };
+    await callbacks.onState(state);
   };
 
-  const publish = async () => {
-    if (published || !completedMessage.trim()) return;
-    published = true;
-    await callbacks.onMessage(completedMessage);
+  const publishThenClear = async () => {
+    // Do not persist past message.completed/turn.completed until publication
+    // succeeds. If this callback throws or the process dies, recovery replays
+    // the unpublished output from the last safe cursor.
+    if (completedMessage.trim()) await callbacks.onMessage(completedMessage);
+    state = withoutSupervision(state);
+    await persist();
   };
 
   for await (const event of session.stream({
@@ -120,41 +143,40 @@ export async function followPendingConversation(
     switch (streamEvent.type) {
       case "input.requested":
         completedMessage = "";
-        persist(streamEvent.data.requests);
+        state = withPending(state, streamEvent.data.requests);
+        // Keep the durable cursor before the prompt until Buzz accepts it for
+        // relay delivery; a reconnect can then replay and render the request.
         await callbacks.onInputRequested(streamEvent.data.requests);
+        await persist();
         break;
       case "input.resolved": {
         const resolved = new Set(streamEvent.data.resolutions.map((resolution) => resolution.requestId));
-        const remaining = state.pendingInputRequests?.filter((request) => !resolved.has(request.requestId));
-        persist(remaining);
+        const remaining = state.pendingInputRequests?.filter((request) => !resolved.has(request.requestId)) ?? [];
+        state = remaining.length > 0 ? withPending(state, remaining) : withResumeInFlight(state);
+        await persist();
         break;
       }
       case "message.completed":
         if (streamEvent.data.finishReason !== "tool-calls" && streamEvent.data.message) {
           completedMessage = streamEvent.data.message;
         }
-        persist();
+        // The durable cursor remains before unpublished output. A restarted
+        // follower may replay this event safely because it is the sole publisher.
         break;
       case "turn.completed":
-        persist();
-        if (!state.pendingInputRequests?.length) {
-          await publish();
-          return;
-        }
-        break;
       case "session.waiting":
-        persist();
         if (!state.pendingInputRequests?.length) {
-          await publish();
+          await publishThenClear();
           return;
         }
+        await persist();
         break;
       case "turn.cancelled":
       case "turn.failed":
       case "session.failed":
       case "session.completed":
-        state = withoutPending({ ...state, streamIndex });
-        callbacks.onState(state);
+        state = withoutSupervision(state);
+        await persist();
         return;
       default:
         // Replaying progress events after a crash has no outward side effect.

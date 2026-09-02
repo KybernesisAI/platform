@@ -126,3 +126,19 @@ test("pending HITL requests, cursor and public identity survive restart without 
     { community: "relay-a", channel: "channel-1" },
   ]);
 });
+
+test("resume-in-flight supervision survives restart after Eve accepts HITL input", () => {
+  const file = join(dir(), "sessions.json");
+  const first = new SessionStore(file);
+  first.set("relay-a", "channel-1", {
+    id: "wrun_resumed",
+    streamIndex: 18,
+    resumeInFlight: true,
+    speakerPublicKey: "abcdef",
+  });
+
+  const resumed = new SessionStore(file).get("relay-a", "channel-1");
+  assert.equal(resumed?.resumeInFlight, true);
+  assert.equal(resumed?.streamIndex, 18);
+  assert.equal(resumed?.speakerPublicKey, "abcdef");
+});

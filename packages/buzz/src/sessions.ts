@@ -8,6 +8,8 @@ export interface StoredSession {
   streamIndex: number;
   /** Requests that have parked this session, when HITL is awaiting a reply. */
   pendingInputRequests?: readonly InputRequest[];
+  /** Eve accepted the HITL response and resumed, but Buzz has not published its output yet. */
+  resumeInFlight?: boolean;
   /** Public identity used to refresh credentials when a follower reattaches. Never a bearer token. */
   speakerPublicKey?: string;
   /** When it was last used, so a store that runs for years does not grow forever. */
