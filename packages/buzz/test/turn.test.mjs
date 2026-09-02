@@ -72,7 +72,7 @@ test("a successful image turn and following text turn keep the same session", as
         attached.push(id);
         return attachedSession(id, async (message) => {
           sent.push(message);
-          return { result: async () => ({ message: "ok" }) };
+          return { result: async () => ({ message: "ok", status: "completed", inputRequests: [], sessionId: id }) };
         });
       },
       async create() {
@@ -104,7 +104,7 @@ test("HTTP 400 preserves the mapping and the next valid turn uses it", async () 
         return attachedSession(id, async () => {
           sends += 1;
           if (sends === 1) throw new ClientError(400, "invalid message part");
-          return { result: async () => ({ message: "continued" }) };
+          return { result: async () => ({ message: "continued", status: "completed", inputRequests: [], sessionId: id }) };
         });
       },
       async create() {
@@ -120,7 +120,7 @@ test("HTTP 400 preserves the mapping and the next valid turn uses it", async () 
   );
   assert.equal(store.get("relay", "channel").id, "session-original");
 
-  assert.equal(await answerTurn(client, store, "channel", "valid turn", "relay"), "continued");
+  assert.equal((await answerTurn(client, store, "channel", "valid turn", "relay")).message, "continued");
   assert.deepEqual(attached, ["session-original", "session-original"]);
   assert.equal(creates, 0);
 });
@@ -139,7 +139,7 @@ test("a non-400 stale session error retains the reset-and-create fallback", asyn
       async create(input) {
         createdInput = input;
         return {
-          response: { result: async () => ({ message: "new reply" }) },
+          response: { result: async () => ({ message: "new reply", status: "completed", inputRequests: [], sessionId: "session-new" }) },
           session: { state: { sessionId: "session-new", streamIndex: 1 } },
         };
       },
@@ -147,7 +147,7 @@ test("a non-400 stale session error retains the reset-and-create fallback", asyn
   };
 
   assert.equal(
-    await answerTurn(client, store, "channel", "retry me", "relay", (message) => logs.push(message)),
+    (await answerTurn(client, store, "channel", "retry me", "relay", (message) => logs.push(message))).message,
     "new reply",
   );
   assert.equal(createdInput.message, "retry me");
@@ -166,4 +166,42 @@ test("only a 400 is reported as a rejected turn; other failures keep their own p
   assert.equal(rejectedTurnReply(new ClientError(404, "gone")), null);
   assert.equal(rejectedTurnReply(new Error("socket hang up")), null);
   assert.equal(rejectedTurnReply(undefined), null);
+});
+
+test("a waiting turn preserves status, requests, session id and follower cursor", async () => {
+  const store = storeWith();
+  const request = {
+    action: { callId: "call", input: {}, kind: "tool-call", toolName: "ask_question" },
+    kind: "question",
+    prompt: "Continue?",
+    requestId: "request",
+  };
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, streamIndex: 9 },
+          async *stream() {},
+          async send() {
+            return {
+              result: async () => ({
+                message: undefined,
+                status: "waiting",
+                inputRequests: [request],
+                sessionId: id,
+              }),
+            };
+          },
+        };
+      },
+    },
+  };
+
+  assert.deepEqual(await answerTurn(client, store, "channel", "question", "relay"), {
+    message: "",
+    status: "waiting",
+    inputRequests: [request],
+    sessionId: "session-original",
+    streamIndex: 9,
+  });
 });

@@ -1,12 +1,23 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { InputRequest } from "eve/client";
 
 /** One conversation: which eve session it is, and how far the bridge has read. */
 export interface StoredSession {
   id: string;
   streamIndex: number;
+  /** Requests that have parked this session, when HITL is awaiting a reply. */
+  pendingInputRequests?: readonly InputRequest[];
+  /** Public identity used to refresh credentials when a follower reattaches. Never a bearer token. */
+  speakerPublicKey?: string;
   /** When it was last used, so a store that runs for years does not grow forever. */
   updated: number;
+}
+
+export interface StoredSessionEntry {
+  community: string;
+  channel: string;
+  session: StoredSession;
 }
 
 /** How long an untouched conversation is kept before it is forgotten. */
@@ -28,7 +39,8 @@ const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
  * other, and the join between them was the part that could not survive.
  *
  * Keyed by community AND channel: channel ids are issued per relay, so an agent
- * in two workspaces cannot assume they never collide.
+ * in two workspaces cannot assume they never collide. Optional HITL fields keep
+ * records written by older Buzz versions valid.
  */
 export class SessionStore {
   #file: string;
@@ -49,7 +61,11 @@ export class SessionStore {
     return this.#entries.get(SessionStore.key(community, channel));
   }
 
-  set(community: string, channel: string, session: { id: string; streamIndex: number }): void {
+  set(
+    community: string,
+    channel: string,
+    session: Omit<StoredSession, "updated">,
+  ): void {
     this.#entries.set(SessionStore.key(community, channel), { ...session, updated: Date.now() });
     this.#save();
   }
@@ -57,6 +73,20 @@ export class SessionStore {
   delete(community: string, channel: string): void {
     this.#entries.delete(SessionStore.key(community, channel));
     this.#save();
+  }
+
+  entries(): StoredSessionEntry[] {
+    const entries: StoredSessionEntry[] = [];
+    for (const [key, session] of this.#entries) {
+      const separator = key.lastIndexOf("|");
+      if (separator < 0) continue;
+      entries.push({
+        community: key.slice(0, separator),
+        channel: key.slice(separator + 1),
+        session,
+      });
+    }
+    return entries;
   }
 
   get size(): number {
@@ -69,7 +99,11 @@ export class SessionStore {
       const raw = JSON.parse(readFileSync(this.#file, "utf8")) as Record<string, StoredSession>;
       const cutoff = Date.now() - KEEP_MS;
       for (const [key, value] of Object.entries(raw)) {
-        if (typeof value?.id === "string" && (value.updated ?? 0) > cutoff) {
+        if (
+          typeof value?.id === "string" &&
+          typeof value?.streamIndex === "number" &&
+          (value.updated ?? 0) > cutoff
+        ) {
           this.#entries.set(key, value);
         }
       }

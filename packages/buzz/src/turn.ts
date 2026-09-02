@@ -2,6 +2,8 @@ import {
   ClientError,
   createDataUrlFilePart,
   type Client,
+  type InputRequest,
+  type MessageResult,
   type SendTurnInput,
 } from "eve/client";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
@@ -9,6 +11,15 @@ import { SessionStore } from "./sessions.js";
 
 /** A message shape accepted by the certified eve client's send contract. */
 export type TurnMessage = SendTurnInput["message"];
+
+/** Everything the bridge needs to decide how one eve turn should be rendered. */
+export interface TurnOutcome {
+  message: string;
+  status: MessageResult["status"];
+  inputRequests: readonly InputRequest[];
+  sessionId: string;
+  streamIndex: number;
+}
 
 /** Convert one inbound Buzz message into an eve-compatible turn. */
 export async function composeMessage(
@@ -47,6 +58,16 @@ export async function composeMessage(
   return parts;
 }
 
+function outcome(result: MessageResult, streamIndex: number): TurnOutcome {
+  return {
+    message: result.message ?? "",
+    status: result.status,
+    inputRequests: result.inputRequests,
+    sessionId: result.sessionId,
+    streamIndex,
+  };
+}
+
 /** Continue a channel's existing conversation, replacing it only when it is stale. */
 export async function answerTurn(
   client: Client,
@@ -55,7 +76,7 @@ export async function answerTurn(
   message: TurnMessage,
   community: string,
   log: (message: string) => void = () => {},
-): Promise<string> {
+): Promise<TurnOutcome> {
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
@@ -80,6 +101,9 @@ export async function answerTurn(
        * repairs a position that has already drifted rather than requiring
        * anyone to notice. Non-following, so it ends at the tail instead of
        * waiting for the future.
+       *
+       * Do not call this path while HITL is pending: the bridge's follower owns
+       * that unread stream until the parked turn reaches its next boundary.
        */
       let unread = 0;
       for await (const _ of session.stream({ follow: false, startIndex: existing.streamIndex })) {
@@ -97,7 +121,7 @@ export async function answerTurn(
         id: existing.id,
         streamIndex: session.state.streamIndex,
       });
-      return result.message ?? "";
+      return outcome(result, session.state.streamIndex);
     } catch (error) {
       // A malformed turn does not make its durable session stale. Rethrow so
       // the bridge can tell the room (see `rejectedTurnReply`), and keep the
@@ -113,12 +137,12 @@ export async function answerTurn(
     message,
     clientContext: { buzzCommunity: community, buzzChannel: channel },
   });
-  const reply = (await created.response.result()).message ?? "";
+  const result = await created.response.result();
   sessions.set(community, channel, {
     id: created.session.state.sessionId,
     streamIndex: created.session.state.streamIndex,
   });
-  return reply;
+  return outcome(result, created.session.state.streamIndex);
 }
 
 /**

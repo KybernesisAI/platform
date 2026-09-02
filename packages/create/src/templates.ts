@@ -421,6 +421,8 @@ import { exeModel } from "@kybernesis/exe";
 export default defineAgent({
   model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
   modelContextWindowTokens: 200_000,
+  // This long-lived self-hosted process has no metered platform session ceiling.
+  limits: { maxInputTokensPerSession: false },
 });
 `;
   }
