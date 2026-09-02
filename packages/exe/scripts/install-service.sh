@@ -20,8 +20,14 @@ NAME=${AGENT_NAME:-$(basename "$APP")}
 PORT=${PORT:-8000}
 UNIT=/etc/systemd/system/${NAME}-agent.service
 
+# The first line of every unit this script writes. `kyb upgrade` refreshes a
+# unit only when it carries this line: a unit written by hand — every host from
+# before this installer existed — is left alone and reported, never replaced.
+MANAGED_MARKER="# Managed by @kybernesis/exe install-service.sh — put host-specific settings in a drop-in (sudo systemctl edit ${NAME}-agent), not here; a refresh rewrites this file."
+
 render_unit() {
   cat <<UNITFILE
+${MANAGED_MARKER}
 [Unit]
 Description=${NAME} eve agent
 # docker.service because sandboxes live in it: started before docker is up, the
@@ -77,6 +83,12 @@ write_unit() {
   local tmp
   tmp=$(mktemp) || exit 1
   render_unit >"$tmp"
+  # A replaced unit with no copy is unrecoverable by anyone who was not
+  # watching the terminal. The previous file survives beside the new one.
+  if [ -f "$UNIT" ] && ! sudo_command cp -p "$UNIT" "${UNIT}.bak"; then
+    rm -f "$tmp"
+    return 1
+  fi
   if ! sudo_command install -m 0644 "$tmp" "$UNIT"; then
     rm -f "$tmp"
     return 1
@@ -95,12 +107,17 @@ case "${1:-}" in
     render_unit
     exit 0
     ;;
+  --managed-marker)
+    [ "$#" -eq 1 ] || { echo "install-service: --managed-marker takes no arguments" >&2; exit 2; }
+    printf '%s\n' "$MANAGED_MARKER"
+    exit 0
+    ;;
   --refresh-unit)
     [ "$#" -eq 1 ] || { echo "install-service: --refresh-unit takes no arguments" >&2; exit 2; }
     validate_agent
     write_unit || exit 1
     sudo_command systemctl daemon-reload || exit 1
-    echo "install-service: ${NAME}-agent unit refreshed (service not restarted)"
+    echo "install-service: ${NAME}-agent unit refreshed (service not restarted; previous unit at ${UNIT}.bak)"
     exit 0
     ;;
   "")

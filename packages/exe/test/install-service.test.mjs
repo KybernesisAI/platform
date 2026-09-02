@@ -120,3 +120,50 @@ test("the default command still installs, enables, and restarts the service", ()
     f.cleanup();
   }
 });
+
+/**
+ * AC5 of the refresh design: an upgrade rewrites the unit and reloads systemd,
+ * and does NOT enable or restart the service — the running agent is not
+ * interrupted by a package bump. Recording stubs stand in for sudo and
+ * systemctl so the sequence of privileged calls is the thing asserted.
+ */
+function recordingFixture() {
+  const f = fixture();
+  const calls = join(f.root, "calls.log");
+  const sudo = join(f.root, "bin", "sudo");
+  writeFileSync(
+    sudo,
+    `#!/bin/sh\n[ "$1" = "-n" ] && shift\necho "$*" >> '${calls}'\nexit 0\n`,
+  );
+  chmodSync(sudo, 0o755);
+  return { ...f, calls: () => (readFileSync(calls, "utf8").trim().split("\n")) };
+}
+
+test("--refresh-unit installs the unit and reloads systemd, and neither enables nor restarts", () => {
+  const f = recordingFixture();
+  try {
+    const result = run(["--refresh-unit"], { ...f.env, KYB_NONINTERACTIVE: "1" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /unit refreshed \(service not restarted/);
+    const calls = f.calls();
+    assert.match(calls[0], /^install -m 0644 \S+ \/etc\/systemd\/system\/test-agent-agent\.service$/);
+    assert.equal(calls[1], "systemctl daemon-reload");
+    assert.equal(calls.length, 2);
+    assert.equal(calls.some((c) => /enable|restart/.test(c)), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("every generated unit opens with the managed marker, and the marker is printable on its own", () => {
+  const f = fixture();
+  try {
+    const marker = run(["--managed-marker"], f.env);
+    const unit = run(["--print-unit"], f.env);
+    assert.equal(marker.status, 0, marker.stderr);
+    assert.match(marker.stdout, /^# Managed by @kybernesis\/exe install-service\.sh/);
+    assert.ok(unit.stdout.startsWith(marker.stdout), "the unit's first line is the marker");
+  } finally {
+    f.cleanup();
+  }
+});

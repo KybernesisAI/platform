@@ -256,7 +256,40 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   if (!existsSync(serviceScript)) return;
   const unitTarget = capture("bash", [serviceScript, "--unit-path"], cwd)?.trim();
   const unitContent = capture("bash", [serviceScript, "--print-unit"], cwd);
-  if (!unitTarget || unitContent === null) return;
+  const marker = capture("bash", [serviceScript, "--managed-marker"], cwd)?.trim();
+  if (!unitTarget || unitContent === null || !marker) return;
+
+  /**
+   * Only a unit this package wrote is this package's to rewrite.
+   *
+   * Every host from before the installer existed has a hand-written unit —
+   * some with Environment= lines the renderer knows nothing about. Reconciling
+   * those would report "drifted (content)" and replace them, and a warning
+   * that scrolls past in the middle of an upgrade is not consent. The marker
+   * is the first line of every generated unit; a unit without it is reported
+   * and left exactly as it is.
+   */
+  if (existsSync(unitTarget)) {
+    let installed: string;
+    try {
+      installed = readFileSync(unitTarget, "utf8");
+    } catch (error) {
+      console.log(
+        `  ${yellow("!")} could not read ${unitTarget} to check whether it is package-managed ` +
+          `(${(error as Error).message}); leaving it alone.`,
+      );
+      return;
+    }
+    if (!installed.includes(marker)) {
+      console.log(
+        `  ${yellow("!")} ${unitTarget} was not written by @kybernesis/exe, so it was left as is.\n` +
+          `    To adopt the package-managed unit (the current file is kept at ${unitTarget}.bak):\n` +
+          `    ${dim(`bash ${shellQuote(serviceScript)} --refresh-unit`)}\n` +
+          `    Host-specific settings belong in a drop-in: ${dim(`sudo systemctl edit <name>-agent`)}`,
+      );
+      return;
+    }
+  }
 
   reconcileHostArtifact({
     targetPath: unitTarget,
