@@ -23,13 +23,18 @@
     "./tools": {
       "types": "./dist/tools/index.d.ts",
       "default": "./dist/tools/index.mjs"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "default": "./dist/memory/index.js"
     }
   },
   "scripts": {
-    "build": "eve extension build",
-    "prepack": "eve extension build",
-    "typecheck": "tsc",
-    "prepublishOnly": "node ../../scripts/prepublish.mjs"
+    "build": "eve extension build && tsc -p tsconfig.memory.json",
+    "prepack": "eve extension build && tsc -p tsconfig.memory.json",
+    "typecheck": "tsc && tsc -p tsconfig.memory.json --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "zod": "4.4.3"
