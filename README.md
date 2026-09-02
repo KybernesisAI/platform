@@ -74,3 +74,7 @@ History note: these packages were originally developed inside the Kyber agent
 monorepo (`KybernesisAI/kyber`) and extracted here 2026-08-05; pre-extraction
 history lives there and in the retired per-package mirrors
 (`arcana-eve`, `enterprise-eve`).
+
+## Reporting bugs
+
+Please include the version you are using and clear steps to reproduce the problem.
