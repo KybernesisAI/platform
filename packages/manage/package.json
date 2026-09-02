@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/manage",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Let KYBER Studio install capabilities and write schedules onto a running eve agent.",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,7 +29,7 @@
     "@kybernesis/enterprise": ">=0.3.0"
   },
   "devDependencies": {
-    "@kybernesis/enterprise": "^0.7.0",
+    "@kybernesis/enterprise": "^0.8.0",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

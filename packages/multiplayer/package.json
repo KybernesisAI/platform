@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/multiplayer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Multiplayer conversations for eve agents: shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions.",
   "license": "Apache-2.0",
   "type": "module",
