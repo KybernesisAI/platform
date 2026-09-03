@@ -45,6 +45,21 @@ export function validateAgentSilenceTimeoutMs(value: number): number {
 /** A message shape accepted by the certified eve client's send contract. */
 export type TurnMessage = SendTurnInput["message"];
 
+/**
+ * One thing that went wrong inside a turn, as the session stream reported it.
+ *
+ * A turn where every tool call fails ends with no assistant text and no
+ * turn-level error: eve logs `tool execution failed` and finishes. From the
+ * channel that was the same silence as an overloaded model or a dead process,
+ * and on one deployment it took an hour to tell them apart (KYB-529). The
+ * stream does carry the facts (`action.result` with a failed status and the
+ * tool's name and error; `step.failed` / `turn.failed` with a code and
+ * message), so the bridge keeps them and says them.
+ */
+export type TurnFailure =
+  | { kind: "tool"; toolName: string; message: string }
+  | { kind: "model"; code: string; message: string };
+
 /** Everything the bridge needs to decide how one eve turn should be rendered. */
 export interface TurnOutcome {
   message: string;
@@ -52,6 +67,72 @@ export interface TurnOutcome {
   inputRequests: readonly InputRequest[];
   sessionId: string;
   streamIndex: number;
+  /** Failures seen on the stream, in order. Empty on a clean turn. */
+  failures: readonly TurnFailure[];
+}
+
+const clip = (text: unknown, max = 200): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+/** Read a failure out of one stream event, or nothing when the event is not one. */
+export function failureFromEvent(event: { type: string; data?: unknown }): TurnFailure | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (event.type === "action.result") {
+    const result = (data.result ?? {}) as Record<string, unknown>;
+    const failed = data.status === "failed" || data.status === "rejected" || result.isError === true;
+    if (!failed) return null;
+    const error = (data.error ?? {}) as Record<string, unknown>;
+    const output = typeof result.output === "string" ? result.output : result.output !== undefined ? JSON.stringify(result.output) : "";
+    return {
+      kind: "tool",
+      toolName: String(result.toolName ?? "a tool"),
+      message: clip(error.message ?? output ?? data.status),
+    };
+  }
+  if (event.type === "step.failed" || event.type === "turn.failed") {
+    return { kind: "model", code: String(data.code ?? event.type), message: clip(data.message) };
+  }
+  return null;
+}
+
+/**
+ * What to post when a turn produced no text.
+ *
+ * Names every distinct failure the stream reported, verbatim; a genuinely
+ * empty completion keeps the old sentence. Nothing here is invented: every
+ * tool name and message comes from an event the bridge saw.
+ */
+export function silentTurnReply(failures: readonly TurnFailure[]): string {
+  if (failures.length === 0) return "I didn't get an answer back for that one — ask me again and I'll retry.";
+  const tools = new Map<string, { count: number; message: string }>();
+  const models: string[] = [];
+  for (const f of failures) {
+    if (f.kind === "tool") {
+      const key = `${f.toolName}\u0000${f.message}`;
+      const seen = tools.get(key);
+      if (seen) seen.count += 1;
+      else tools.set(key, { count: 1, message: f.message });
+    } else {
+      models.push(`${f.code}: ${f.message}`);
+    }
+  }
+  const lines: string[] = [];
+  for (const [key, { count, message }] of tools) {
+    const toolName = key.split("\u0000")[0];
+    const times = count === 1 ? "" : ` ${count} times`;
+    lines.push(`I tried \`${toolName}\`${times} and it answered "${message}".`);
+  }
+  if (models.length) lines.push(`The model call failed (${[...new Set(models)].join("; ")}).`);
+  lines.push("So I have nothing to give you yet. Say the word and I'll try another way.");
+  return lines.join(" ");
+}
+
+/** The bridge's log line for a turn with no text: which of the three cases it was. */
+export function describeSilentTurn(failures: readonly TurnFailure[]): string {
+  const tools = failures.filter((f) => f.kind === "tool").length;
+  const models = failures.filter((f) => f.kind === "model") as Extract<TurnFailure, { kind: "model" }>[];
+  if (models.length) return `no text: model error (${models.map((m) => m.code).join(", ")})`;
+  if (tools) return `no text: tool failures (${tools})`;
+  return "no text: empty completion";
 }
 
 /** Convert one inbound Buzz message into an eve-compatible turn. */
@@ -156,12 +237,15 @@ async function collectResponse(
   let message = "";
   let status: MessageResult["status"] = "completed";
   const inputRequests: InputRequest[] = [];
+  const failures: TurnFailure[] = [];
 
   watchdog.arm(phase);
   try {
     try {
       for await (const event of response) {
         watchdog.arm(phase);
+        const failure = failureFromEvent(event as { type: string; data?: unknown });
+        if (failure) failures.push(failure);
         if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
           message = event.data.message ?? "";
         } else if (event.type === "input.requested") {
@@ -185,6 +269,7 @@ async function collectResponse(
       inputRequests,
       sessionId: response.sessionId,
       streamIndex: streamIndex(),
+      failures,
     };
   } finally {
     watchdog.dispose();

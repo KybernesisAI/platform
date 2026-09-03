@@ -7,7 +7,9 @@ import {
   answerTurn,
   composeMessage,
   DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  describeSilentTurn,
   rejectedTurnReply,
+  silentTurnReply,
   validateAgentSilenceTimeoutMs,
 } from "./turn.js";
 import {
@@ -440,12 +442,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         }
 
         if (!result.message) {
-          log(`no text for ${channel.slice(0, 8)} — telling them rather than going quiet`);
-          relay.reply(
-            channel,
-            "I didn't get an answer back for that one — ask me again and I'll retry.",
-            event,
-          );
+          // Say what the stream said: a failed tool by name and error, a
+          // failed model call by code, or, only when there is truly nothing,
+          // the plain sentence. Three faults used to read as one (KYB-529).
+          log(`${describeSilentTurn(result.failures)} for ${channel.slice(0, 8)} — telling them rather than going quiet`);
+          relay.reply(channel, silentTurnReply(result.failures), event);
           return;
         }
         relay.reply(channel, result.message, event);
