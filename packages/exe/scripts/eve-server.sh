@@ -145,6 +145,23 @@ if [ "$still" != "0" ]; then
   sleep 4
 fi
 
+# ── Orphaned sandbox template containers ───────────────────────────────────
+# A start killed while a Docker sandbox template was building leaves an
+# eve-sbx-tpl-* container behind whose only process is `sleep 2147483647`.
+# While it exists, every later `eve start` blocks forever at "initializing N
+# sandbox templates" with no children, no docker CLI, no sockets and nothing
+# in any log to say why (KYB-531). Clear it before starting; a container with
+# a real process inside is a build in progress and is left alone.
+if command -v docker >/dev/null 2>&1; then
+  for c in $(docker ps --filter name=eve-sbx-tpl- --format '{{.Names}}' 2>/dev/null); do
+    live=$(docker top "$c" 2>/dev/null | tail -n +2 | awk '{print $8}' | grep -vc '^sleep$')
+    if [ "${live:-0}" = "0" ]; then
+      echo "removing orphaned sandbox template container $c (only sleep inside; it would block every start)"
+      docker rm -f "$c" >/dev/null 2>&1 || true
+    fi
+  done
+fi
+
 set -a
 [ -f .env.local ] && . ./.env.local
 set +a
@@ -154,9 +171,40 @@ set +a
 # restart blocks the full timeout and then fails — the lock meant to serialize
 # restarts becomes the thing that prevents them.
 setsid env PORT="$PORT" npx eve start --host 0.0.0.0 < /dev/null > "$LOG" 2>&1 9>&- &
-sleep 45
 
-pid=$(pgrep -f 'server/index.mjs' | head -1)
+# ── Wait for the server, on the host's clock, not a fixed one ───────────────
+# A cold sandbox template build (apt-get, pnpm, playwright with its browsers)
+# runs inside `eve start` before the server child exists, and takes minutes.
+# A verdict after a fixed 45 seconds called that a failure, and the kill that
+# followed left the orphan cleared above (KYB-531). So: while a template
+# container has a live process, keep waiting (up to 30 minutes) and say so;
+# with nothing building, a start that has produced no server in 60 seconds
+# has failed.
+template_building() {
+  command -v docker >/dev/null 2>&1 || return 1
+  for c in $(docker ps --filter name=eve-sbx-tpl- --format '{{.Names}}' 2>/dev/null); do
+    live=$(docker top "$c" 2>/dev/null | tail -n +2 | awk '{print $8}' | grep -vc '^sleep$')
+    [ "${live:-0}" != "0" ] && return 0
+  done
+  return 1
+}
+waited=0
+pid=""
+while [ -z "$pid" ] && [ "$waited" -lt 1800 ]; do
+  sleep 5
+  waited=$((waited + 5))
+  pid=$(pgrep -f 'server/index.mjs' | head -1)
+  [ -n "$pid" ] && break
+  if ! pgrep -f 'eve start' >/dev/null 2>&1; then
+    break
+  fi
+  if template_building; then
+    [ $((waited % 60)) = 0 ] && echo "still building the sandbox template (${waited}s); the server binds its port when it finishes"
+  elif [ "$waited" -ge 60 ]; then
+    break
+  fi
+done
+
 if [ -z "$pid" ]; then
   echo "FAILED to start. Last log lines:"
   tail -15 "$LOG"
