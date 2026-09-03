@@ -134,3 +134,7 @@ only inside a Docker image tag.
 Selecting between providers at boot — one env var, one stable context window per
 process — is the pattern to copy; switching per turn would change the context
 window under a running session.
+
+### Output cap
+
+Every call through `claudeSubscription()` carries `maxOutputTokens: 16000` unless the call sets its own. Without it the provider asks for the model's maximum (`max_tokens: 128000` on claude-opus-5) on every request, and because a subscription is a shared per-minute output budget, the subscription agent is the first thing to fail under load. Change it per agent with `maxOutputTokens: 32000`, or disable it with `maxOutputTokens: false`. The constant is exported as `CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS`.
