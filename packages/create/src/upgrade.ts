@@ -495,7 +495,10 @@ function dependencyEntries(pkg: Record<string, unknown>): Array<{ name: string; 
 function rewriteManifest(cwd: string, pkg: Record<string, unknown>, targets: UpgradeTarget[]): void {
   for (const target of targets) {
     const section = pkg[target.section] as Record<string, string>;
-    section[target.name] = `^${target.targetVersion}`;
+    // eve is pinned exactly: the pin IS the certification. A caret let a
+    // clean install resolve eve@0.49.1 against a certified 0.49.0 (blind
+    // latest, the one thing kyb upgrade exists to prevent).
+    section[target.name] = target.name === "eve" ? target.targetVersion : `^${target.targetVersion}`;
   }
   writeFileSync(join(cwd, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
 }
@@ -503,7 +506,7 @@ function rewriteManifest(cwd: string, pkg: Record<string, unknown>, targets: Upg
 function recoveryGuidance(targets: UpgradeTarget[], bridgeUnit?: string): void {
   console.log(
     `\n${yellow("The dependency tree was not verified. Complete the clean install before using it:")}\n` +
-      `  1. Ensure every root @kybernesis/* and eve range in package.json is the resolved ^version.\n` +
+      `  1. Ensure every root @kybernesis/* range in package.json is the resolved ^version, and eve is pinned exactly to ${EVE_VERSION}.\n` +
       `  2. ${dim("rm -rf node_modules")}\n` +
       `  3. ${dim("rm -f package-lock.json")}\n` +
       `  4. ${dim("npm install")}\n` +
@@ -693,8 +696,15 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     }
   }
 
-  const installArgs = cleanInstall ? ["install"] : ["install", ...changed];
-  const installed = commandResult("npm", installArgs, cwd);
+  // Outside a clean install, eve goes in with --save-exact for the same
+  // reason rewriteManifest pins it: npm would save a caret by default.
+  const eveChange = changed.find((spec) => spec.startsWith("eve@"));
+  const others = changed.filter((spec) => spec !== eveChange);
+  const installArgs = cleanInstall ? ["install"] : ["install", ...others];
+  let installed = cleanInstall || others.length > 0 ? commandResult("npm", installArgs, cwd) : { status: 0, stdout: "", stderr: "" };
+  if (installed.status === 0 && !cleanInstall && eveChange) {
+    installed = commandResult("npm", ["install", "--save-exact", eveChange], cwd);
+  }
   if (installed.status !== 0) {
     const output = `${installed.stdout}\n${installed.stderr}`;
     if (/ERESOLVE/i.test(output)) {

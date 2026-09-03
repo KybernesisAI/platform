@@ -165,7 +165,8 @@ for (const flag of ["--yes", "-y"]) {
       const pkg = JSON.parse(readFileSync(join(fix.dir, "package.json"), "utf8"));
       assert.equal(pkg.dependencies["@kybernesis/buzz"], "^0.9.0");
       assert.equal(pkg.dependencies["@kybernesis/evals"], "^0.6.2");
-      assert.equal(pkg.dependencies.eve, "^0.49.0");
+      // Exact on purpose: the pin is the certification (a caret pulled 0.49.1).
+      assert.equal(pkg.dependencies.eve, "0.49.0");
       assert.equal(pkg.devDependencies["@kybernesis/enterprise"], "^0.8.0");
       assert.equal(pkg.dependencies.zod, "4.4.3");
       assert.equal(pkg.devDependencies.typescript, "7.0.2");
@@ -317,6 +318,15 @@ test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tr
     assert.equal(tree.status, 0, tree.stdout + tree.stderr);
     assert.match(tree.stdout, /eve@0\.49\.0/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    // A real eve install leaves read-only directories behind (the baked
+    // sandbox tree); rmSync alone hit EACCES on CI and failed a test whose
+    // assertions had passed. Reopen the tree first, and never let a leaked
+    // temp dir be the verdict.
+    spawnSync("chmod", ["-R", "u+rwX", dir]);
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch (error) {
+      console.warn(`could not remove ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 });
