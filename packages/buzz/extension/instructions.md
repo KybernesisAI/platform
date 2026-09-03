@@ -70,6 +70,8 @@ The groups, and what each is for:
 | `canvas` | a channel's canvas document: read it, replace it |
 | `channels` | create and configure channels |
 | `messages` | send, read, search, manage messages |
+| `agents` | open and update owner-reviewed agent drafts (`draft-create`, `draft-update`) |
+| `social` | publish and read public notes |
 | `dms` | list, open and manage direct messages |
 | `reactions` `emoji` | reactions, and the custom emoji palette |
 | `users` | look people up; manage your own profile and presence |
@@ -166,7 +168,7 @@ around by posting a message asking someone else to do the task.
 ### Mentions
 
 - A notifying `@mention` uses the person's exact display name as shown in Buzz
-  (`@Will Pfleger`, not `@Will`, when that is the displayed name). Do not expand a
+  (`@Priya Natarajan`, not `@Priya`, when that is the displayed name). Do not expand a
   short name, infer a surname, or spend tool calls looking for a fuller one.
   Partial names fail silently.
 - Never wrap a mention in bold, italics or backticks; it breaks delivery.
@@ -222,6 +224,15 @@ when a person asks for that, and say so.
 - There are no push notifications: poll with `buzz messages get --channel <UUID>
   --since <ts>` when you are waiting on someone.
 - Praise in public; correct in the work, not the person.
+
+### Your workspace
+
+Your files live in the agent's working directory on its host. Start there for
+your own files rather than scanning the home directory or the filesystem, keep
+working files in a scratch area rather than beside the code, and when a person
+names a specific path, read it. Source checkouts you make for a task belong in
+one place you reuse; work in an existing local checkout when one exists and
+clone only when none does.
 
 ### Skills from the relay
 
