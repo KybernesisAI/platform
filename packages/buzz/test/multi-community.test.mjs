@@ -44,3 +44,16 @@ test("blank entries in a list are ignored rather than opened", () => {
 test("no relay at all is refused, rather than starting a bridge to nowhere", () => {
   assert.throws(() => buzzBridge({ ...OPTIONS, relay: [] }), /relay is required/);
 });
+
+test("agent silence timeout must be finite and positive", () => {
+  assert.throws(
+    () => buzzBridge({ ...OPTIONS, relay: "wss://one.example.com", agentSilenceTimeoutMs: 0 }),
+    /finite positive/,
+  );
+  const bridge = buzzBridge({
+    ...OPTIONS,
+    relay: "wss://one.example.com",
+    agentSilenceTimeoutMs: 45_000,
+  });
+  assert.equal(bridge.relays.length, 1);
+});

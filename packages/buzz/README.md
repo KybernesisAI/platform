@@ -61,6 +61,7 @@ sessions are keyed by channel.
 | `BUZZ_AGENT_URL` | Where the agent listens (default `http://127.0.0.1:8000`) |
 | `BUZZ_KEYFILE` | The agent's key (default `~/.kybernesis/buzz-agent.json`) |
 | `BUZZ_SESSIONS_FILE` | Channel-to-session continuity store (default beside the key file; an existing legacy `.buzz-sessions.json` is reused) |
+| `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence while opening an agent request or waiting between complete events (default `300000`, five minutes; not a total turn-duration limit) |
 | `KYBERNESIS_ISSUER` | The control plane |
 | `KYBERNESIS_AGENT_CREDENTIAL` | This agent's credential |
 
@@ -78,6 +79,7 @@ const bridge = buzzBridge({
   keyFile: "/etc/agent/buzz.json",
   issuer: process.env.KYBERNESIS_ISSUER!,
   credential: process.env.KYBERNESIS_AGENT_CREDENTIAL!,
+  agentSilenceTimeoutMs: 5 * 60_000,
 });
 
 console.log(`invite ${bridge.npub}`);

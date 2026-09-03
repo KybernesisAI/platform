@@ -151,6 +151,9 @@ function run(): void {
     issuer: env("KYBERNESIS_ISSUER", "https://agent.kybernesis.ai"),
     credential: env("KYBERNESIS_AGENT_CREDENTIAL"),
     ...(process.env.BUZZ_POLL_MS ? { pollMs: Number(process.env.BUZZ_POLL_MS) } : {}),
+    ...(process.env.BUZZ_AGENT_SILENCE_TIMEOUT_MS
+      ? { agentSilenceTimeoutMs: Number(process.env.BUZZ_AGENT_SILENCE_TIMEOUT_MS) }
+      : {}),
   });
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -317,6 +320,7 @@ else if (command === "id") {
     BUZZ_AGENT_URL                 where the agent listens (default http://127.0.0.1:8000)
     BUZZ_KEYFILE                   this agent's key (default ~/.kybernesis/buzz-agent.json)
     BUZZ_SESSIONS_FILE             channel-to-session continuity store
+    BUZZ_AGENT_SILENCE_TIMEOUT_MS   maximum agent silence (default 300000ms)
     KYBERNESIS_ISSUER              the control plane
     KYBERNESIS_AGENT_CREDENTIAL    this agent's credential
 `);
