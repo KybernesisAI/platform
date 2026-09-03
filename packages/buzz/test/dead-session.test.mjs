@@ -54,7 +54,10 @@ test("a 409 'no longer active' on send replaces the session and the reply comes 
           send: async () => { throw new ClientError(409, JSON.stringify({ code: "session_not_active", error: "The session is no longer active.", ok: false })); },
         };
       },
-      async create() { created += 1; return completed("session-new"); },
+      async create() {
+        created += 1;
+        return { response: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
+      },
     },
   };
   const result = await answerTurn(client, store, "channel", "hey", "relay", (m) => logs.push(m));
