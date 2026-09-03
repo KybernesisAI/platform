@@ -346,9 +346,9 @@ export async function answerTurn(
     } catch (error) {
       // Transport uncertainty, request rejection, and our own timeout do not
       // prove the durable server conversation is stale. Preserve its mapping.
-      if (!(error instanceof ClientError) || error.status !== 404) throw error;
+      if (!isSessionGone(error)) throw error;
 
-      log(`session for ${channel.slice(0, 8)} could not continue (${error.message}); starting a new one`);
+      log(`session for ${channel.slice(0, 8)} could not continue (${(error as ClientError).message}); starting a new one`);
       sessions.delete(community, channel);
     }
   }
@@ -390,6 +390,29 @@ export async function answerTurn(
 }
 
 /** What the room is told when eve refuses the turn itself. */
+/**
+ * The two answers from eve that mean the stored session cannot carry another
+ * turn: an unknown session id (404), and a session that ended (409 with
+ * `session_not_active`, "The session is no longer active."). A session ends
+ * when one of its turns fails hard, for instance a model call that 404s at
+ * the gateway; the channel must then start a fresh one.
+ *
+ * Only these replace the mapping. A 400 about the message, a timeout, or a
+ * transport failure says nothing about whether the session is alive, and
+ * discarding it on those is how conversations were lost (KYB-502). The 409
+ * was missed when the timeout work narrowed the rule to 404 alone, and a
+ * channel then failed every message with "The session is no longer active."
+ * until someone edited the store by hand.
+ */
+export function isSessionGone(error: unknown): boolean {
+  if (!(error instanceof ClientError)) return false;
+  if (error.status === 404) return true;
+  return (
+    error.status === 409 &&
+    (error.code === "session_not_active" || /no longer active/i.test(String(error.message ?? "")))
+  );
+}
+
 export function rejectedTurnReply(error: unknown): string | null {
   if (!(error instanceof ClientError) || error.status !== 400) return null;
   const detail = String(error.message ?? "").split("\n")[0].trim().slice(0, 160);
