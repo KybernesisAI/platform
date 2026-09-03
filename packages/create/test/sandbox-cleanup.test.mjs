@@ -25,8 +25,8 @@ test("exe scaffolds include root and every requested local subagent hook", () =>
 });
 
 test("the exe engineer builder gets the hook without adding exe to Vercel", () => {
-  const exe = engineerPlan("exe", "model");
-  const vercel = engineerPlan("vercel", "model");
+  const exe = engineerPlan("exe", { reach: "default", model: "model" });
+  const vercel = engineerPlan("vercel", { reach: "default", model: "model" });
   assert.equal(exe.files.find((file) => file.path === "agent/subagents/builder/hooks/sandbox-cleanup.ts")?.content, managed);
   assert.equal(vercel.files.some((file) => file.path.includes("sandbox-cleanup")), false);
   assert.equal(vercel.deps.includes("@kybernesis/exe"), false);

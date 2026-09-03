@@ -74,8 +74,8 @@ test("doctor reports numeric, uncapped, inherited and unresolved ceilings distin
 });
 
 test("new exe agents author an explicit uncapped policy while metered hosts stay unchanged", () => {
-  const exe = hostAgentTs("exe", "openai/gpt-5.4");
-  const vercel = hostAgentTs("vercel", "openai/gpt-5.4");
+  const exe = hostAgentTs("exe", { reach: "default", model: "openai/gpt-5.4" });
+  const vercel = hostAgentTs("vercel", { reach: "default", model: "openai/gpt-5.4" });
   assert.match(exe, /limits: \{ maxInputTokensPerSession: false \}/);
   assert.match(exe, /long-lived self-hosted process/);
   assert.doesNotMatch(vercel, /maxInputTokensPerSession/);

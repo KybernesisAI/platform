@@ -30,8 +30,45 @@ Scaffolds the full Kybernesis stack:
    the Slack connector browser flow, control-plane registration + grants,
    eval → deploy → the revoke demo)
 
-Non-interactive (CI / agents): pipe stdin from `/dev/null` and pass the name —
-all prompts take defaults (departments: finance, marketing, engineering).
+Non-interactive (CI / agents): pass the name and `--yes`; omitted options use
+the documented defaults.
+
+### Model reach
+
+The default route is unchanged: Vercel scaffolds author an AI Gateway model id,
+and exe scaffolds use `exeModel()` plus `EXE_MODEL` for the VM's attached LLM
+integration.
+
+To bill model calls to a Claude subscription instead of the exe gateway:
+
+```bash
+kyb init acme-atlas --host=exe --model-reach=claude-sub --yes
+# Factory/noninteractive equivalent:
+KYB_MODEL_REACH=claude-sub kyb init acme-atlas --host=exe --yes
+```
+
+An explicit `--model-reach` takes precedence over `KYB_MODEL_REACH`. The
+`claude-sub` reach is exe-only because its OAuth proxy must run on the same host.
+It currently supports the bare Anthropic id `claude-opus-5` only (the gateway
+form `anthropic/claude-opus-5` is normalized); other model ids are rejected
+because `@kybernesis/exe` certifies its exported context-window constant for that
+model only.
+
+The generated root and all generated model-bearing subagents use
+`createAnthropic` from `@ai-sdk/anthropic` with `claudeSubscription()` and
+`CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW` from `@kybernesis/exe`. This is Eve 0.49's
+documented provider-authored AI SDK `LanguageModel` shape (`node_modules/eve/docs/agent-config.md`),
+not a gateway string. Subscription scaffolds do not write or read `EXE_MODEL`.
+On the host, stand up and authenticate the loopback-only proxy:
+
+```bash
+bash scripts/claude-subscription.sh up
+bash scripts/claude-subscription.sh login
+bash scripts/claude-subscription.sh status
+```
+
+The concrete provider and proxy contract is documented in
+`packages/exe/src/claude.ts` and `packages/exe/README.md`.
 
 ## `kyb doctor`
 
@@ -42,6 +79,7 @@ Run inside an agent project. Checks, with pass/warn/fail per line:
   (200 / wrong-key 403 / missing-workspace 404, each with the fix)
 - control-plane issuer JWKS reachable; `KYBERNESIS_AGENT` set
 - Slack connector UID present
+- model reach (`claude-sub`, `exe`, gateway, direct provider, or unresolved)
 - `eve info` discovery clean
 - port 2000 free (a running dev server makes `eve eval` exit early)
 

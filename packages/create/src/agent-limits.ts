@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { capture } from "./util.js";
+import type { CompiledModelRouting } from "./model-reach.js";
 
 /** Eve 0.49's root default when the compiled config omits the policy. */
 export const CERTIFIED_INHERITED_MAX_INPUT_TOKENS_PER_SESSION = 40_000_000;
@@ -14,6 +15,7 @@ export interface EveInfoInspection {
   diagnostics: { errors: number; warnings: number } | null;
   status: string | null;
   limit: AgentInputLimit;
+  modelRouting: CompiledModelRouting;
 }
 
 interface EveInfoJson {
@@ -44,7 +46,12 @@ export function parseEveInfoInspection(
     ? info.artifacts.compiledManifest
     : null;
   if (!manifestPath) {
-    return { diagnostics, status, limit: { kind: "unresolved", reason: "compiled manifest path was unavailable" } };
+    return {
+      diagnostics,
+      status,
+      limit: { kind: "unresolved", reason: "compiled manifest path was unavailable" },
+      modelRouting: { kind: "unresolved", reason: "compiled manifest path was unavailable" },
+    };
   }
 
   let manifest: unknown;
@@ -55,32 +62,40 @@ export function parseEveInfoInspection(
       diagnostics,
       status,
       limit: { kind: "unresolved", reason: `compiled manifest could not be read: ${(error as Error).message}` },
+      modelRouting: { kind: "unresolved", reason: `compiled manifest could not be read: ${(error as Error).message}` },
     };
   }
 
   if (!isRecord(manifest) || !isRecord(manifest.config)) {
-    return { diagnostics, status, limit: { kind: "unresolved", reason: "compiled root config was unavailable" } };
+    return {
+      diagnostics,
+      status,
+      limit: { kind: "unresolved", reason: "compiled root config was unavailable" },
+      modelRouting: { kind: "unresolved", reason: "compiled root config was unavailable" },
+    };
   }
+  const modelRouting = parseModelRouting(manifest.config);
   const limits = manifest.config.limits;
   if (limits === undefined) {
-    return inherited(diagnostics, status);
+    return inherited(diagnostics, status, modelRouting);
   }
   if (!isRecord(limits)) {
-    return { diagnostics, status, limit: { kind: "unresolved", reason: "compiled root limits were malformed" } };
+    return { diagnostics, status, limit: { kind: "unresolved", reason: "compiled root limits were malformed" }, modelRouting };
   }
   if (!Object.hasOwn(limits, "maxInputTokensPerSession")) {
-    return inherited(diagnostics, status);
+    return inherited(diagnostics, status, modelRouting);
   }
 
   const value = limits.maxInputTokensPerSession;
-  if (value === false) return { diagnostics, status, limit: { kind: "explicit-uncapped" } };
+  if (value === false) return { diagnostics, status, limit: { kind: "explicit-uncapped" }, modelRouting };
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return { diagnostics, status, limit: { kind: "explicit-numeric", value } };
+    return { diagnostics, status, limit: { kind: "explicit-numeric", value }, modelRouting };
   }
   return {
     diagnostics,
     status,
     limit: { kind: "unresolved", reason: "compiled maxInputTokensPerSession was neither a positive number nor false" },
+    modelRouting,
   };
 }
 
@@ -103,16 +118,42 @@ function parseDiagnostics(value: unknown): EveInfoInspection["diagnostics"] {
 function inherited(
   diagnostics: EveInfoInspection["diagnostics"],
   status: string | null,
+  modelRouting: CompiledModelRouting,
 ): EveInfoInspection {
   return {
     diagnostics,
     status,
     limit: { kind: "inherited", value: CERTIFIED_INHERITED_MAX_INPUT_TOKENS_PER_SESSION },
+    modelRouting,
   };
 }
 
+function parseModelRouting(config: Record<string, unknown>): CompiledModelRouting {
+  if (config.dynamicModel !== undefined) {
+    return { kind: "unresolved", reason: "the root uses dynamic model selection" };
+  }
+  const model = config.model;
+  if (!isRecord(model) || !isRecord(model.routing)) {
+    return { kind: "unresolved", reason: "compiled model routing was unavailable" };
+  }
+  const routing = model.routing;
+  if (routing.kind === "gateway") return { kind: "gateway" };
+  if (routing.kind === "external") {
+    return {
+      kind: "external",
+      ...(typeof routing.provider === "string" ? { provider: routing.provider } : {}),
+    };
+  }
+  return { kind: "unresolved", reason: "compiled model routing was unrecognized" };
+}
+
 function unresolved(reason: string): EveInfoInspection {
-  return { diagnostics: null, status: null, limit: { kind: "unresolved", reason } };
+  return {
+    diagnostics: null,
+    status: null,
+    limit: { kind: "unresolved", reason },
+    modelRouting: { kind: "unresolved", reason },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

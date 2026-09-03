@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
+import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -47,6 +48,28 @@ export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Ch
         : `Docker sandbox template unavailable: ${issue.subject}`,
     detail: issue.detail,
   }));
+}
+
+export function modelReachDoctorCheck(
+  authoredSource: string | null,
+  compiledRouting: CompiledModelRouting,
+): Check {
+  const reach = classifyModelReach(authoredSource, compiledRouting);
+  switch (reach.kind) {
+    case "claude-sub":
+      return { verdict: "pass", label: "Model reach: claude-sub (Claude subscription)" };
+    case "exe":
+      return { verdict: "pass", label: "Model reach: exe (host LLM integration)" };
+    case "gateway":
+      return { verdict: "pass", label: "Model reach: gateway" };
+    case "direct-provider":
+      return {
+        verdict: "pass",
+        label: `Model reach: direct-provider${reach.provider ? ` (${reach.provider})` : ""}`,
+      };
+    case "unresolved":
+      return { verdict: "warn", label: "Model reach: unresolved", detail: reach.reason };
+  }
 }
 
 export function agentInputLimitDoctorCheck(limit: AgentInputLimit): Check {
@@ -575,6 +598,8 @@ export async function doctor(): Promise<void> {
    * `env` here is the same merged view every other check reads: .env.local
    * underneath, the real environment on top.
    */
+  const rootAgentPath = join(cwd, "agent/agent.ts");
+  const rootAgentSource = existsSync(rootAgentPath) ? readFileSync(rootAgentPath, "utf8") : null;
   const info = inspectEveAgent(cwd, env);
   if (info === null) {
     add(
@@ -582,11 +607,18 @@ export async function doctor(): Promise<void> {
       "eve info failed",
       "run: set -a && . ./.env.local && set +a && npx eve info --json — the agent's own error is in that output",
     );
+    const reachCheck = modelReachDoctorCheck(rootAgentSource, {
+      kind: "unresolved",
+      reason: "eve info failed before compiled model routing could be inspected",
+    });
+    add(reachCheck.verdict, reachCheck.label, reachCheck.detail);
     add("warn", "Eve max input tokens/session: unresolved", "eve info failed before the compiled root policy could be inspected");
   } else {
     const diag = info.diagnostics;
     if (diag && diag.errors === 0) add("pass", `eve discovery clean (${diag.warnings} warnings)`);
     else add("fail", `eve discovery: ${diag ? `${diag.errors} errors` : "unparsed"}`, "npx eve info --json");
+    const reachCheck = modelReachDoctorCheck(rootAgentSource, info.modelRouting);
+    add(reachCheck.verdict, reachCheck.label, reachCheck.detail);
     const limitCheck = agentInputLimitDoctorCheck(info.limit);
     add(limitCheck.verdict, limitCheck.label, limitCheck.detail);
   }

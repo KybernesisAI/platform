@@ -38,6 +38,7 @@ import { configureArcana } from "./arcana.js";
 import { upsertEnv } from "./envfile.js";
 import { systemdRestartCommand } from "./systemd.js";
 import { sandboxCleanupScaffoldFiles } from "./sandbox-cleanup.js";
+import { MODEL_REACH_ENV, resolveModelScaffold, type ModelScaffoldConfig } from "./model-reach.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -51,7 +52,6 @@ const CORE_ITEMS = ["enterprise", "arcana", "evals"] as const;
 const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
 const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
 export interface InitOptions {
   engineer?: boolean;
@@ -80,6 +80,8 @@ export interface InitOptions {
    * actually non-interactive.
    */
   model?: string;
+  /** One-shot route selector. `claude-sub` uses the host-local Claude OAuth proxy. */
+  modelReach?: string;
   /** Department subagents. Default NONE. */
   subagents?: string[];
   /** Skip prompts and take the flags/defaults as given. */
@@ -136,9 +138,20 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     process.exit(1);
   }
 
-  const plan = channelPlan(channel, name, host);
+  let model: ModelScaffoldConfig;
+  try {
+    model = resolveModelScaffold({
+      host,
+      cliReach: options.modelReach,
+      envReach: process.env[MODEL_REACH_ENV],
+      model: options.model,
+    });
+  } catch (error) {
+    console.error(red((error as Error).message));
+    process.exit(1);
+  }
 
-  const model = options.model ?? DEFAULT_MODEL;
+  const plan = channelPlan(channel, name, host);
 
   console.log(bold(`\n1/6  Scaffolding eve agent (eve@${EVE_VERSION}) …`));
   // eve's scaffold ends by opening its interactive model picker
@@ -179,11 +192,17 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir });
   }
 
-  // @ai-sdk/anthropic is for the EVAL JUDGE, not the agent: an agent judged
-  // by the model it runs on is a weak test.
+  // Anthropic is always the exe eval judge and is also the claude-sub agent
+  // provider. OpenAI is needed only by the ordinary exeModel gateway route.
   const extraDeps = [
     ...plan.deps,
-    ...(host === "exe" ? ["@kybernesis/exe", "@ai-sdk/openai", "@ai-sdk/anthropic"] : []),
+    ...(host === "exe"
+      ? [
+          "@kybernesis/exe",
+          ...(model.reach === "default" ? ["@ai-sdk/openai"] : []),
+          "@ai-sdk/anthropic",
+        ]
+      : []),
   ];
   if (extraDeps.length) {
     console.log(bold(`\n2b   Installing for ${channel}/${host}: ${extraDeps.join(", ")} …`));
@@ -284,7 +303,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
      * with the model. Empty fails honestly; the host lists its own with
      * curl https://llm.int.exe.xyz/models.json
      */
-    known.EXE_MODEL = "";
+    if (model.reach === "default") known.EXE_MODEL = "";
 
     /**
      * Longer than any turn, because the alternative is answering twice.
@@ -396,7 +415,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     for (const dept of depts) {
       const base = join(dir, "agent/subagents", dept);
       mkdirSync(join(base, "connections"), { recursive: true });
-      writeFileSync(join(base, "agent.ts"), subagentAgentTs(dept));
+      writeFileSync(join(base, "agent.ts"), subagentAgentTs(dept, host, model));
       writeFileSync(join(base, "instructions.md"), subagentInstructionsMd(dept));
       writeFileSync(join(base, "connections/arcana.ts"), subagentArcanaTs(dept));
       if (existsSync(skillsSource)) {
@@ -443,6 +462,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     "self-testing (evals)",
     channel === "none" ? null : `${channel} channel`,
     host === "exe" ? "exe.dev host" : null,
+    model.reach === "claude-sub" ? "Claude subscription reach" : null,
     studio ? "KYBER Studio (local execution + management routes)" : null,
     engineer ? "engineer subagent (workshop + vision loop)" : null,
     depts.length ? `${depts.length} dept subagent(s)` : null,
@@ -450,7 +470,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
 
   const steps = [
     `Arcana: create workspaces (${name}-company, ${name}-eval${depts.map((d) => `, ${name}-${d}`).join("")}) + scoped kb_ keys; fill .env.local from .env.example`,
-    ...hostSteps(host, name),
+    ...hostSteps(host, name, model),
     ...plan.steps,
     ...(engPlan?.steps ?? []),
     `Control plane: register agent "${name}" at ${issuer}/agents + grant the pilot cohort`,

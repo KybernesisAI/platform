@@ -1,5 +1,7 @@
 /** File templates written by `kyb init`. Kept in sync with the proven Kyber patterns. */
 
+import type { ModelScaffoldConfig } from "./model-reach.js";
+
 export const DEPT_DESCRIPTIONS: Record<string, string> = {
   finance:
     "Finance specialist: financials, budgets, spend, revenue, invoices, runway, and financial reporting. Keeps the finance team's own memory workspace. Delegate any finance-shaped task, question, or reporting request here.",
@@ -42,14 +44,14 @@ lists.
 ${delegation}`;
 }
 
-export function subagentAgentTs(dept: string): string {
+export function subagentAgentTs(dept: string, host: HostKind, model: ModelScaffoldConfig): string {
+  const rendered = agentModelTemplate(host, model);
   return `import { defineAgent } from "eve";
-
+${rendered.imports}
 export default defineAgent({
   description:
     ${JSON.stringify(deptDescription(dept))},
-  model: "anthropic/claude-sonnet-5",
-});
+${rendered.fields}});
 `;
 }
 
@@ -177,13 +179,18 @@ ${depts.length ? `  routing: [\n${routing}\n  ],\n` : ""}});
  * all by design: guessing a host would hand a user a working link into another
  * agent's machine.
  */
-function exeEnvBlock(name: string, model: string): string {
-  return `# Self-hosted host + model (@kybernesis/exe)
-# EXE_MODEL must match the LLM integration you attached to the VM. A ChatGPT
+function exeEnvBlock(name: string, model: ModelScaffoldConfig): string {
+  const gatewayModel = model.reach === "default"
+    ? `# EXE_MODEL must match the LLM integration you attached to the VM. A ChatGPT
 # subscription serves OpenAI models; the code default will fail against one.
-# Set it explicitly rather than relying on ${model}.
-EXE_MODEL="${model}"
-# Preview URLs are built from this. There is no default on purpose.
+# Set it explicitly rather than relying on ${model.model}.
+EXE_MODEL="${model.model}"
+`
+    : `# Model reach: Claude subscription through the loopback OAuth proxy.
+# EXE_MODEL is intentionally absent: this agent never calls the exe LLM gateway.
+`;
+  return `# Self-hosted host + model (@kybernesis/exe)
+${gatewayModel}# Preview URLs are built from this. There is no default on purpose.
 EXE_VM_NAME="${name}"
 
 `;
@@ -195,7 +202,7 @@ export function envExample(
   issuer: string,
   channelEnv: string[] = [],
   host: "vercel" | "exe" = "vercel",
-  model = "",
+  model: ModelScaffoldConfig = { reach: "default", model: "" },
 ): string {
   const deptVars = depts
     .map((d) => {
@@ -409,32 +416,62 @@ export default discordChannel({ botToken: process.env.DISCORD_BOT_TOKEN! });
 
 export type HostKind = "vercel" | "exe";
 
-export function hostAgentTs(host: HostKind, model: string): string {
-  if (host === "exe") {
-    return `import { defineAgent } from "eve";
-import { createOpenAI } from "@ai-sdk/openai";
-import { exeModel } from "@kybernesis/exe";
+interface AgentModelTemplate {
+  imports: string;
+  fields: string;
+}
 
-// Model served by the exe.dev LLM integration — no provider key on the host.
-// exe injects the credential (managed gateway, your API key, or a connected
-// ChatGPT subscription) server-side.
-export default defineAgent({
-  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
-  modelContextWindowTokens: 200_000,
-  // This long-lived self-hosted process has no metered platform session ceiling.
-  limits: { maxInputTokensPerSession: false },
-});
-`;
+/** One renderer for every model-bearing generated agent, root or subagent. */
+function agentModelTemplate(host: HostKind, config: ModelScaffoldConfig): AgentModelTemplate {
+  if (config.reach === "claude-sub") {
+    if (host !== "exe") throw new Error("claude-sub model templates require an exe host");
+    return {
+      imports:
+        `import { createAnthropic } from "@ai-sdk/anthropic";\n` +
+        `import { CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW, claudeSubscription } from "@kybernesis/exe";\n\n`,
+      fields:
+        `  model: claudeSubscription({ model: ${JSON.stringify(config.model)}, createAnthropic }),\n` +
+        `  modelContextWindowTokens: CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW,\n`,
+    };
   }
-  return `import { defineAgent } from "eve";
+  if (host === "exe") {
+    return {
+      imports:
+        `import { createOpenAI } from "@ai-sdk/openai";\n` +
+        `import { exeModel } from "@kybernesis/exe";\n\n`,
+      fields:
+        `  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(config.model)}, createOpenAI }),\n` +
+        `  modelContextWindowTokens: 200_000,\n`,
+    };
+  }
+  return { imports: "", fields: `  model: ${JSON.stringify(config.model)},\n` };
+}
 
-export default defineAgent({
-  model: ${JSON.stringify(model)},
-});
+export function hostAgentTs(host: HostKind, model: ModelScaffoldConfig): string {
+  const rendered = agentModelTemplate(host, model);
+  const comment = model.reach === "claude-sub"
+    ? `// Claude subscription model through the loopback OAuth proxy — no API key or exe gateway.\n`
+    : host === "exe"
+      ? `// Model served by the exe.dev LLM integration — no provider key on the host.\n// exe injects the credential (managed gateway, your API key, or a connected\n// ChatGPT subscription) server-side.\n`
+      : "";
+  return `import { defineAgent } from "eve";
+${rendered.imports}${comment}export default defineAgent({
+${rendered.fields}${host === "exe" ? `  // This long-lived self-hosted process has no metered platform session ceiling.\n  limits: { maxInputTokensPerSession: false },\n` : ""}});
 `;
 }
 
-export function hostSteps(host: HostKind, name: string): string[] {
+export function hostSteps(host: HostKind, name: string, model: ModelScaffoldConfig): string[] {
+  if (host === "exe" && model.reach === "claude-sub") {
+    return [
+      `Create the VM:  ssh exe.dev new --name ${name}`,
+      `Start the loopback Claude OAuth proxy: bash scripts/claude-subscription.sh up`,
+      `Sign in with the client's Claude subscription: bash scripts/claude-subscription.sh login`,
+      `Prove the proxy is signed in and not exposed: bash scripts/claude-subscription.sh status`,
+      `Install Node 24 + deps on the VM, fill .env.local, then install the production service:`,
+      `    bash node_modules/@kybernesis/exe/scripts/install-service.sh`,
+      `The systemd unit exports .env.local, builds before every start, and is the single supervisor`,
+    ];
+  }
   if (host === "exe") {
     return [
       `Create the VM:  ssh exe.dev new --name ${name}`,
@@ -576,34 +613,19 @@ export default defineSandbox({
 `;
 }
 
-export function engineerPlan(host: HostKind, model: string): EngineerPlan {
+export function engineerPlan(host: HostKind, model: ModelScaffoldConfig): EngineerPlan {
   const onExe = host === "exe";
+  const renderedModel = agentModelTemplate(host, model);
   const files: EngineerPlan["files"] = [
     {
       path: "agent/subagents/builder/agent.ts",
-      content: onExe
-        ? `import { defineAgent } from "eve";
-import { createOpenAI } from "@ai-sdk/openai";
-import { exeModel } from "@kybernesis/exe";
-
-// The specialist the root agent delegates BUILDING to. \`description\` is what
+      content: `import { defineAgent } from "eve";
+${renderedModel.imports}// The specialist the root agent delegates BUILDING to. \`description\` is what
 // the root routes on — keep it about building, not answering.
 export default defineAgent({
   description:
     "Builds and runs software: scaffolds projects, writes code, installs dependencies, runs builds and dev servers, and visually verifies rendered pages. Use when the user asks for something to be BUILT, prototyped, deployed, or fixed in code — not for questions, planning, or scheduling.",
-  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(model)}, createOpenAI }),
-  modelContextWindowTokens: 200_000,
-});
-`
-        : `import { defineAgent } from "eve";
-
-// The specialist the root agent delegates BUILDING to. \`description\` is what
-// the root routes on — keep it about building, not answering.
-export default defineAgent({
-  description:
-    "Builds and runs software: scaffolds projects, writes code, installs dependencies, runs builds and dev servers, and visually verifies rendered pages. Use when the user asks for something to be BUILT, prototyped, deployed, or fixed in code — not for questions, planning, or scheduling.",
-  model: ${JSON.stringify(model)},
-});
+${renderedModel.fields}});
 `,
     },
     {
