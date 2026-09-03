@@ -91,6 +91,43 @@ export async function claudeInputWindow(
   }
 }
 
+/**
+ * The output cap every subscription call carries unless the caller says
+ * otherwise.
+ *
+ * Without one the provider asks for the model's maximum (`max_tokens: 128000`
+ * on claude-opus-5) on every request. A subscription is a shared per-minute
+ * output budget, so each message then reserves a large share of it and the
+ * subscription agent is the first thing to fail under load: this showed as
+ * `Overloaded` errors on two deployments (KYB-530). 16k covers any answer a
+ * chat turn produces; long artifacts go through tools, not the reply.
+ */
+export const CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS = 16_000;
+
+/**
+ * Fill `maxOutputTokens` on a language model's calls when the caller left it
+ * unset. Works on the AI SDK's provider interface directly (`doGenerate` /
+ * `doStream` take the call options as their first argument), so this package
+ * needs no dependency on `ai` and the wrapped object keeps every other
+ * property of the model, including its specification version.
+ */
+export function withDefaultMaxOutputTokens<TModel>(model: TModel, cap: number): TModel {
+  const fill = (options: unknown) =>
+    options && typeof options === "object" && (options as { maxOutputTokens?: unknown }).maxOutputTokens === undefined
+      ? { ...(options as object), maxOutputTokens: cap }
+      : options;
+  const source = model as unknown as Record<string, unknown>;
+  const wrapped: Record<string, unknown> = Object.create(Object.getPrototypeOf(source) ?? null);
+  for (const key of Object.keys(source)) wrapped[key] = source[key];
+  for (const name of ["doGenerate", "doStream"]) {
+    const original = source[name];
+    if (typeof original !== "function") continue;
+    wrapped[name] = (options: unknown, ...rest: unknown[]) =>
+      (original as (...a: unknown[]) => unknown).call(source, fill(options), ...rest);
+  }
+  return wrapped as unknown as TModel;
+}
+
 export interface ClaudeSubscriptionOptions<TModel> {
   /** Model id, e.g. `"claude-opus-5"`. Bare Anthropic ids, not gateway-prefixed. */
   model: string;
@@ -112,6 +149,12 @@ export interface ClaudeSubscriptionOptions<TModel> {
   requireLoopback?: boolean;
   /** `createAnthropic` from `@ai-sdk/anthropic`, passed in so this package pins no provider version. */
   createAnthropic: (config: { baseURL: string; apiKey: string }) => (model: string) => TModel;
+  /**
+   * Output cap applied to calls that set none. Defaults to
+   * {@link CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS}; `false` disables the cap. A
+   * per-call `maxOutputTokens` always wins over this default.
+   */
+  maxOutputTokens?: number | false;
 }
 
 /**
@@ -189,5 +232,7 @@ export function claudeSubscription<TModel>(options: ClaudeSubscriptionOptions<TM
     apiKey: "claude-subscription-local-proxy",
   });
 
-  return anthropic(options.model);
+  const model = anthropic(options.model);
+  if (options.maxOutputTokens === false) return model;
+  return withDefaultMaxOutputTokens(model, options.maxOutputTokens ?? CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS);
 }

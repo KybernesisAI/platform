@@ -30,6 +30,8 @@ export {
   claudeInputWindow,
   claudeProxyReady,
   claudeSubscription,
+  CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS,
+  withDefaultMaxOutputTokens,
   isLoopbackUrl,
   type ClaudeSubscriptionOptions,
 } from "./claude.js";
