@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { TEMPLATE_CONTAINER_PROBE, assessRestart, parseTemplateContainers } from "./sandbox-orphans.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -266,6 +267,14 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
     '  SCRIPT="scripts/eve-server.sh"',
     "fi",
     'if [ -z "$SCRIPT" ]; then echo "FAILED: no restart script on the host"; exit 1; fi',
+    // An orphaned sandbox template container (a start killed mid-build; only
+    // `sleep` inside) makes every eve start hang forever. The packaged start
+    // script clears it too, but a host still running its own older copy
+    // would not, so the deploy does it first and says so (KYB-531).
+    "for c in $(command -v docker >/dev/null 2>&1 && docker ps --filter name=eve-sbx-tpl- --format '{{.Names}}' 2>/dev/null); do",
+    "  live=$(docker top \"$c\" 2>/dev/null | tail -n +2 | awk '{print $8}' | grep -vc '^sleep$')",
+    '  if [ "${live:-0}" = "0" ]; then echo "removing orphaned sandbox template container $c (only sleep inside; it would block every start)"; docker rm -f "$c" >/dev/null 2>&1 || true; fi',
+    "done",
     'echo "using $SCRIPT"',
     'setsid nohup bash "$SCRIPT" > /tmp/kyb-deploy.log 2>&1 < /dev/null &',
     "sleep 2",
@@ -295,22 +304,46 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
   let last = "";
   let seen = "";
   let lastChange = Date.now();
+  let lastBuildingNote = 0;
+  let stuck: string | null = null;
   while (Date.now() - startedAt < CEILING_MS) {
-    const out = execFileSync("ssh", [target, `tail -40 /tmp/kyb-deploy.log 2>/dev/null || true`], {
-      encoding: "utf8",
-    });
-    last = out;
-    if (out !== seen) {
-      for (const line of out.split("\n")) {
-        if (line && !seen.includes(line) && /npm|install|build|SOURCE IS NEWER|waiting|pid=|health:|FAILED/i.test(line)) {
+    // Two witnesses: the log, and the sandbox template containers. A cold
+    // template build is silent in the log for longer than the quiet limit,
+    // and judging it on the log alone is how a fine build got killed (KYB-531).
+    const out = execFileSync(
+      "ssh",
+      [target, `tail -40 /tmp/kyb-deploy.log 2>/dev/null || true; echo __TEMPLATES__; ${TEMPLATE_CONTAINER_PROBE}`],
+      { encoding: "utf8" },
+    );
+    const [logPart, probePart = ""] = out.split("__TEMPLATES__");
+    last = logPart;
+    if (logPart !== seen) {
+      for (const line of logPart.split("\n")) {
+        if (line && !seen.includes(line) && /npm|install|build|SOURCE IS NEWER|waiting|pid=|health:|FAILED|template|removing/i.test(line)) {
           console.log(dim(`    ${line.trim().slice(0, 120)}`));
         }
       }
-      seen = out;
+      seen = logPart;
       lastChange = Date.now();
     }
-    if (/health:|FAILED/.test(out)) break;
-    if (Date.now() - lastChange > QUIET_LIMIT_MS) {
+    const verdict = assessRestart({
+      log: logPart,
+      templates: parseTemplateContainers(probePart),
+      quietMs: Date.now() - lastChange,
+      quietLimitMs: QUIET_LIMIT_MS,
+    });
+    if (verdict.state === "healthy" || verdict.state === "failed") break;
+    if (verdict.state === "building") {
+      lastChange = Date.now();
+      if (Date.now() - lastBuildingNote > 60_000) {
+        console.log(dim(`    still building the sandbox template (${Math.round((Date.now() - startedAt) / 60_000)} min): ${verdict.detail}`));
+        lastBuildingNote = Date.now();
+      }
+    } else if (verdict.state === "orphaned") {
+      stuck = verdict.detail ?? null;
+      console.log(yellow(`\n  ! an orphaned sandbox template container is blocking the start: ${stuck}`));
+      break;
+    } else if (verdict.state === "quiet") {
       console.log(yellow(`\n  ! nothing new on the host for ${Math.round(QUIET_LIMIT_MS / 60_000)} minutes — giving up on the wait`));
       break;
     }
@@ -328,10 +361,15 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
   console.log(
     healthy
       ? green("\n  ✓ deployed and serving the current build")
-      : yellow(
-          "\n  ! the restart did not report health. It may still be building — this stops watching, it does not stop the host.\n" +
-            `    Watch it:  ssh ${target} 'tail -f /tmp/kyb-deploy.log'`,
-        ),
+      : stuck
+        ? yellow(
+            `\n  ! the restart cannot finish while that container exists. Remove it on the host, then run kyb deploy again.\n` +
+              `    ssh ${target} '${stuck.replace(/^.*remove it: /, "").replace(/\).*$/, "")}'`,
+          )
+        : yellow(
+            "\n  ! the restart did not report health. It may still be building — this stops watching, it does not stop the host.\n" +
+              `    Watch it:  ssh ${target} 'tail -f /tmp/kyb-deploy.log'`,
+          ),
   );
   if (!healthy) process.exitCode = 1;
 }

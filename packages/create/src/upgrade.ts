@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -266,6 +266,33 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   const pruneTarget = "/etc/cron.daily/kyb-docker-prune";
   const hasDocker =
     capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes";
+
+  // The host start script is package-owned too. It carried a 45-second
+  // verdict clock that called a cold sandbox template build a failure, and no
+  // sweep for the orphaned template container that a killed start leaves
+  // behind (KYB-531). An agent still running the copy `kyb init` made keeps
+  // both faults until something refreshes it; this does, on every upgrade.
+  const serverSource = join(scripts, "eve-server.sh");
+  const serverTarget = join(cwd, "scripts/eve-server.sh");
+  if (existsSync(serverSource) && existsSync(serverTarget)) {
+    reconcileHostArtifact({
+      targetPath: serverTarget,
+      desiredContent: readFileSync(serverSource),
+      expectedMode: 0o755,
+      installIfMissing: false,
+      owner: "@kybernesis/exe/scripts/eve-server.sh",
+      update: () => {
+        try {
+          copyFileSync(serverSource, serverTarget);
+          chmodSync(serverTarget, 0o755);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      manualCommand: `cp ${shellQuote(serverSource)} scripts/eve-server.sh && chmod +x scripts/eve-server.sh`,
+    });
+  }
 
   if (existsSync(pruneSource)) {
     const pruneResult = reconcileHostArtifact({

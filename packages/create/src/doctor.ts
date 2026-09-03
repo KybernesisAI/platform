@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { TEMPLATE_CONTAINER_PROBE, parseTemplateContainers, templateContainerDoctorChecks } from "./sandbox-orphans.js";
 import { join } from "node:path";
 
 import { pathToFileURL } from "node:url";
@@ -412,6 +413,11 @@ export async function doctor(): Promise<void> {
      * eventually produces looks like anything except a full disk.
      */
     if (capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes") {
+      // A template container left behind by a killed start blocks every
+      // later start forever; a live one means "do not restart yet" (KYB-531).
+      for (const check of templateContainerDoctorChecks(parseTemplateContainers(capture("sh", ["-c", TEMPLATE_CONTAINER_PROBE])))) {
+        checks.push(check);
+      }
       const job = capture("sh", ["-c", "test -x /etc/cron.daily/kyb-docker-prune && echo yes"])?.trim();
       const percent = Number(capture("sh", ["-c", "df / | awk 'NR==2{print $5}' | tr -d '%'"])?.trim() ?? 0);
       if (job !== "yes") {
