@@ -62,6 +62,7 @@ function initOptions(rest: string[]): InitOptions {
     channel: flag(rest, "channel") as InitOptions["channel"],
     host: flag(rest, "host") as InitOptions["host"],
     model: flag(rest, "model"),
+    modelReach: flag(rest, "model-reach"),
     subagents: subs === undefined ? undefined : subs.split(',').map((s) => s.trim()).filter(Boolean),
     yes: rest.includes('--yes') || rest.includes('-y'),
   };
@@ -92,6 +93,20 @@ const COMMANDS: Record<string, string> = {
 function usage(command?: string): void {
   if (command && COMMANDS[command]) {
     console.log(`\n  ${bold(`kyb ${command}`)} — ${COMMANDS[command]}\n`);
+    if (command === "init") {
+      console.log(`  ${bold("kyb init [name]")} [options]
+      --channel=<kind>      ${dim("none|slack|imessage|telegram|discord|web")}
+      --host=<kind>         ${dim("vercel|exe (default: vercel)")}
+      --model=<id>          ${dim("gateway id; claude-sub requires bare claude-opus-5")}
+      --model-reach=<reach> ${dim("claude-sub (exe only; default: host route)")}
+      --subagents=a,b       ${dim("department subagents")}
+      --engineer            ${dim("add the engineer layer")}
+      --studio              ${dim("wire KYBER Studio local/manage routes")}
+      --yes, -y             ${dim("no prompts")}
+
+  ${dim("Factory env: KYB_MODEL_REACH=claude-sub (the CLI flag takes precedence).")}
+  ${dim("Claude subscription reach uses the loopback OAuth proxy; it does not read EXE_MODEL.")}\n`);
+    }
     return;
   }
   console.log(`\n  ${bold("kyb")} ${dim(VERSION)} — the Kybernesis agent CLI\n`);
@@ -200,7 +215,8 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --channel=<kind>  ${dim("none|slack|imessage|telegram|discord|web  (default: none)")}
       --host=<kind>     ${dim("vercel|exe                                (default: vercel)")}
       --subagents=a,b   ${dim("department subagents                      (default: none)")}
-      --model=<id>      ${dim("provider/model-id                         (default: sonnet 5)")}
+      --model=<id>      ${dim("provider/model-id; bare claude-opus-5 for claude-sub")}
+      --model-reach=<r> ${dim("claude-sub (exe only); env: KYB_MODEL_REACH")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}

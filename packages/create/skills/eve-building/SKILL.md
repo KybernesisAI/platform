@@ -25,6 +25,18 @@ Direct provider: install `@ai-sdk/<provider>`, pass `anthropic("claude-opus-4-8"
 `defineDynamic({ fallback, events })` — prefer `session.started` scope (prompt
 caches are per model). Docs: `agent-config.md`.
 
+For an exe-hosted agent that must use a client's Claude subscription instead of
+the exe LLM gateway, scaffold with `--host=exe --model-reach=claude-sub` (or set
+`KYB_MODEL_REACH=claude-sub` for Factory invocation; the CLI flag wins). The
+certified shape is `createAnthropic` from `@ai-sdk/anthropic` passed to
+`claudeSubscription({ model: "claude-opus-5", createAnthropic })`, with
+`CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW`, both from `@kybernesis/exe`. Use the bare
+Anthropic id, never `anthropic/...`; do not reuse that context-window constant
+for another model. The generated agent does not use `exeModel` or `EXE_MODEL`.
+Run `scripts/claude-subscription.sh up`, `login`, then `status` on the host; the
+OAuth proxy must stay loopback-only. Provider details:
+`packages/exe/src/claude.ts` and `packages/exe/README.md`.
+
 ## Channels (agent/channels/, one file per surface)
 
 Filename = channel id. eve normalizes every surface into one runtime — tools/
