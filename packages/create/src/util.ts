@@ -15,14 +15,26 @@ export const dim = (s: string) => (TTY ? `\x1b[2m${s}\x1b[0m` : s);
 export function run(
   command: string,
   args: string[],
-  options?: { cwd?: string; allowFail?: boolean; quiet?: boolean },
+  options?: {
+    cwd?: string;
+    allowFail?: boolean;
+    quiet?: boolean;
+    /** Extra environment for this one child; the parent's is inherited underneath. */
+    env?: Record<string, string>;
+    /** Kill the child after this many milliseconds. A command that cannot finish is a failure, not a wait. */
+    timeoutMs?: number;
+  },
 ): boolean {
   if (!options?.quiet) console.log(dim(`  $ ${command} ${args.join(" ")}`));
   const result = spawnSync(command, args, {
     cwd: options?.cwd,
     stdio: options?.quiet ? "pipe" : "inherit",
-    env: process.env,
+    env: { ...process.env, ...options?.env },
+    timeout: options?.timeoutMs,
   });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    console.error(red(`Command did not finish within ${Math.round((options?.timeoutMs ?? 0) / 60_000)} min and was stopped: ${command} ${args.join(" ")}`));
+  }
   const ok = result.status === 0;
   if (!ok && !options?.allowFail) {
     console.error(red(`Command failed: ${command} ${args.join(" ")}`));
