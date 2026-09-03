@@ -394,6 +394,7 @@ test("collector preserves final-message, failed, and waiting HITL semantics", as
     inputRequests: [request],
     sessionId: "session-original",
     streamIndex: 9,
+    failures: [],
   });
 
   const failedStore = storeWith();
