@@ -153,7 +153,19 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   // refuses an id it cannot find in the AI Gateway catalog and then creates
   // nothing at all, and an exe-hosted agent takes its model from EXE_MODEL,
   // not from the gateway.
-  run("npx", [`eve@${EVE_VERSION}`, "init", name], { allowFail: true });
+  // Two guards, both learned on a real Factory build (KYB-521):
+  //  - AI_AGENT: eve's init hands off to `eve dev --onboard` when it sees no
+  //    interactive terminal, and that is a server that waits for a person, so a
+  //    headless `kyb init` never returned. eve skips the handoff and prints its
+  //    summary when it believes a coding agent launched it; the marker is
+  //    stripped from eve's own child spawns, so nothing else sees it.
+  //  - a timeout, because `--yes` cannot reach a choice eve makes internally,
+  //    and a scaffold that cannot finish must fail, not wait forever.
+  run("npx", [`eve@${EVE_VERSION}`, "init", name], {
+    allowFail: true,
+    env: { AI_AGENT: process.env.AI_AGENT?.trim() || "kybernesis-create" },
+    timeoutMs: 20 * 60_000,
+  });
 
   // The real test of that step, since its exit code cannot be trusted.
   if (!existsSync(join(dir, "package.json"))) {
