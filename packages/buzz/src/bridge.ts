@@ -2,7 +2,14 @@ import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise"
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { SessionStore } from "./sessions.js";
-import { answerTurn, composeMessage, rejectedTurnReply } from "./turn.js";
+import {
+  agentSilenceReply,
+  answerTurn,
+  composeMessage,
+  DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  rejectedTurnReply,
+  validateAgentSilenceTimeoutMs,
+} from "./turn.js";
 import {
   followPendingConversation,
   formatInputRequests,
@@ -60,6 +67,8 @@ export type BuzzBridgeOptions = {
   /** This agent's credential from the control plane. The only durable secret here. */
   credential: string;
   pollMs?: number;
+  /** Maximum silence during one agent request or event stream; defaults to five minutes. */
+  agentSilenceTimeoutMs?: number;
   onLog?: (message: string) => void;
 };
 
@@ -67,6 +76,9 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   const key: AgentKey = loadKey(options.keyFile);
   const identity = channelIdentity({ issuer: options.issuer, credential: options.credential });
   const log = options.onLog ?? ((message: string) => console.log(new Date().toISOString().slice(11, 19), message));
+  const agentSilenceTimeoutMs = validateAgentSilenceTimeoutMs(
+    options.agentSilenceTimeoutMs ?? DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  );
 
   /**
    * One conversation per channel — the SESSION ID, not a handle to it.
@@ -399,7 +411,15 @@ export function buzzBridge(options: BuzzBridgeOptions) {
 
         /** Images become file parts; unreadable files become explicit model context. */
         const message = await composeMessage(text, attachments, (ref) => fetchMedia(key, ref), log);
-        const result = await answerTurn(clientFor(event.pubkey), sessions, channel, message, from, log);
+        const result = await answerTurn(
+          clientFor(event.pubkey),
+          sessions,
+          channel,
+          message,
+          from,
+          log,
+          agentSilenceTimeoutMs,
+        );
 
         if (result.status === "waiting" && result.inputRequests.length > 0) {
           sessions.set(from, channel, {
@@ -438,6 +458,16 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         log(`could not submit pending input for ${channel.slice(0, 8)}: ${(error as Error).message}`);
         relay.reply(channel, invalidInputReply(stillPending), event);
         startFollower(from, channel);
+        return;
+      }
+
+      const silence = agentSilenceReply(error);
+      if (silence) {
+        const timeout = error as import("./turn.js").AgentSilenceTimeoutError;
+        log(
+          `agent silence timeout for ${channel.slice(0, 8)} during ${timeout.phase} after ${timeout.intervalMs}ms`,
+        );
+        relay.reply(channel, silence, event);
         return;
       }
 
