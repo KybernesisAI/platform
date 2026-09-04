@@ -7,6 +7,7 @@ import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
+import { checkSelfVersion } from "./self-version.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -125,6 +126,10 @@ export async function doctor(): Promise<void> {
   const checks: Check[] = [];
   const add = (verdict: Verdict, label: string, detail?: string) =>
     checks.push({ verdict, label, detail });
+  const selfVersion = checkSelfVersion();
+  if (selfVersion.kind === "stale") {
+    add("warn", selfVersion.message, selfVersion.fix);
+  }
 
   // ── project shape ──────────────────────────────────────────────────────
   if (!existsSync(join(cwd, "agent"))) {

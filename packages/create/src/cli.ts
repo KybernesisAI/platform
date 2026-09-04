@@ -11,6 +11,7 @@
  *   kyb deploy            put this repo on its host and restart it, with proof
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
  *     --skip-eval           skip the eval gate (not for production changes)
+ *     --allow-stale         proceed even when this kyb is behind npm
  *     --yes, -y             confirm an eve upgrade noninteractively
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -79,7 +80,7 @@ const COMMANDS: Record<string, string> = {
   credential: "Write the agent credential onto a host (--local to stay here).",
   register: "Register this agent with the control plane (--name, --url).",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
-  upgrade: "Bring @kybernesis packages and eve to certified versions (--skip-eval, --yes).",
+  upgrade: "Bring @kybernesis packages and eve to certified versions (--skip-eval, --allow-stale, --yes).",
   tui: "Talk to your agents in the terminal.",
   version: "Print the version of this tool.",
 };
@@ -106,6 +107,12 @@ function usage(command?: string): void {
 
   ${dim("Factory env: KYB_MODEL_REACH=claude-sub (the CLI flag takes precedence).")}
   ${dim("Claude subscription reach uses the loopback OAuth proxy; it does not read EXE_MODEL.")}\n`);
+    } else if (command === "upgrade") {
+      console.log(`  ${bold("kyb upgrade")} [options]
+      --skip-eval           ${dim("skip the eval gate")}
+      --allow-stale         ${dim("continue even when this kyb is behind the published version")}
+      --yes, -y             ${dim("confirm an eve version change noninteractively")}
+`);
     }
     return;
   }
@@ -169,6 +176,7 @@ switch (command) {
     break;
   case "upgrade":
     await upgrade({
+      allowStale: rest.includes("--allow-stale"),
       skipEval: rest.includes("--skip-eval"),
       yes: rest.includes("--yes") || rest.includes("-y"),
     });
@@ -237,6 +245,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --no-env          ${dim("do not send .env.local (host manages its own secrets)")}
   ${bold("kyb upgrade")}         bump @kybernesis/* packages, gated on evals
       --skip-eval       ${dim("skip the eval gate")}
+      --allow-stale     ${dim("continue even when this kyb is behind the published version")}
       --yes, -y          ${dim("confirm an eve version change noninteractively")}
 
 Registry: https://registry.kybernesis.ai · Docs: the FDE playbook
