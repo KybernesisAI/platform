@@ -254,34 +254,87 @@ async function drainUnread(
   }
 }
 
+const isTurnBoundary = (type: string): boolean =>
+  type === "session.waiting" || type === "session.completed" || type === "session.failed";
+
 async function collectResponse(
   response: MessageResponse,
   watchdog: SilenceWatchdog,
   phase: AgentSilencePhase,
   streamIndex: () => number,
+  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
+  log: (message: string) => void = () => {},
 ): Promise<TurnOutcome> {
   let message = "";
   let status: MessageResult["status"] = "completed";
-  const inputRequests: InputRequest[] = [];
-  const failures: TurnFailure[] = [];
+  let inputRequests: InputRequest[] = [];
+  let failures: TurnFailure[] = [];
+  let sawTurnStart = false;
+  let endedAtOwnBoundary = false;
+  let staleBoundaryFirst = false;
+  let seen = 0;
+
+  /**
+   * One event of this turn, or of the turn before it.
+   *
+   * The client ends a send's stream at the first session boundary after the
+   * cursor. When the send itself ends an earlier, still-running turn (a person
+   * asks again while a twenty-minute delegation is under way), that earlier
+   * turn's `session.waiting` is the first thing on the wire, before this
+   * turn's `turn.started`. Read as ours it made an empty answer, and the
+   * abandoned stream then closed the request, which cancelled the real turn
+   * five minutes into its work. So: nothing counts until this turn has
+   * started, and a boundary only ends the collection once it has.
+   */
+  const consume = (event: MessageStreamEvent): boolean => {
+    watchdog.arm(phase);
+    seen += 1;
+    // A boundary as the very first event, before anything of this turn, is the
+    // earlier turn's. Anything else is treated as ours (a stream without
+    // turn.started still answers as before).
+    if (seen === 1 && isTurnBoundary(event.type) && !sawTurnStart) staleBoundaryFirst = true;
+    if (event.type === "turn.started") {
+      sawTurnStart = true;
+      message = "";
+      status = "completed";
+      inputRequests = [];
+      failures = [];
+      return false;
+    }
+    const failure = failureFromEvent(event as { type: string; data?: unknown });
+    if (failure) failures.push(failure);
+    if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
+      message = event.data.message ?? "";
+    } else if (event.type === "input.requested") {
+      inputRequests.push(...event.data.requests);
+    } else if (event.type === "session.waiting") {
+      status = "waiting";
+    } else if (event.type === "session.failed") {
+      status = "failed";
+    } else if (event.type === "session.completed") {
+      status = "completed";
+    }
+    if (isTurnBoundary(event.type) && !staleBoundaryFirst) {
+      endedAtOwnBoundary = true;
+      return true;
+    }
+    if (isTurnBoundary(event.type) && staleBoundaryFirst && sawTurnStart) {
+      endedAtOwnBoundary = true;
+      return true;
+    }
+    return false;
+  };
 
   watchdog.arm(phase);
   try {
     try {
       for await (const event of response) {
-        watchdog.arm(phase);
-        const failure = failureFromEvent(event as { type: string; data?: unknown });
-        if (failure) failures.push(failure);
-        if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
-          message = event.data.message ?? "";
-        } else if (event.type === "input.requested") {
-          inputRequests.push(...event.data.requests);
-        } else if (event.type === "session.waiting") {
-          status = "waiting";
-        } else if (event.type === "session.failed") {
-          status = "failed";
-        } else if (event.type === "session.completed") {
-          status = "completed";
+        if (consume(event)) break;
+      }
+      if (staleBoundaryFirst && !endedAtOwnBoundary && continueStream) {
+        log("the stream ended on an earlier turn's boundary before this turn started; following the session until this turn ends");
+        for await (const event of continueStream(watchdog.signal)) {
+          if (consume(event)) break;
         }
       }
     } catch (error) {
@@ -306,6 +359,8 @@ async function sendExisting(
   responsePromise: (signal: AbortSignal) => Promise<MessageResponse>,
   streamIndex: () => number,
   timeouts: AgentTimeouts,
+  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
+  log: (message: string) => void = () => {},
 ): Promise<TurnOutcome> {
   const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
@@ -318,7 +373,7 @@ async function sendExisting(
       throw error;
     }
     watchdog.throwIfTimedOut();
-    return await collectResponse(response, watchdog, "response stream", streamIndex);
+    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log);
   } finally {
     watchdog.dispose();
   }
@@ -367,6 +422,8 @@ export async function answerTurn(
         }),
         () => session.state.streamIndex,
         intervalMs,
+        (signal) => session.stream({ follow: true, startIndex: session.state.streamIndex, signal }),
+        log,
       );
       sessions.set(community, channel, {
         id: existing.id,
@@ -408,6 +465,8 @@ export async function answerTurn(
       watchdog,
       "create response stream",
       () => created.session.state.streamIndex,
+      (signal) => created.session.stream({ follow: true, startIndex: created.session.state.streamIndex, signal }),
+      log,
     );
     sessions.set(community, channel, {
       id: created.session.state.sessionId,

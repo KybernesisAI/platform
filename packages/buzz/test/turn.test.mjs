@@ -481,3 +481,73 @@ test("the work ceiling still bounds a response stream that never speaks again", 
   );
   assert.equal(store.get("relay", "channel").id, "session-original");
 });
+
+test("a boundary from an earlier turn does not end this one: the bridge follows the session until its own turn ends", async () => {
+  // The send ends a still-running earlier turn. Its session.waiting is the
+  // first event on the wire, before this turn's turn.started, and the
+  // client's send stream stops there. The bridge must keep following the
+  // session and answer from THIS turn.
+  const store = storeWith();
+  const logs = [];
+  const followed = [];
+  let cursor = 5;
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, get streamIndex() { return cursor; } },
+          stream: async function* ({ follow, startIndex }) {
+            if (!follow) return; // nothing unread before the send
+            followed.push(startIndex);
+            cursor += 4;
+            yield { type: "turn.started", data: { turnId: "turn_9" } };
+            yield { type: "message.appended", data: { delta: "work" } };
+            yield { type: "message.completed", data: { finishReason: "stop", message: "the real answer" } };
+            yield { type: "session.waiting", data: { turnId: "turn_9" } };
+          },
+          send: async () => ({
+            sessionId: id,
+            async *[Symbol.asyncIterator]() {
+              cursor += 1;
+              yield { type: "session.waiting", data: { turnId: "turn_8" } }; // the cancelled earlier turn
+            },
+          }),
+        };
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "again", "relay", (m) => logs.push(m));
+  assert.equal(result.message, "the real answer");
+  assert.equal(result.status, "waiting");
+  assert.deepEqual(followed, [6], "followed from the cursor after the stale boundary");
+  assert.equal(store.get("relay", "channel").streamIndex, 10);
+  assert.ok(logs.some((m) => m.includes("earlier turn's boundary")));
+});
+
+test("a stream that starts this turn and ends at its own boundary needs no continuation", async () => {
+  const store = storeWith();
+  let followed = 0;
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, streamIndex: 5 },
+          stream: async function* ({ follow }) { if (follow) followed += 1; },
+          send: async () => ({
+            sessionId: id,
+            async *[Symbol.asyncIterator]() {
+              yield { type: "turn.started", data: { turnId: "turn_1" } };
+              yield { type: "message.completed", data: { finishReason: "stop", message: "direct" } };
+              yield { type: "session.waiting", data: { turnId: "turn_1" } };
+            },
+          }),
+        };
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "hi", "relay");
+  assert.equal(result.message, "direct");
+  assert.equal(followed, 0);
+});
