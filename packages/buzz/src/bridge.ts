@@ -7,6 +7,7 @@ import {
   answerTurn,
   composeMessage,
   DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  DEFAULT_AGENT_WORK_TIMEOUT_MS,
   describeSilentTurn,
   rejectedTurnReply,
   silentTurnReply,
@@ -71,6 +72,8 @@ export type BuzzBridgeOptions = {
   pollMs?: number;
   /** Maximum silence during one agent request or event stream; defaults to five minutes. */
   agentSilenceTimeoutMs?: number;
+  /** Ceiling on a turn once acknowledged; the agent is working while its stream is quiet. Default 60 minutes. */
+  agentWorkTimeoutMs?: number;
   onLog?: (message: string) => void;
 };
 
@@ -78,6 +81,9 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   const key: AgentKey = loadKey(options.keyFile);
   const identity = channelIdentity({ issuer: options.issuer, credential: options.credential });
   const log = options.onLog ?? ((message: string) => console.log(new Date().toISOString().slice(11, 19), message));
+  const agentWorkTimeoutMs = validateAgentSilenceTimeoutMs(
+    options.agentWorkTimeoutMs ?? DEFAULT_AGENT_WORK_TIMEOUT_MS,
+  );
   const agentSilenceTimeoutMs = validateAgentSilenceTimeoutMs(
     options.agentSilenceTimeoutMs ?? DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   );
@@ -421,6 +427,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           from,
           log,
           agentSilenceTimeoutMs,
+          agentWorkTimeoutMs,
         );
 
         if (result.status === "waiting" && result.inputRequests.length > 0) {

@@ -206,7 +206,7 @@ test("clean response iterator completion after abort is still reported as timeou
     },
   };
 
-  const turn = answerTurn(client, store, "channel", "hello", "relay", undefined, 1_000);
+  const turn = answerTurn(client, store, "channel", "hello", "relay", undefined, 1_000, 1_000);
   await waitFor(() => responseSignal);
   t.mock.timers.tick(1_000);
 
@@ -282,7 +282,7 @@ test("fresh create acknowledgement and response silence are independently bounde
       },
     },
   };
-  const response = answerTurn(responseClient, responseStore, "channel", "hello", "relay", undefined, 1_000);
+  const response = answerTurn(responseClient, responseStore, "channel", "hello", "relay", undefined, 1_000, 1_000);
   await waitFor(() => responseSignal);
   t.mock.timers.tick(1_000);
   await assert.rejects(response, (error) =>
@@ -433,4 +433,51 @@ test("agent silence configuration has a five-minute default and rejects invalid 
   for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(() => validateAgentSilenceTimeoutMs(value), /finite positive/);
   }
+});
+
+test("a quiet response stream outlives the silence bound while the agent works, up to the work ceiling", async () => {
+  // Silence bound 50ms (acknowledgement phases), work ceiling 2s (response
+  // stream). The agent acknowledges at once, then says nothing for 300ms
+  // while it works, then answers. Before the split this timed out at 50ms.
+  const store = storeWith();
+  const client = {
+    sessions: {
+      attach(id) {
+        return attachedSession(id, async () => ({
+          sessionId: id,
+          async *[Symbol.asyncIterator]() {
+            await new Promise((r) => setTimeout(r, 300));
+            yield* completedEvents("done after a quiet stretch");
+          },
+        }));
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "long work", "relay", undefined, 50, 2_000);
+  assert.equal(result.message, "done after a quiet stretch");
+});
+
+test("the work ceiling still bounds a response stream that never speaks again", async (t) => {
+  const store = storeWith();
+  const client = {
+    sessions: {
+      attach(id) {
+        // A stream that never yields again, but ends when the caller aborts,
+        // as the eve client's does.
+        return attachedSession(id, async (_message, { signal }) => ({
+          sessionId: id,
+          async *[Symbol.asyncIterator]() {
+            await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+          },
+        }));
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  await assert.rejects(
+    () => answerTurn(client, store, "channel", "long work", "relay", undefined, 10_000, 200),
+    (e) => e instanceof AgentSilenceTimeoutError && e.phase === "response stream" && e.intervalMs === 200,
+  );
+  assert.equal(store.get("relay", "channel").id, "session-original");
 });

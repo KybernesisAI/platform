@@ -13,6 +13,31 @@ import { SessionStore } from "./sessions.js";
 
 /** Five minutes without an eve event or acknowledgement is treated as a stalled turn. */
 export const DEFAULT_AGENT_SILENCE_TIMEOUT_MS = 5 * 60_000;
+/**
+ * How long a turn may run once the agent has acknowledged it.
+ *
+ * eve's response stream is quiet while the agent works: a long tool call or a
+ * delegated subagent produces no events until it returns. Reading that quiet
+ * as a stall killed every real piece of work over five minutes the day the
+ * silence watchdog shipped (a repository study, a delegation that cloned and
+ * read a codebase), while the stall it was built for happened BEFORE the
+ * first event: no run was ever created. So the short bound stays on the
+ * phases where silence is a fault (unread drain, acknowledgements) and the
+ * response stream gets this ceiling instead. Sixty minutes covers the longest
+ * genuine turn seen on a deployment (44 minutes) with room.
+ */
+export const DEFAULT_AGENT_WORK_TIMEOUT_MS = 60 * 60_000;
+
+/** The two bounds a watchdog applies, chosen by phase. */
+export interface AgentTimeouts {
+  /** Silence before the first event of a request: drain, send/create acknowledgement. */
+  readonly silenceMs: number;
+  /** Silence between events once the response stream is open: the agent is working. */
+  readonly workMs: number;
+}
+
+const isWorkPhase = (phase: AgentSilencePhase): boolean => phase.endsWith("response stream");
+
 
 export type AgentSilencePhase =
   | "unread drain"
@@ -179,7 +204,7 @@ interface SilenceWatchdog {
   throwIfTimedOut(): void;
 }
 
-function silenceWatchdog(intervalMs: number): SilenceWatchdog {
+function silenceWatchdog(timeouts: AgentTimeouts): SilenceWatchdog {
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   let timeout: AgentSilenceTimeoutError | undefined;
@@ -188,6 +213,7 @@ function silenceWatchdog(intervalMs: number): SilenceWatchdog {
     signal: controller.signal,
     arm(phase) {
       if (timer) clearTimeout(timer);
+      const intervalMs = isWorkPhase(phase) ? timeouts.workMs : timeouts.silenceMs;
       timer = setTimeout(() => {
         timeout = new AgentSilenceTimeoutError(phase, intervalMs);
         controller.abort(timeout);
@@ -205,9 +231,9 @@ function silenceWatchdog(intervalMs: number): SilenceWatchdog {
 
 async function drainUnread(
   stream: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
-  intervalMs: number,
+  timeouts: AgentTimeouts,
 ): Promise<number> {
-  const watchdog = silenceWatchdog(intervalMs);
+  const watchdog = silenceWatchdog(timeouts);
   let unread = 0;
   watchdog.arm("unread drain");
   try {
@@ -279,9 +305,9 @@ async function collectResponse(
 async function sendExisting(
   responsePromise: (signal: AbortSignal) => Promise<MessageResponse>,
   streamIndex: () => number,
-  intervalMs: number,
+  timeouts: AgentTimeouts,
 ): Promise<TurnOutcome> {
-  const watchdog = silenceWatchdog(intervalMs);
+  const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
   try {
     let response: MessageResponse;
@@ -307,8 +333,12 @@ export async function answerTurn(
   community: string,
   log: (message: string) => void = () => {},
   agentSilenceTimeoutMs = DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  agentWorkTimeoutMs = DEFAULT_AGENT_WORK_TIMEOUT_MS,
 ): Promise<TurnOutcome> {
-  const intervalMs = validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs);
+  const intervalMs: AgentTimeouts = {
+    silenceMs: validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs),
+    workMs: validateAgentSilenceTimeoutMs(agentWorkTimeoutMs),
+  };
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
