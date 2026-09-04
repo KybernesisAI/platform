@@ -206,7 +206,7 @@ test("clean response iterator completion after abort is still reported as timeou
     },
   };
 
-  const turn = answerTurn(client, store, "channel", "hello", "relay", undefined, 1_000);
+  const turn = answerTurn(client, store, "channel", "hello", "relay", undefined, 1_000, 1_000);
   await waitFor(() => responseSignal);
   t.mock.timers.tick(1_000);
 
@@ -282,7 +282,7 @@ test("fresh create acknowledgement and response silence are independently bounde
       },
     },
   };
-  const response = answerTurn(responseClient, responseStore, "channel", "hello", "relay", undefined, 1_000);
+  const response = answerTurn(responseClient, responseStore, "channel", "hello", "relay", undefined, 1_000, 1_000);
   await waitFor(() => responseSignal);
   t.mock.timers.tick(1_000);
   await assert.rejects(response, (error) =>
@@ -433,4 +433,121 @@ test("agent silence configuration has a five-minute default and rejects invalid 
   for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(() => validateAgentSilenceTimeoutMs(value), /finite positive/);
   }
+});
+
+test("a quiet response stream outlives the silence bound while the agent works, up to the work ceiling", async () => {
+  // Silence bound 50ms (acknowledgement phases), work ceiling 2s (response
+  // stream). The agent acknowledges at once, then says nothing for 300ms
+  // while it works, then answers. Before the split this timed out at 50ms.
+  const store = storeWith();
+  const client = {
+    sessions: {
+      attach(id) {
+        return attachedSession(id, async () => ({
+          sessionId: id,
+          async *[Symbol.asyncIterator]() {
+            await new Promise((r) => setTimeout(r, 300));
+            yield* completedEvents("done after a quiet stretch");
+          },
+        }));
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "long work", "relay", undefined, 50, 2_000);
+  assert.equal(result.message, "done after a quiet stretch");
+});
+
+test("the work ceiling still bounds a response stream that never speaks again", async (t) => {
+  const store = storeWith();
+  const client = {
+    sessions: {
+      attach(id) {
+        // A stream that never yields again, but ends when the caller aborts,
+        // as the eve client's does.
+        return attachedSession(id, async (_message, { signal }) => ({
+          sessionId: id,
+          async *[Symbol.asyncIterator]() {
+            await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+          },
+        }));
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  await assert.rejects(
+    () => answerTurn(client, store, "channel", "long work", "relay", undefined, 10_000, 200),
+    (e) => e instanceof AgentSilenceTimeoutError && e.phase === "response stream" && e.intervalMs === 200,
+  );
+  assert.equal(store.get("relay", "channel").id, "session-original");
+});
+
+test("a boundary from an earlier turn does not end this one: the bridge follows the session until its own turn ends", async () => {
+  // The send ends a still-running earlier turn. Its session.waiting is the
+  // first event on the wire, before this turn's turn.started, and the
+  // client's send stream stops there. The bridge must keep following the
+  // session and answer from THIS turn.
+  const store = storeWith();
+  const logs = [];
+  const followed = [];
+  let cursor = 5;
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, get streamIndex() { return cursor; } },
+          stream: async function* ({ follow, startIndex }) {
+            if (!follow) return; // nothing unread before the send
+            followed.push(startIndex);
+            cursor += 4;
+            yield { type: "turn.started", data: { turnId: "turn_9" } };
+            yield { type: "message.appended", data: { delta: "work" } };
+            yield { type: "message.completed", data: { finishReason: "stop", message: "the real answer" } };
+            yield { type: "session.waiting", data: { turnId: "turn_9" } };
+          },
+          send: async () => ({
+            sessionId: id,
+            async *[Symbol.asyncIterator]() {
+              cursor += 1;
+              yield { type: "session.waiting", data: { turnId: "turn_8" } }; // the cancelled earlier turn
+            },
+          }),
+        };
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "again", "relay", (m) => logs.push(m));
+  assert.equal(result.message, "the real answer");
+  assert.equal(result.status, "waiting");
+  assert.deepEqual(followed, [6], "followed from the cursor after the stale boundary");
+  assert.equal(store.get("relay", "channel").streamIndex, 10);
+  assert.ok(logs.some((m) => m.includes("earlier turn's boundary")));
+});
+
+test("a stream that starts this turn and ends at its own boundary needs no continuation", async () => {
+  const store = storeWith();
+  let followed = 0;
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, streamIndex: 5 },
+          stream: async function* ({ follow }) { if (follow) followed += 1; },
+          send: async () => ({
+            sessionId: id,
+            async *[Symbol.asyncIterator]() {
+              yield { type: "turn.started", data: { turnId: "turn_1" } };
+              yield { type: "message.completed", data: { finishReason: "stop", message: "direct" } };
+              yield { type: "session.waiting", data: { turnId: "turn_1" } };
+            },
+          }),
+        };
+      },
+      async create() { throw new Error("must not create"); },
+    },
+  };
+  const result = await answerTurn(client, store, "channel", "hi", "relay");
+  assert.equal(result.message, "direct");
+  assert.equal(followed, 0);
 });

@@ -61,7 +61,8 @@ sessions are keyed by channel.
 | `BUZZ_AGENT_URL` | Where the agent listens (default `http://127.0.0.1:8000`) |
 | `BUZZ_KEYFILE` | The agent's key (default `~/.kybernesis/buzz-agent.json`) |
 | `BUZZ_SESSIONS_FILE` | Channel-to-session continuity store (default beside the key file; an existing legacy `.buzz-sessions.json` is reused) |
-| `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence while opening an agent request or waiting between complete events (default `300000`, five minutes; not a total turn-duration limit) |
+| `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence before the agent acknowledges a request: unread drain, send and create acknowledgement (default `300000`, five minutes). This is where a genuine stall shows: no run is ever created. |
+| `BUZZ_AGENT_WORK_TIMEOUT_MS` | Ceiling on silence once the response stream is open (default `3600000`, sixty minutes). The stream is quiet while the agent works, a long tool call or a delegated subagent produces nothing until it returns, so this is a ceiling on work, not a stall detector. |
 | `KYBERNESIS_ISSUER` | The control plane |
 | `KYBERNESIS_AGENT_CREDENTIAL` | This agent's credential |
 

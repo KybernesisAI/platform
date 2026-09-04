@@ -13,6 +13,31 @@ import { SessionStore } from "./sessions.js";
 
 /** Five minutes without an eve event or acknowledgement is treated as a stalled turn. */
 export const DEFAULT_AGENT_SILENCE_TIMEOUT_MS = 5 * 60_000;
+/**
+ * How long a turn may run once the agent has acknowledged it.
+ *
+ * eve's response stream is quiet while the agent works: a long tool call or a
+ * delegated subagent produces no events until it returns. Reading that quiet
+ * as a stall killed every real piece of work over five minutes the day the
+ * silence watchdog shipped (a repository study, a delegation that cloned and
+ * read a codebase), while the stall it was built for happened BEFORE the
+ * first event: no run was ever created. So the short bound stays on the
+ * phases where silence is a fault (unread drain, acknowledgements) and the
+ * response stream gets this ceiling instead. Sixty minutes covers the longest
+ * genuine turn seen on a deployment (44 minutes) with room.
+ */
+export const DEFAULT_AGENT_WORK_TIMEOUT_MS = 60 * 60_000;
+
+/** The two bounds a watchdog applies, chosen by phase. */
+export interface AgentTimeouts {
+  /** Silence before the first event of a request: drain, send/create acknowledgement. */
+  readonly silenceMs: number;
+  /** Silence between events once the response stream is open: the agent is working. */
+  readonly workMs: number;
+}
+
+const isWorkPhase = (phase: AgentSilencePhase): boolean => phase.endsWith("response stream");
+
 
 export type AgentSilencePhase =
   | "unread drain"
@@ -179,7 +204,7 @@ interface SilenceWatchdog {
   throwIfTimedOut(): void;
 }
 
-function silenceWatchdog(intervalMs: number): SilenceWatchdog {
+function silenceWatchdog(timeouts: AgentTimeouts): SilenceWatchdog {
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   let timeout: AgentSilenceTimeoutError | undefined;
@@ -188,6 +213,7 @@ function silenceWatchdog(intervalMs: number): SilenceWatchdog {
     signal: controller.signal,
     arm(phase) {
       if (timer) clearTimeout(timer);
+      const intervalMs = isWorkPhase(phase) ? timeouts.workMs : timeouts.silenceMs;
       timer = setTimeout(() => {
         timeout = new AgentSilenceTimeoutError(phase, intervalMs);
         controller.abort(timeout);
@@ -205,9 +231,9 @@ function silenceWatchdog(intervalMs: number): SilenceWatchdog {
 
 async function drainUnread(
   stream: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
-  intervalMs: number,
+  timeouts: AgentTimeouts,
 ): Promise<number> {
-  const watchdog = silenceWatchdog(intervalMs);
+  const watchdog = silenceWatchdog(timeouts);
   let unread = 0;
   watchdog.arm("unread drain");
   try {
@@ -228,34 +254,87 @@ async function drainUnread(
   }
 }
 
+const isTurnBoundary = (type: string): boolean =>
+  type === "session.waiting" || type === "session.completed" || type === "session.failed";
+
 async function collectResponse(
   response: MessageResponse,
   watchdog: SilenceWatchdog,
   phase: AgentSilencePhase,
   streamIndex: () => number,
+  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
+  log: (message: string) => void = () => {},
 ): Promise<TurnOutcome> {
   let message = "";
   let status: MessageResult["status"] = "completed";
-  const inputRequests: InputRequest[] = [];
-  const failures: TurnFailure[] = [];
+  let inputRequests: InputRequest[] = [];
+  let failures: TurnFailure[] = [];
+  let sawTurnStart = false;
+  let endedAtOwnBoundary = false;
+  let staleBoundaryFirst = false;
+  let seen = 0;
+
+  /**
+   * One event of this turn, or of the turn before it.
+   *
+   * The client ends a send's stream at the first session boundary after the
+   * cursor. When the send itself ends an earlier, still-running turn (a person
+   * asks again while a twenty-minute delegation is under way), that earlier
+   * turn's `session.waiting` is the first thing on the wire, before this
+   * turn's `turn.started`. Read as ours it made an empty answer, and the
+   * abandoned stream then closed the request, which cancelled the real turn
+   * five minutes into its work. So: nothing counts until this turn has
+   * started, and a boundary only ends the collection once it has.
+   */
+  const consume = (event: MessageStreamEvent): boolean => {
+    watchdog.arm(phase);
+    seen += 1;
+    // A boundary as the very first event, before anything of this turn, is the
+    // earlier turn's. Anything else is treated as ours (a stream without
+    // turn.started still answers as before).
+    if (seen === 1 && isTurnBoundary(event.type) && !sawTurnStart) staleBoundaryFirst = true;
+    if (event.type === "turn.started") {
+      sawTurnStart = true;
+      message = "";
+      status = "completed";
+      inputRequests = [];
+      failures = [];
+      return false;
+    }
+    const failure = failureFromEvent(event as { type: string; data?: unknown });
+    if (failure) failures.push(failure);
+    if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
+      message = event.data.message ?? "";
+    } else if (event.type === "input.requested") {
+      inputRequests.push(...event.data.requests);
+    } else if (event.type === "session.waiting") {
+      status = "waiting";
+    } else if (event.type === "session.failed") {
+      status = "failed";
+    } else if (event.type === "session.completed") {
+      status = "completed";
+    }
+    if (isTurnBoundary(event.type) && !staleBoundaryFirst) {
+      endedAtOwnBoundary = true;
+      return true;
+    }
+    if (isTurnBoundary(event.type) && staleBoundaryFirst && sawTurnStart) {
+      endedAtOwnBoundary = true;
+      return true;
+    }
+    return false;
+  };
 
   watchdog.arm(phase);
   try {
     try {
       for await (const event of response) {
-        watchdog.arm(phase);
-        const failure = failureFromEvent(event as { type: string; data?: unknown });
-        if (failure) failures.push(failure);
-        if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
-          message = event.data.message ?? "";
-        } else if (event.type === "input.requested") {
-          inputRequests.push(...event.data.requests);
-        } else if (event.type === "session.waiting") {
-          status = "waiting";
-        } else if (event.type === "session.failed") {
-          status = "failed";
-        } else if (event.type === "session.completed") {
-          status = "completed";
+        if (consume(event)) break;
+      }
+      if (staleBoundaryFirst && !endedAtOwnBoundary && continueStream) {
+        log("the stream ended on an earlier turn's boundary before this turn started; following the session until this turn ends");
+        for await (const event of continueStream(watchdog.signal)) {
+          if (consume(event)) break;
         }
       }
     } catch (error) {
@@ -279,9 +358,11 @@ async function collectResponse(
 async function sendExisting(
   responsePromise: (signal: AbortSignal) => Promise<MessageResponse>,
   streamIndex: () => number,
-  intervalMs: number,
+  timeouts: AgentTimeouts,
+  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
+  log: (message: string) => void = () => {},
 ): Promise<TurnOutcome> {
-  const watchdog = silenceWatchdog(intervalMs);
+  const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
   try {
     let response: MessageResponse;
@@ -292,7 +373,7 @@ async function sendExisting(
       throw error;
     }
     watchdog.throwIfTimedOut();
-    return await collectResponse(response, watchdog, "response stream", streamIndex);
+    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log);
   } finally {
     watchdog.dispose();
   }
@@ -307,8 +388,12 @@ export async function answerTurn(
   community: string,
   log: (message: string) => void = () => {},
   agentSilenceTimeoutMs = DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
+  agentWorkTimeoutMs = DEFAULT_AGENT_WORK_TIMEOUT_MS,
 ): Promise<TurnOutcome> {
-  const intervalMs = validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs);
+  const intervalMs: AgentTimeouts = {
+    silenceMs: validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs),
+    workMs: validateAgentSilenceTimeoutMs(agentWorkTimeoutMs),
+  };
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
@@ -337,6 +422,8 @@ export async function answerTurn(
         }),
         () => session.state.streamIndex,
         intervalMs,
+        (signal) => session.stream({ follow: true, startIndex: session.state.streamIndex, signal }),
+        log,
       );
       sessions.set(community, channel, {
         id: existing.id,
@@ -378,6 +465,8 @@ export async function answerTurn(
       watchdog,
       "create response stream",
       () => created.session.state.streamIndex,
+      (signal) => created.session.stream({ follow: true, startIndex: created.session.state.streamIndex, signal }),
+      log,
     );
     sessions.set(community, channel, {
       id: created.session.state.sessionId,
