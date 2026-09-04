@@ -19,12 +19,15 @@ function fixture(options = {}) {
   const systemd = join(dir, "systemd");
   const log = join(dir, "commands.log");
   mkdirSync(join(dir, ".eve/.workflow-data/runs"), { recursive: true });
+  mkdirSync(join(dir, "agent"));
   mkdirSync(join(dir, "node_modules"));
   mkdirSync(bin);
   mkdirSync(systemd);
   writeFileSync(join(dir, ".eve/.workflow-data/runs/open.json"), JSON.stringify({ runId: "run-open", status: "running" }));
   writeFileSync(join(dir, "package-lock.json"), "original lock\n");
   writeFileSync(join(dir, "node_modules/sentinel"), "installed\n");
+  const compiledManifest = join(dir, ".eve/compiled-manifest.json");
+  writeFileSync(compiledManifest, JSON.stringify({ config: { model: { routing: { kind: "gateway" } } } }));
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     name: "fixture",
     scripts: { typecheck: "true", eval: "ARCANA_COMPANY_WORKSPACE=fixture-eval eve eval --strict" },
@@ -53,7 +56,7 @@ esac
 printf 'npm %s\\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
 if [ "$1" = view ]; then
   case "$2 $3" in
-    "@kybernesis/create version") echo 0.14.5 ;;
+    "@kybernesis/create version") ${options.createVersion === null ? "exit 1" : `printf '%s\n' ${JSON.stringify(options.createVersion ?? "0.14.8")}`} ;;
     "@kybernesis/buzz version") echo 0.9.0 ;;
     "@kybernesis/evals version") echo 0.6.2 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
@@ -88,6 +91,9 @@ exit 0
 `);
   executable(join(bin, "npx"), `#!/bin/sh
 printf 'npx %s\\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
+if [ "$*" = "eve info --json" ]; then
+  printf '%s\\n' ${JSON.stringify(JSON.stringify({ status: "ok", diagnostics: { errors: 0, warnings: 0 }, artifacts: { compiledManifest } }))}
+fi
 exit 0
 `);
   executable(join(bin, "systemctl"), `#!/bin/sh
@@ -138,6 +144,82 @@ function runUpgrade(fix, args = ["--yes"]) {
 function commandLog(fix) {
   return existsSync(fix.log) ? readFileSync(fix.log, "utf8") : "";
 }
+
+function runDoctor(fix) {
+  return spawnSync(process.execPath, [cli, "doctor"], {
+    cwd: fix.dir,
+    env: fix.env,
+    encoding: "utf8",
+  });
+}
+
+test("a known-stale kyb refuses before project reads, mutation, or downstream commands", () => {
+  const fix = fixture({ createVersion: "0.14.9", bridgeState: "active" });
+  try {
+    const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
+    const lock = readFileSync(join(fix.dir, "package-lock.json"), "utf8");
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
+    assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
+    assert.equal(readFileSync(join(fix.dir, "package-lock.json"), "utf8"), lock);
+    assert.equal(readFileSync(join(fix.dir, "node_modules/sentinel"), "utf8"), "installed\n");
+    assert.equal(commandLog(fix), "npm view @kybernesis/create version\n");
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("--allow-stale prints the warning and continues through install and validation", () => {
+  const fix = fixture({ createVersion: "0.14.9" });
+  try {
+    const result = runUpgrade(fix, ["--yes", "--allow-stale"]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
+    assert.match(commandLog(fix), /^npm install$/m);
+    assert.match(commandLog(fix), /^npm ls eve$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+for (const [label, createVersion] of [["failed", null], ["empty", ""]]) {
+  test(`${label} self-version lookup remains permissive`, () => {
+    const fix = fixture({ createVersion });
+    try {
+      const result = runUpgrade(fix);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.doesNotMatch(result.stdout, /old kyb reports an old pin/);
+      assert.match(commandLog(fix), /^npm install$/m);
+      assert.match(commandLog(fix), /^npm ls eve$/m);
+    } finally {
+      fix.cleanup();
+    }
+  });
+}
+
+test("doctor reports stale kyb as a non-fatal warning with the shared fix", () => {
+  const fix = fixture({ createVersion: "0.14.9" });
+  try {
+    const result = runDoctor(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /! kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
+    assert.match(result.stdout, /0 failing/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("upgrade-specific and general help document --allow-stale", () => {
+  for (const args of [["upgrade", "--help"], ["--help"]]) {
+    const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /--allow-stale/);
+  }
+});
 
 test("confirmation refusal occurs before manifest mutation, deletion, or bridge commands", () => {
   const fix = fixture({ bridgeState: "active" });
