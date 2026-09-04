@@ -85,7 +85,7 @@ Run inside an agent project. Checks, with pass/warn/fail per line:
 
 Exit code 1 on any failure — usable as a CI preflight.
 
-## `kyb upgrade [--skip-eval] [--yes]`
+## `kyb upgrade [--host[=<ssh-target>]] [--skip-eval] [--yes]`
 
 Compares installed `@kybernesis/*` versions against npm, installs what's
 behind, typechecks, then **runs the eval suite as the gate** — prints
@@ -100,6 +100,23 @@ runs fail closed unless `--yes` (or `-y`) is supplied. The warning is still prin
 are migrated to `kyb-eval`; custom scripts are left untouched with a manual fix.
 The wrapper counts corruption diagnostics beside the eval result and turns a
 nominally green eve exit into a failure when condemned durable state was seen.
+It also identifies failures from `judge.autoevals.*` assertions as judge
+reachability or HTTP failures rather than implying that the agent model failed.
+
+Immediately before a local gate, upgrade classifies the authored and compiled
+model route the same way as `kyb doctor`, then checks host-only dependencies. A
+Claude subscription agent must have its loopback proxy answering, and an
+exe-backed agent or judge must be able to reach `EXE_LLM_URL` (or the internal
+exe model catalog). If those routes are unavailable, the eval command is not
+run and upgrade exits with status 2, prints that the gate can only run on the
+host, and gives the exact ssh command. It does not print "Do NOT deploy" because
+no eval exercised the code.
+
+Use `kyb upgrade --host` to run the gate over ssh after the upgrade. The target
+uses the same defaults as `kyb deploy`: `EVE_SSH_HOST`, then
+`$EXE_VM_NAME.exe.xyz`; `--host=<ssh-target>` overrides them. The remote project
+path is `~/<package-name>`, and the remote eval output streams directly to the
+terminal. `--skip-eval` remains an explicit bypass and performs no preflight.
 
 On self-hosted agents, upgrade also reconciles package-owned host artifacts. It
 refreshes a stale `/etc/cron.daily/kyb-docker-prune` and an existing generated

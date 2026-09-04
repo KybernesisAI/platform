@@ -109,6 +109,10 @@ test("doctor uses authored helpers first and Eve routing only for generic routes
     classifyModelReach("model: exeModel({ model, createOpenAI })", { kind: "external", provider: "openai" }),
     { kind: "exe" },
   );
+  assert.deepEqual(
+    classifyModelReach("model: grokSubscription({ model, createOpenAI })", { kind: "external", provider: "openai" }),
+    { kind: "grok-sub" },
+  );
   assert.deepEqual(classifyModelReach(null, compiledRouting({ kind: "gateway", target: "anthropic" })), {
     kind: "gateway",
   });

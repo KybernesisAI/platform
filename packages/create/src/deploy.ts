@@ -38,7 +38,7 @@ function hostOf(dir: string): "vercel" | "exe" {
 }
 
 /** The ssh target: an explicit flag, then EVE_SSH_HOST, then the exe VM name. */
-function sshTarget(dir: string, explicit?: string): string | null {
+export function sshTarget(dir: string, explicit?: string): string | null {
   const e = env(dir);
   if (explicit) return explicit;
   if (e.EVE_SSH_HOST) return e.EVE_SSH_HOST;
@@ -111,6 +111,11 @@ async function ensureModel(dir: string, target: string): Promise<void> {
   console.log(green(`  ✓ EXE_MODEL="${chosen}" written to .env.local\n`));
 }
 
+export function remoteProjectPath(dir: string): string {
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: string };
+  return `~/${pkg.name ?? "agent"}`;
+}
+
 export async function deploy(options: { host?: string; dir?: string; noEnv?: boolean }): Promise<void> {
   const dir = options.dir ?? process.cwd();
   if (!existsSync(join(dir, "agent"))) {
@@ -136,8 +141,7 @@ export async function deploy(options: { host?: string; dir?: string; noEnv?: boo
     return;
   }
 
-  const name = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).name ?? "agent";
-  const remote = `~/${name}`;
+  const remote = remoteProjectPath(dir);
   console.log(dim(`  host: ${target}   path: ${remote}\n`));
 
   await ensureModel(dir, target);

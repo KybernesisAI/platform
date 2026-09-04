@@ -39,6 +39,13 @@ if (mode === "normal-corrupt") {
 } else if (mode === "failed") {
   process.stdout.write("Results:\\n  Failed: 1\\n");
   process.exitCode = 7;
+} else if (mode === "judge-unreachable") {
+  process.stdout.write("  ✗ judge.autoevals.correctness\\n    autoevals error: connect EHOSTDOWN 169.254.169.254:443\\nResults:\\n  Failed: 1\\n");
+  process.exitCode = 7;
+} else if (mode === "judge-status") {
+  process.stderr.write("judge.autoevals.correctness\\nautoevals error: request failed with HTTP 503\\n");
+  process.stdout.write(JSON.stringify({ passed: 0, failed: 1 }));
+  process.exitCode = 7;
 } else {
   process.stdout.write("progress\\nResults:\\n  Passed: 4\\n");
 }
@@ -125,6 +132,31 @@ test("an existing nonzero eve status is preserved", () => {
     const result = run(dir, "failed");
     assert.equal(result.status, 7);
     assert.match(result.stdout, /Condemned runs: 0/);
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("judge transport failures are named as judge failures beside the console summary", () => {
+  const { dir, cleanup } = fixture();
+  try {
+    const result = run(dir, "judge-unreachable");
+    assert.equal(result.status, 7);
+    assert.match(result.stdout, /Judge failure: the judge could not be reached\.\nResults:/);
+    assert.doesNotMatch(result.stdout, /agent (failed|could not)/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test("judge HTTP failures report the response status without contaminating JSON stdout", () => {
+  const { dir, cleanup } = fixture();
+  try {
+    const result = run(dir, "judge-status", ["--json"]);
+    assert.equal(result.status, 7);
+    assert.deepEqual(JSON.parse(result.stdout), { passed: 0, failed: 1 });
+    assert.match(result.stderr, /Judge failure: the judge answered 503\./);
   } finally {
     cleanup();
   }

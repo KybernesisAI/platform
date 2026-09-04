@@ -1,6 +1,7 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
@@ -10,6 +11,8 @@ import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./remov
 
 import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
+import { remoteProjectPath, sshTarget } from "./deploy.js";
+import { classifyModelReach } from "./model-reach.js";
 import { checkSelfVersion, versionLt } from "./self-version.js";
 import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "./templates.js";
 import {
@@ -393,6 +396,7 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
 
 export interface UpgradeOptions {
   allowStale?: boolean;
+  host?: true | string;
   skipEval?: boolean;
   yes?: boolean;
 }
@@ -414,6 +418,145 @@ function repairEvalCommand(cwd: string): void {
       `    Manual remediation: make this command invoke kyb-eval instead of eve eval, preserving its setup and arguments.\n` +
       `    Current scripts.eval: ${dim(JSON.stringify(current))}`,
   );
+}
+
+const EVAL_GATE_UNAVAILABLE_EXIT = 2;
+const DEFAULT_EXE_MODELS_URL = "https://llm.int.exe.xyz/models.json";
+
+type EvalGatePreflight =
+  | { kind: "ready" }
+  | { kind: "unavailable"; reasons: string[] };
+
+function evalGateEnvironment(cwd: string): Record<string, string> {
+  const envPath = join(cwd, ".env.local");
+  return {
+    ...(existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {}),
+    ...(process.env as Record<string, string>),
+  };
+}
+
+async function routeAnswers(url: string): Promise<boolean> {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(6000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function claudeSubscriptionProxyReady(cwd: string): Promise<boolean> {
+  const module = join(cwd, "node_modules/@kybernesis/exe/dist/claude.js");
+  if (!existsSync(module)) return false;
+  try {
+    const loaded = (await import(pathToFileURL(module).href)) as {
+      claudeProxyReady?: () => Promise<{ ok: boolean }>;
+    };
+    if (typeof loaded.claudeProxyReady !== "function") return false;
+    return (await loaded.claudeProxyReady()).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve an exe-backed judge from the provider the authored config actually calls. */
+function exeJudgeUrl(cwd: string, env: Record<string, string>): string | null | undefined {
+  const paths = [join(cwd, "evals/evals.config.ts"), join(cwd, "evals.config.ts")];
+  const path = paths.find((candidate) => existsSync(candidate));
+  if (!path) return null;
+  const source = readFileSync(path, "utf8");
+  const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*\(/.exec(source)?.[1];
+  if (!judgeProvider) return null;
+  const escaped = judgeProvider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const providerBody = new RegExp(`(?:const|let)\\s+${escaped}\\s*=\\s*create[A-Za-z]+\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*\\)`).exec(source)?.[1];
+  if (!providerBody) return /EXE_LLM_URL|llm\.int\.exe\.xyz/.test(source) ? undefined : null;
+  if (/EXE_LLM_URL/.test(providerBody)) return env.EXE_LLM_URL || DEFAULT_EXE_MODELS_URL;
+  const baseUrl = /baseURL\s*:\s*["']([^"']+)["']/.exec(providerBody)?.[1];
+  if (baseUrl?.includes("llm.int.exe.xyz")) return baseUrl;
+  return null;
+}
+
+export async function preflightEvalGate(cwd: string): Promise<EvalGatePreflight> {
+  const env = evalGateEnvironment(cwd);
+  const agentPath = join(cwd, "agent/agent.ts");
+  const authoredSource = existsSync(agentPath) ? readFileSync(agentPath, "utf8") : null;
+  const inspection = inspectEveAgent(cwd, env);
+  const reach = classifyModelReach(authoredSource, inspection?.modelRouting ?? {
+    kind: "unresolved",
+    reason: "eve info failed before compiled model routing could be inspected",
+  });
+  const reasons: string[] = [];
+
+  switch (reach.kind) {
+    case "claude-sub":
+      if (!(await claudeSubscriptionProxyReady(cwd))) reasons.push("the agent model proxy is unreachable");
+      break;
+    case "exe":
+      if (!(await routeAnswers(env.EXE_LLM_URL || DEFAULT_EXE_MODELS_URL))) reasons.push("the agent model route is unreachable");
+      break;
+    case "unresolved":
+      reasons.push(`the agent model route could not be resolved (${reach.reason})`);
+      break;
+    case "grok-sub":
+    case "gateway":
+    case "direct-provider":
+      break;
+  }
+
+  const judgeUrl = exeJudgeUrl(cwd, env);
+  if (judgeUrl === undefined) reasons.push("the eve judge route could not be resolved");
+  else if (judgeUrl && !(await routeAnswers(judgeUrl))) reasons.push("the eve judge is unreachable");
+
+  return reasons.length === 0 ? { kind: "ready" } : { kind: "unavailable", reasons };
+}
+
+function hostEvalCommand(cwd: string, target?: string): string {
+  const host = target ?? "<host>";
+  return `ssh ${host} ${shellQuote(`cd ${remoteProjectPath(cwd)} && npm run eval`)}`;
+}
+
+function reportEvalGateUnavailable(cwd: string, target: string | null, reasons: string[]): void {
+  console.log(`\n${yellow("The eval gate for this agent can only run on its host (the model proxy and the eve judge are only reachable there).")}`);
+  for (const reason of reasons) console.log(`  ${dim(reason)}`);
+  console.log(`Run it there: ${bold(hostEvalCommand(cwd, target ?? undefined))}\n`);
+  process.exitCode = EVAL_GATE_UNAVAILABLE_EXIT;
+}
+
+async function runUpgradeEvalGate(cwd: string, host: true | string | undefined): Promise<void> {
+  if (host !== undefined) {
+    const target = sshTarget(cwd, typeof host === "string" && host.length > 0 ? host : undefined);
+    if (!target) {
+      reportEvalGateUnavailable(cwd, null, ["no ssh target is configured"]);
+      return;
+    }
+    console.log(bold(`\nRunning the eval gate on ${target} (${remoteProjectPath(cwd)}) — deploy only on green …\n`));
+    const result = spawnSync("ssh", [target, `cd ${remoteProjectPath(cwd)} && npm run eval`], {
+      cwd,
+      env: process.env,
+      stdio: "inherit",
+    });
+    if (result.status === 0) {
+      console.log(`\n${green("✓ Upgrade green.")} Deploy with: ${bold("npx eve deploy")}\n`);
+    } else {
+      console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts on the host.\n`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  const preflight = await preflightEvalGate(cwd);
+  if (preflight.kind === "unavailable") {
+    reportEvalGateUnavailable(cwd, sshTarget(cwd), preflight.reasons);
+    return;
+  }
+
+  console.log(bold("\nRunning the eval gate (npm run eval) — deploy only on green …\n"));
+  const ok = run("npm", ["run", "eval"], { cwd, allowFail: true });
+  if (ok) {
+    console.log(`\n${green("✓ Upgrade green.")} Deploy with: ${bold("npx eve deploy")}\n`);
+  } else {
+    console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts.\n`);
+    process.exitCode = 1;
+  }
 }
 
 function upgradeEnvironment(cwd: string): Record<string, string | undefined> {
@@ -794,12 +937,5 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     return;
   }
 
-  console.log(bold("\nRunning the eval gate (npm run eval) — deploy only on green …\n"));
-  const ok = run("npm", ["run", "eval"], { cwd, allowFail: true });
-  if (ok) {
-    console.log(`\n${green("✓ Upgrade green.")} Deploy with: ${bold("npx eve deploy")}\n`);
-  } else {
-    console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts.\n`);
-    process.exit(1);
-  }
+  await runUpgradeEvalGate(cwd, options.host);
 }
