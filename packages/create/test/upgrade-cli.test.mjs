@@ -15,6 +15,13 @@ function executable(path, contents) {
   chmodSync(path, 0o755);
 }
 
+// The stale-kyb cases must stay stale across releases: "installed" is the
+// package's own version, "newer" one patch above it. Hardcoded 0.14.8/0.14.9
+// broke the day create became 0.14.9.
+const installedCreateVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const newerCreateVersion = installedCreateVersion.replace(/(\d+)$/, (n) => String(Number(n) + 1));
+const escapeRe = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function fixture(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "kyb-upgrade-cli-"));
   const bin = join(dir, "bin");
@@ -68,7 +75,7 @@ esac
 printf 'npm %s\\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
 if [ "$1" = view ]; then
   case "$2 $3" in
-    "@kybernesis/create version") ${options.createVersion === null ? "exit 1" : `printf '%s\n' ${JSON.stringify(options.createVersion ?? "0.14.8")}`} ;;
+    "@kybernesis/create version") ${options.createVersion === null ? "exit 1" : `printf '%s\n' ${JSON.stringify(options.createVersion ?? installedCreateVersion)}`} ;;
     "@kybernesis/buzz version") echo 0.9.0 ;;
     "@kybernesis/evals version") echo 0.6.2 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
@@ -187,13 +194,13 @@ function runDoctor(fix) {
 }
 
 test("a known-stale kyb refuses before project reads, mutation, or downstream commands", () => {
-  const fix = fixture({ createVersion: "0.14.9", bridgeState: "active" });
+  const fix = fixture({ createVersion: newerCreateVersion, bridgeState: "active" });
   try {
     const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
     const lock = readFileSync(join(fix.dir, "package-lock.json"), "utf8");
     const result = runUpgrade(fix);
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, new RegExp(`kyb ${escapeRe(installedCreateVersion)} is behind ${escapeRe(newerCreateVersion)}`));
     assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
     assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
     assert.equal(readFileSync(join(fix.dir, "package-lock.json"), "utf8"), lock);
@@ -205,11 +212,11 @@ test("a known-stale kyb refuses before project reads, mutation, or downstream co
 });
 
 test("--allow-stale prints the warning and continues through install and validation", () => {
-  const fix = fixture({ createVersion: "0.14.9" });
+  const fix = fixture({ createVersion: newerCreateVersion });
   try {
     const result = runUpgrade(fix, ["--yes", "--allow-stale"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, new RegExp(`kyb ${escapeRe(installedCreateVersion)} is behind ${escapeRe(newerCreateVersion)}`));
     assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
     assert.match(commandLog(fix), /^npm install$/m);
     assert.match(commandLog(fix), /^npm ls eve$/m);
@@ -234,11 +241,11 @@ for (const [label, createVersion] of [["failed", null], ["empty", ""]]) {
 }
 
 test("doctor reports stale kyb as a non-fatal warning with the shared fix", () => {
-  const fix = fixture({ createVersion: "0.14.9" });
+  const fix = fixture({ createVersion: newerCreateVersion });
   try {
     const result = runDoctor(fix);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /! kyb 0\.14\.8 is behind 0\.14\.9/);
+    assert.match(result.stdout, new RegExp(`! kyb ${escapeRe(installedCreateVersion)} is behind ${escapeRe(newerCreateVersion)}`));
     assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
     assert.match(result.stdout, /0 failing/);
   } finally {
