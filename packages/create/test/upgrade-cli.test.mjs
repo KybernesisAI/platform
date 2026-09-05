@@ -6,6 +6,8 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "../dist/templates.js";
+
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
 function executable(path, contents) {
@@ -32,23 +34,23 @@ function fixture(options = {}) {
     name: "fixture",
     scripts: { typecheck: "true", eval: "ARCANA_COMPANY_WORKSPACE=fixture-eval eve eval --strict" },
     dependencies: {
-      "@kybernesis/buzz": "~0.8.0",
-      "@kybernesis/evals": "0.6.1",
-      eve: options.eveRange ?? "0.38.3",
+      "@kybernesis/buzz": options.allCurrent ? "^0.9.0" : "~0.8.0",
+      "@kybernesis/evals": options.allCurrent ? "^0.6.2" : "0.6.1",
+      eve: options.eveRange ?? (options.allCurrent ? "0.49.0" : "0.38.3"),
       zod: "4.4.3",
     },
-    devDependencies: { "@kybernesis/enterprise": "0.7.0", typescript: "7.0.2" },
+    devDependencies: { "@kybernesis/enterprise": options.allCurrent ? "^0.8.0" : "0.7.0", typescript: "7.0.2" },
   }, null, 2) + "\n");
 
   executable(join(bin, "node"), `#!/bin/sh
 case "$*" in
-  *"eve/package.json"*) echo "${options.eveInstalled ?? "0.38.3"}" ;;
-  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "^0.38.0" ;;
-  *"@kybernesis/buzz/package.json"*) echo 0.8.0 ;;
-  *"@kybernesis/evals/package.json"*peerDependencies*) echo "^0.38.0" ;;
-  *"@kybernesis/evals/package.json"*) echo 0.6.1 ;;
-  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "^0.38.0" ;;
-  *"@kybernesis/enterprise/package.json"*) echo 0.7.0 ;;
+  *"eve/package.json"*) echo "${options.eveInstalled ?? (options.allCurrent ? "0.49.0" : "0.38.3")}" ;;
+  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.49.0" : "^0.38.0"}" ;;
+  *"@kybernesis/buzz/package.json"*) echo ${options.allCurrent ? "0.9.0" : "0.8.0"} ;;
+  *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.49.0" : "^0.38.0"}" ;;
+  *"@kybernesis/evals/package.json"*) echo ${options.allCurrent ? "0.6.2" : "0.6.1"} ;;
+  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.49.0" : "^0.38.0"}" ;;
+  *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
   *) exec ${JSON.stringify(process.execPath)} "$@" ;;
 esac
 `);
@@ -115,20 +117,24 @@ exit 0
     writeFileSync(join(systemd, "fixture-agent.service"), `[Service]\nUser=fixture\nWorkingDirectory=${dir}\nEnvironment=PORT=8000\n`);
   }
 
+  const env = {
+    ...process.env,
+    PATH: `${bin}${delimiter}${process.env.PATH}`,
+    KYB_TEST_COMMAND_LOG: log,
+    KYB_SYSTEMD_DIR: systemd,
+    KYB_BRIDGE_STATE: options.bridgeState ?? "inactive",
+    ...(options.installFail ? { KYB_INSTALL_FAIL: "1" } : {}),
+    ...(options.lsFail ? { KYB_LS_FAIL: "1" } : {}),
+    ...(options.stopFail ? { KYB_STOP_FAIL: "1" } : {}),
+    ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
+  };
+  delete env.GITHUB_TOKEN;
+  if (options.githubToken) env.GITHUB_TOKEN = options.githubToken;
+
   return {
     dir,
     log,
-    env: {
-      ...process.env,
-      PATH: `${bin}${delimiter}${process.env.PATH}`,
-      KYB_TEST_COMMAND_LOG: log,
-      KYB_SYSTEMD_DIR: systemd,
-      KYB_BRIDGE_STATE: options.bridgeState ?? "inactive",
-      ...(options.installFail ? { KYB_INSTALL_FAIL: "1" } : {}),
-      ...(options.lsFail ? { KYB_LS_FAIL: "1" } : {}),
-      ...(options.stopFail ? { KYB_STOP_FAIL: "1" } : {}),
-      ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
-    },
+    env,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -208,6 +214,87 @@ test("doctor reports stale kyb as a non-fatal warning with the shared fix", () =
     assert.match(result.stdout, /! kyb 0\.14\.8 is behind 0\.14\.9/);
     assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
     assert.match(result.stdout, /0 failing/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("doctor reports the mounted GitHub off state exactly once with its fix", () => {
+  const fix = fixture();
+  try {
+    mkdirSync(join(fix.dir, "agent/extensions"), { recursive: true });
+    writeFileSync(join(fix.dir, "agent/extensions/github.ts"), githubToolsMountTs());
+    const result = runDoctor(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout.match(/GitHub tools off \(no GITHUB_TOKEN\)/g)?.length, 1);
+    assert.match(result.stdout, /set GITHUB_TOKEN in \.env\.local or the deployment environment, then rebuild and restart/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+for (const [label, setup] of [
+  [".env.local", (fix) => writeFileSync(join(fix.dir, ".env.local"), "GITHUB_TOKEN=from-file\n")],
+  ["process environment", (fix) => { fix.env.GITHUB_TOKEN = "from-process"; }],
+]) {
+  test(`doctor stays silent when GitHub credentials come from ${label}`, () => {
+    const fix = fixture();
+    try {
+      mkdirSync(join(fix.dir, "agent/extensions"), { recursive: true });
+      writeFileSync(join(fix.dir, "agent/extensions/github.ts"), githubToolsMountTs());
+      setup(fix);
+      const result = runDoctor(fix);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.doesNotMatch(result.stdout, /GitHub tools off/);
+    } finally {
+      fix.cleanup();
+    }
+  });
+}
+
+test("upgrade repairs the legacy GitHub mount even when package versions do not change", () => {
+  const fix = fixture({ allCurrent: true });
+  try {
+    mkdirSync(join(fix.dir, "agent/extensions"), { recursive: true });
+    const path = join(fix.dir, "agent/extensions/github.ts");
+    writeFileSync(path, LEGACY_GITHUB_TOOLS_MOUNT);
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /Everything is at latest certified versions/);
+    assert.match(result.stdout, /updated agent\/extensions\/github\.ts/);
+    assert.equal(readFileSync(path, "utf8"), githubToolsMountTs());
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("upgrade repairs the legacy GitHub mount after a successful dependency install", () => {
+  const fix = fixture();
+  try {
+    mkdirSync(join(fix.dir, "agent/extensions"), { recursive: true });
+    const path = join(fix.dir, "agent/extensions/github.ts");
+    writeFileSync(path, LEGACY_GITHUB_TOOLS_MOUNT);
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(commandLog(fix), /^npm install$/m);
+    assert.match(result.stdout, /updated agent\/extensions\/github\.ts/);
+    assert.equal(readFileSync(path, "utf8"), githubToolsMountTs());
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("upgrade preserves a customized GitHub mount and says so", () => {
+  const fix = fixture({ allCurrent: true });
+  try {
+    mkdirSync(join(fix.dir, "agent/extensions"), { recursive: true });
+    const path = join(fix.dir, "agent/extensions/github.ts");
+    const custom = 'export default customGithubPolicy();\n';
+    writeFileSync(path, custom);
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /agent\/extensions\/github\.ts is customized, so it was left unchanged/);
+    assert.equal(readFileSync(path, "utf8"), custom);
   } finally {
     fix.cleanup();
   }

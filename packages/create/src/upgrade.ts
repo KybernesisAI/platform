@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./remov
 import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { checkSelfVersion, versionLt } from "./self-version.js";
+import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "./templates.js";
 import {
   confirmEveUpgrade,
   inspectBuzzSessions,
@@ -211,6 +212,54 @@ function repairSandboxCleanupHooks(cwd: string, deps: Record<string, string>): v
     `  ${green("+")} installed terminal sandbox cleanup for ${added.length} agent scope(s) ` +
       `${dim("(completed and failed sessions only)")}\n`,
   );
+}
+
+export type GithubToolsMountRepair =
+  | { kind: "missing" | "current" | "updated" | "customized" }
+  | { kind: "error"; message: string };
+
+/** Upgrade only the exact registry scaffold; authored GitHub policy is not ours. */
+export function repairGithubToolsMount(cwd: string): GithubToolsMountRepair {
+  const path = join(cwd, "agent/extensions/github.ts");
+  if (!existsSync(path)) return { kind: "missing" };
+
+  let current: string;
+  try {
+    current = readFileSync(path, "utf8");
+  } catch (error) {
+    return { kind: "error", message: `could not read agent/extensions/github.ts: ${(error as Error).message}` };
+  }
+
+  const desired = githubToolsMountTs();
+  if (current === desired) return { kind: "current" };
+  if (current !== LEGACY_GITHUB_TOOLS_MOUNT) return { kind: "customized" };
+
+  const temp = `${path}.kyb-${process.pid}`;
+  try {
+    writeFileSync(temp, desired);
+    renameSync(temp, path);
+    return { kind: "updated" };
+  } catch (error) {
+    rmSync(temp, { force: true });
+    return { kind: "error", message: `could not update agent/extensions/github.ts: ${(error as Error).message}` };
+  }
+}
+
+function reportGithubToolsMountRepair(cwd: string): void {
+  const result = repairGithubToolsMount(cwd);
+  if (result.kind === "updated") {
+    console.log(
+      `  ${green("+")} updated agent/extensions/github.ts ` +
+        `${dim("(GitHub tools stay off until GITHUB_TOKEN is set)")}`,
+    );
+  } else if (result.kind === "customized") {
+    console.log(
+      `  ${yellow("!")} agent/extensions/github.ts is customized, so it was left unchanged.\n` +
+        `    To adopt the quiet no-token behavior, compare it with a new \`kyb init --engineer\` scaffold.`,
+    );
+  } else if (result.kind === "error") {
+    console.log(`  ${yellow("!")} ${result.message}; leaving the file unchanged.`);
+  }
 }
 
 /**
@@ -668,6 +717,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairBuzzSetup(cwd, deps);
     repairRemovedDefaultTools(cwd);
     repairSandboxCleanupHooks(cwd, deps);
+    reportGithubToolsMountRepair(cwd);
     repairHostArtifacts(cwd, deps);
     repairEvalCommand(cwd);
     repairManageRestart(cwd, deps);
@@ -728,6 +778,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairBuzzSetup(cwd, deps);
   repairRemovedDefaultTools(cwd);
   repairSandboxCleanupHooks(cwd, deps);
+  reportGithubToolsMountRepair(cwd);
   repairHostArtifacts(cwd, deps);
   repairEvalCommand(cwd);
   repairManageRestart(cwd, deps);

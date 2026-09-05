@@ -22,6 +22,19 @@ export interface Check {
   detail?: string;
 }
 
+/** Report the opt-in GitHub capability only when its mount is present. */
+export function githubToolsDoctorCheck(
+  mountExists: boolean,
+  env: Record<string, string | undefined>,
+): Check | null {
+  if (!mountExists || env.GITHUB_TOKEN) return null;
+  return {
+    verdict: "warn",
+    label: "GitHub tools off (no GITHUB_TOKEN)",
+    detail: "set GITHUB_TOKEN in .env.local or the deployment environment, then rebuild and restart",
+  };
+}
+
 /** The shape @kybernesis/exe's inspector returns; declared here so create keeps zero runtime deps. */
 export interface DockerTemplateInspection {
   status: "skipped" | "present" | "failed";
@@ -172,6 +185,12 @@ export async function doctor(): Promise<void> {
     ...(process.env as Record<string, string>),
   };
   if (!existsSync(envPath)) add("warn", ".env.local missing", "copy .env.example and fill it");
+
+  const githubCheck = githubToolsDoctorCheck(
+    existsSync(join(cwd, "agent/extensions/github.ts")),
+    env,
+  );
+  if (githubCheck) add(githubCheck.verdict, githubCheck.label, githubCheck.detail);
 
   // ── arcana keys: validate every key↔workspace pair read-only ───────────
   const arcanaPairs: Array<{ key: string; ws: string; label: string }> = [];

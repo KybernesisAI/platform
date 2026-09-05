@@ -2,6 +2,39 @@
 
 import type { ModelScaffoldConfig } from "./model-reach.js";
 
+/** Exact output of Eve's legacy extension/github-tools registry item. */
+export const LEGACY_GITHUB_TOOLS_MOUNT = `import githubTools from "@github-tools/eve-extension";
+
+export default githubTools({});
+`;
+
+/**
+ * The managed GitHub extension mount written by init and recognized by upgrade.
+ *
+ * Eve discovers configured extensions from the direct imported-factory default
+ * call, so keep that syntax. An empty include list prevents the dynamic resolver
+ * from building any descriptors without a credential, while the lazy provider
+ * avoids eager missing-token validation. After GITHUB_TOKEN is added, a restart
+ * evaluates the module again and preserves the registry's original `{}` behavior.
+ */
+export function githubToolsMountTs(): string {
+  return `import githubTools from "@github-tools/eve-extension";
+
+function githubToolsOptions(hasToken = Boolean(process.env.GITHUB_TOKEN)) {
+  return hasToken
+    ? {}
+    : {
+        include: [],
+        token: async () => {
+          throw new Error("GITHUB_TOKEN is not set.");
+        },
+      };
+}
+
+export default githubTools(githubToolsOptions());
+`;
+}
+
 export const DEPT_DESCRIPTIONS: Record<string, string> = {
   finance:
     "Finance specialist: financials, budgets, spend, revenue, invoices, runway, and financial reporting. Keeps the finance team's own memory workspace. Delegate any finance-shaped task, question, or reporting request here.",

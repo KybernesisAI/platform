@@ -27,6 +27,7 @@ import {
   evalScript,
   hostAgentTs,
   hostSteps,
+  githubToolsMountTs,
   identityMd,
   rootArcanaTs,
   subagentAgentTs,
@@ -52,6 +53,17 @@ const CORE_ITEMS = ["enterprise", "arcana", "evals"] as const;
 const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
 const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
+/**
+ * Replace Eve's freshly installed registry mount with the Kybernesis-managed
+ * token-aware form. A failed registry add must not create a capability file.
+ */
+export function finalizeGithubToolsRegistryMount(cwd: string, registryAddSucceeded: boolean): boolean {
+  if (!registryAddSucceeded) return false;
+  const path = join(cwd, "agent/extensions/github.ts");
+  if (!existsSync(path)) return false;
+  writeFileSync(path, githubToolsMountTs());
+  return true;
+}
 
 export interface InitOptions {
   engineer?: boolean;
@@ -254,6 +266,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     const engItems = [...ENGINEER_ITEMS_ALL, ...(host === "vercel" ? ENGINEER_ITEMS_VERCEL : [])];
     for (const item of engItems) {
       const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
+      if (item === "extension/github-tools") finalizeGithubToolsRegistryMount(dir, ok);
       if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
     }
   }
