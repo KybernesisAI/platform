@@ -18,6 +18,7 @@ export type CompiledModelRouting =
 export type DoctorModelReach =
   | { kind: "claude-sub" }
   | { kind: "exe" }
+  | { kind: "grok-sub" }
   | { kind: "gateway" }
   | { kind: "direct-provider"; provider?: string }
   | { kind: "unresolved"; reason: string };
@@ -72,10 +73,13 @@ export function classifyModelReach(
   if (authoredSource !== null) {
     const claudeSubscription = /\bclaudeSubscription\s*\(/.test(authoredSource);
     const exeModel = /\bexeModel\s*\(/.test(authoredSource);
-    if (claudeSubscription && !exeModel) return { kind: "claude-sub" };
-    if (exeModel && !claudeSubscription) return { kind: "exe" };
-    if (claudeSubscription && exeModel) {
-      return { kind: "unresolved", reason: "root agent authors both claudeSubscription() and exeModel()" };
+    const grokSubscription = /\bgrokSubscription\s*\(/.test(authoredSource);
+    const authored = [claudeSubscription, exeModel, grokSubscription].filter(Boolean).length;
+    if (authored === 1 && claudeSubscription) return { kind: "claude-sub" };
+    if (authored === 1 && exeModel) return { kind: "exe" };
+    if (authored === 1 && grokSubscription) return { kind: "grok-sub" };
+    if (authored > 1) {
+      return { kind: "unresolved", reason: "root agent authors more than one model reach helper" };
     }
   }
 

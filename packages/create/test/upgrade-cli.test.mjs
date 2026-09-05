@@ -22,14 +22,24 @@ function fixture(options = {}) {
   const log = join(dir, "commands.log");
   mkdirSync(join(dir, ".eve/.workflow-data/runs"), { recursive: true });
   mkdirSync(join(dir, "agent"));
+  mkdirSync(join(dir, "evals"));
   mkdirSync(join(dir, "node_modules"));
+  if (options.claudeProxyReady !== undefined) {
+    const exeDist = join(dir, "node_modules/@kybernesis/exe/dist");
+    mkdirSync(exeDist, { recursive: true });
+    writeFileSync(join(dir, "node_modules/@kybernesis/exe/package.json"), JSON.stringify({ type: "module" }));
+    writeFileSync(join(exeDist, "claude.js"), `export async function claudeProxyReady() { return { ok: ${options.claudeProxyReady} }; }\n`);
+  }
   mkdirSync(bin);
   mkdirSync(systemd);
   writeFileSync(join(dir, ".eve/.workflow-data/runs/open.json"), JSON.stringify({ runId: "run-open", status: "running" }));
   writeFileSync(join(dir, "package-lock.json"), "original lock\n");
   writeFileSync(join(dir, "node_modules/sentinel"), "installed\n");
   const compiledManifest = join(dir, ".eve/compiled-manifest.json");
-  writeFileSync(compiledManifest, JSON.stringify({ config: { model: { routing: { kind: "gateway" } } } }));
+  writeFileSync(compiledManifest, JSON.stringify({ config: { model: { routing: options.compiledRouting ?? { kind: "gateway" } } } }));
+  writeFileSync(join(dir, "agent/agent.ts"), options.agentSource ?? "export default {};\n");
+  if (options.judgeConfig) writeFileSync(join(dir, "evals/evals.config.ts"), options.judgeConfig);
+  if (options.envLocal) writeFileSync(join(dir, ".env.local"), options.envLocal);
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     name: "fixture",
     scripts: { typecheck: "true", eval: "ARCANA_COMPANY_WORKSPACE=fixture-eval eve eval --strict" },
@@ -83,6 +93,9 @@ if [ "$1" = install ]; then
   echo regenerated > package-lock.json
   exit 0
 fi
+if [ "$1 $2" = "run eval" ]; then
+  exit "\${KYB_EVAL_STATUS:-0}"
+fi
 if [ "$1 $2" = "ls eve" ]; then
   [ "$KYB_LS_FAIL" = 1 ] && exit 1
   echo 'fixture@1.0.0'
@@ -97,6 +110,10 @@ if [ "$*" = "eve info --json" ]; then
   printf '%s\\n' ${JSON.stringify(JSON.stringify({ status: "ok", diagnostics: { errors: 0, warnings: 0 }, artifacts: { compiledManifest } }))}
 fi
 exit 0
+`);
+  executable(join(bin, "ssh"), `#!/bin/sh
+printf 'ssh %s\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
+exit "\${KYB_SSH_STATUS:-0}"
 `);
   executable(join(bin, "systemctl"), `#!/bin/sh
 printf 'systemctl %s\\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
@@ -127,6 +144,8 @@ exit 0
     ...(options.lsFail ? { KYB_LS_FAIL: "1" } : {}),
     ...(options.stopFail ? { KYB_STOP_FAIL: "1" } : {}),
     ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
+    ...(options.evalStatus !== undefined ? { KYB_EVAL_STATUS: String(options.evalStatus) } : {}),
+    ...(options.sshStatus !== undefined ? { KYB_SSH_STATUS: String(options.sshStatus) } : {}),
   };
   delete env.GITHUB_TOKEN;
   if (options.githubToken) env.GITHUB_TOKEN = options.githubToken;
@@ -141,6 +160,14 @@ exit 0
 
 function runUpgrade(fix, args = ["--yes"]) {
   return spawnSync(process.execPath, [cli, "upgrade", "--skip-eval", ...args], {
+    cwd: fix.dir,
+    env: fix.env,
+    encoding: "utf8",
+  });
+}
+
+function runUpgradeWithEval(fix, args = ["--yes"]) {
+  return spawnSync(process.execPath, [cli, "upgrade", ...args], {
     cwd: fix.dir,
     env: fix.env,
     encoding: "utf8",
@@ -300,11 +327,86 @@ test("upgrade preserves a customized GitHub mount and says so", () => {
   }
 });
 
-test("upgrade-specific and general help document --allow-stale", () => {
+test("upgrade-specific and general help document --host and --allow-stale", () => {
   for (const args of [["upgrade", "--help"], ["--help"]]) {
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /--allow-stale/);
+    assert.match(result.stdout, /--host/);
+  }
+});
+
+
+const exeJudgeConfig = `import { defineEvalConfig } from "eve/evals";
+import { createAnthropic } from "@ai-sdk/anthropic";
+const exe = createAnthropic({
+  baseURL: process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1",
+  apiKey: "exe-integration",
+});
+export default defineEvalConfig({ judge: { model: exe("judge") } });
+`;
+
+test("an unreachable host-only model and judge stop before eval with distinct guidance", () => {
+  const fix = fixture({
+    eveInstalled: "0.49.0",
+    eveRange: "^0.49.0",
+    agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
+    compiledRouting: { kind: "external", provider: "anthropic" },
+    claudeProxyReady: false,
+    judgeConfig: exeJudgeConfig,
+    envLocal: "EVE_SSH_HOST=fixture-host\nEXE_LLM_URL=http://127.0.0.1:1/v1\n",
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(result.stdout, /can only run on its host/);
+    assert.match(result.stdout, /ssh fixture-host 'cd ~\/fixture && npm run eval'/);
+    assert.doesNotMatch(result.stdout, /Do NOT deploy/);
+    assert.doesNotMatch(commandLog(fix), /^npm run eval$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("reachable subscription proxy and exe judge preserve the local eval gate", () => {
+  const fix = fixture({
+    eveInstalled: "0.49.0",
+    eveRange: "^0.49.0",
+    agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
+    compiledRouting: { kind: "external", provider: "anthropic" },
+    claudeProxyReady: true,
+    judgeConfig: exeJudgeConfig,
+    envLocal: "EXE_LLM_URL=data:application/json,%7B%7D\n",
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /Running the eval gate \(npm run eval\)/);
+    assert.equal(commandLog(fix).match(/^npm run eval$/gm)?.length, 1);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("bare --host uses deploy defaults and the remote gate exit decides the verdict", () => {
+  const green = fixture({ eveInstalled: "0.49.0", eveRange: "^0.49.0", envLocal: "EXE_VM_NAME=fixture-vm\n" });
+  try {
+    const result = runUpgradeWithEval(green, ["--yes", "--host"]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(commandLog(green), /^ssh fixture-vm\.exe\.xyz cd ~\/fixture && npm run eval$/m);
+    assert.doesNotMatch(commandLog(green), /^npm run eval$/m);
+  } finally {
+    green.cleanup();
+  }
+
+  const red = fixture({ eveInstalled: "0.49.0", eveRange: "^0.49.0", sshStatus: 9 });
+  try {
+    const result = runUpgradeWithEval(red, ["--yes", "--host=ops@example"]);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(commandLog(red), /^ssh ops@example cd ~\/fixture && npm run eval$/m);
+    assert.match(result.stdout, /Evals failed after upgrade/);
+  } finally {
+    red.cleanup();
   }
 });
 

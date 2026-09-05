@@ -55,6 +55,38 @@ function isResultsLine(line: string): boolean {
   return line.replace(ANSI, "").trimStart().startsWith("Results:");
 }
 
+export class JudgeFailureObserver {
+  #partial = { stdout: "", stderr: "" };
+  #sawJudgeAssertion = false;
+  #sawAutoevalsError = false;
+  #status: number | null = null;
+
+  push(chunk: string | Buffer, stream: "stdout" | "stderr"): void {
+    const text = this.#partial[stream] + chunk.toString();
+    const lines = text.split("\n");
+    this.#partial[stream] = lines.pop() ?? "";
+    for (const line of lines) this.#observe(line);
+  }
+
+  finish(): string | null {
+    this.#observe(this.#partial.stdout);
+    this.#observe(this.#partial.stderr);
+    this.#partial = { stdout: "", stderr: "" };
+    if (!this.#sawJudgeAssertion || !this.#sawAutoevalsError) return null;
+    return this.#status === null
+      ? "Judge failure: the judge could not be reached."
+      : `Judge failure: the judge answered ${this.#status}.`;
+  }
+
+  #observe(line: string): void {
+    const content = line.replace(ANSI, "");
+    if (/\bjudge\.autoevals\.[A-Za-z0-9_.-]+/.test(content)) this.#sawJudgeAssertion = true;
+    if (/autoevals error:/i.test(content)) this.#sawAutoevalsError = true;
+    const status = /(?:HTTP|status(?: code)?|answered)\s*[:=]?\s*(\d{3})\b/i.exec(content)?.[1];
+    if (status) this.#status = Number(status);
+  }
+}
+
 class ConsoleStdout {
   #partial = "";
   #summary = "";
@@ -67,12 +99,12 @@ class ConsoleStdout {
     for (const line of lines) this.#line(`${line}\n`, line);
   }
 
-  finish(condemned: number): void {
+  finish(condemned: number, judgeFailure: string | null): void {
     if (this.#partial.length > 0) this.#line(this.#partial, this.#partial);
     if (this.#holdingSummary) {
-      process.stdout.write(`Condemned runs: ${condemned}\n${this.#summary}`);
+      process.stdout.write(`Condemned runs: ${condemned}\n${judgeFailure ? `${judgeFailure}\n` : ""}${this.#summary}`);
     } else {
-      process.stdout.write(`Condemned runs: ${condemned}\n`);
+      process.stdout.write(`Condemned runs: ${condemned}\n${judgeFailure ? `${judgeFailure}\n` : ""}`);
     }
     this.#partial = "";
   }
@@ -99,6 +131,7 @@ export async function runEval(args: string[] = process.argv.slice(2)): Promise<n
   const stdoutCounter = new CorruptionLineCounter();
   const stderrCounter = new CorruptionLineCounter();
   const consoleStdout = jsonMode ? undefined : new ConsoleStdout();
+  const judgeFailure = new JudgeFailureObserver();
 
   let cli: string;
   try {
@@ -119,11 +152,13 @@ export async function runEval(args: string[] = process.argv.slice(2)): Promise<n
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutCounter.push(chunk);
+      judgeFailure.push(chunk, "stdout");
       if (jsonMode) process.stdout.write(chunk);
       else consoleStdout?.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderrCounter.push(chunk);
+      judgeFailure.push(chunk, "stderr");
       process.stderr.write(chunk);
     });
     child.on("error", (error) => {
@@ -134,8 +169,13 @@ export async function runEval(args: string[] = process.argv.slice(2)): Promise<n
       stdoutCounter.finish();
       stderrCounter.finish();
       const condemned = stdoutCounter.count + stderrCounter.count;
-      if (jsonMode) console.error(`Condemned runs: ${condemned}`);
-      else consoleStdout?.finish(condemned);
+      const judgeDiagnostic = judgeFailure.finish();
+      if (jsonMode) {
+        console.error(`Condemned runs: ${condemned}`);
+        if (judgeDiagnostic) console.error(judgeDiagnostic);
+      } else {
+        consoleStdout?.finish(condemned, judgeDiagnostic);
+      }
 
       if (spawnFailed || signal) {
         if (signal) console.error(`kyb-eval: eve eval terminated by signal ${signal}`);
