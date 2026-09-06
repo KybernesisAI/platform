@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +17,22 @@ import { test } from "node:test";
 
 const script = fileURLToPath(new URL("../scripts/docker-prune.sh", import.meta.url));
 const serverScript = fileURLToPath(new URL("../scripts/eve-server.sh", import.meta.url));
+
+const rootRun = "01M1Q4SASKGVGWDCEFBKG1ZH8F";
+const builderRun = "01M1Q3TJVVGCPNVVRPAYEA4WMX";
+const missingRun = "01M1Q0".padEnd(26, "0");
+const oldIdleRun = "01M1Q1".padEnd(26, "1");
+const malformedRun = "01M1Q2".padEnd(26, "2");
+for (const id of [rootRun, builderRun, missingRun, oldIdleRun, malformedRun]) assert.equal(id.length, 26);
+
+const tags = {
+  recent: "eve-sbx-tpl-docker-4c41-recent-rt",
+  stale: "eve-sbx-tpl-docker-4c41-stale-rt",
+  absent: "eve-sbx-tpl-docker-4c41-absent-rt",
+  failed: "eve-sbx-tpl-docker-4c41-failed-rt",
+  uncertain: "eve-sbx-tpl-docker-4c41-uncertain-rt",
+  current: "eve-sbx-tpl-docker-4c41-current-rt",
+};
 
 function executable(path, content) {
   writeFileSync(path, content);
@@ -20,12 +45,17 @@ function writeRun(app, id, value) {
   writeFileSync(join(dir, `${id}.json`), typeof value === "string" ? value : JSON.stringify(value));
 }
 
-function marker(app, name, reference) {
+function marker(app, tag, touchedAt) {
   const dir = join(app, ".eve/sandbox-cache/docker/templates");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, name);
-  writeFileSync(path, `${reference}\n`);
+  const path = join(dir, tag);
+  writeFileSync(path, "marker identity is its exact tag-named path\n");
+  utimesSync(path, touchedAt, touchedAt);
   return path;
+}
+
+function sessionName(runId, suffix) {
+  return `eve-sbx-ses-docker-4c4164b5039c3606-18de43bbdbe2-wrun_${runId}-${suffix}`;
 }
 
 function runPrune({ dryRun = false, noAppEnv = false, unavailableRuns = false } = {}) {
@@ -37,14 +67,17 @@ function runPrune({ dryRun = false, noAppEnv = false, unavailableRuns = false } 
   mkdirSync(bin);
   mkdirSync(join(app1, ".eve/.workflow-data/runs"), { recursive: true });
   mkdirSync(join(app2, ".eve/.workflow-data/runs"), { recursive: true });
-  writeRun(app1, "wrun_terminal", { status: "completed" });
-  writeRun(app2, "wrun_running_2h", { status: "running" });
-  writeRun(app2, "wrun_running_30h", { status: "running" });
-  writeRun(app1, "wrun_malformed", "not json");
+  writeRun(app1, `wrun_${rootRun}`, { status: "completed" });
+  writeRun(app2, `wrun_${builderRun}`, { status: "running" });
+  writeRun(app2, `wrun_${oldIdleRun}`, { status: "running" });
+  writeRun(app1, `wrun_${malformedRun}`, "not json");
 
-  const oldMarker = marker(app1, "old", "eve-sandbox-template:eve-sbx-tpl-docker-4c41-old-rt");
-  const failedMarker = marker(app1, "failed", "eve-sandbox-template:eve-sbx-tpl-docker-4c41-failed-rt");
-  const keptMarker = marker(app1, "kept", "eve-sandbox-template:eve-sbx-tpl-docker-4c41-current-rt");
+  // The fake clock is 2026-09-01T20:00:00Z. Exactly seven days is inclusive.
+  const recentMarker = marker(app1, tags.recent, new Date("2026-08-25T20:00:00Z"));
+  const staleMarker = marker(app1, tags.stale, new Date("2026-08-25T19:59:59Z"));
+  const failedMarker = marker(app1, tags.failed, new Date("2026-08-20T00:00:00Z"));
+  const uncertainMarker = marker(app2, tags.uncertain, new Date("2026-08-20T00:00:00Z"));
+  const currentMarker = marker(app1, tags.current, new Date("2026-09-01T19:00:00Z"));
 
   executable(join(bin, "fake-docker"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -53,14 +86,14 @@ case "$1" in
     if [ "\${FAKE_SCENARIO:-}" = no-app ]; then
       printf '%s\\n' 'young|eve-sbx-ses-docker-aaaa-wrun_unknown|2026-09-01 19:00:00 +0000 UTC|Exited (0) 1 hour ago'
     elif [ "\${FAKE_SCENARIO:-}" = unavailable ]; then
-      printf '%s\\n' 'unsafe-missing|eve-sbx-ses-docker-aaaa-wrun_missing|2026-09-01 19:00:00 +0000 UTC|Exited (0) 1 hour ago'
+      printf '%s\\n' 'unsafe-missing|${sessionName(missingRun, "__root__")}|2026-09-01 19:00:00 +0000 UTC|Exited (0) 1 hour ago'
     else
       printf '%s\\n' \\
-        'terminal|eve-sbx-ses-docker-aaaa-wrun_terminal|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
-        'missing|eve-sbx-ses-docker-aaaa-wrun_missing|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
-        'running-2h|eve-sbx-ses-docker-aaaa-wrun_running_2h|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
-        'running-30h|eve-sbx-ses-docker-aaaa-wrun_running_30h|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
-        'malformed|eve-sbx-ses-docker-aaaa-wrun_malformed|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
+        'terminal|${sessionName(rootRun, "__root__")}|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
+        'missing|${sessionName(missingRun, "__root__")}|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
+        'running-2h|${sessionName(builderRun, "subagents-builder")}|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \\
+        'running-30h|${sessionName(oldIdleRun, "subagents-builder")}|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
+        'malformed|${sessionName(malformedRun, "__root__")}|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
         'running-current|eve-sbx-ses-docker-aaaa-wrun_current|2026-08-31 00:00:00 +0000 UTC|Up 1 day' \\
         'running-old|eve-sbx-ses-docker-aaaa-wrun_old|2026-08-20 00:00:00 +0000 UTC|Up 12 days' \\
         'build-live|eve-sbx-tpl-docker-aaaa-live-build|2026-09-01 19:30:00 +0000 UTC|Up 30 minutes' \\
@@ -84,9 +117,12 @@ case "$1" in
     ;;
   images)
     [ "\${FAKE_SCENARIO:-}" = no-app ] && exit 0
-    printf 'eve-sbx-tpl-docker-4c41-old-rt\\t2026-08-20 00:00:00 +0000 UTC\\told-template\\n'
-    printf 'eve-sbx-tpl-docker-4c41-failed-rt\\t2026-08-21 00:00:00 +0000 UTC\\tfailed-template\\n'
-    printf 'eve-sbx-tpl-docker-4c41-current-rt\\t2026-09-01 00:00:00 +0000 UTC\\tcurrent-template\\n'
+    printf '${tags.recent}\\t2026-08-20 00:00:00 +0000 UTC\\trecent-template\\n'
+    printf '${tags.stale}\\t2026-08-20 01:00:00 +0000 UTC\\tstale-template\\n'
+    printf '${tags.absent}\\t2026-08-20 02:00:00 +0000 UTC\\tabsent-template\\n'
+    printf '${tags.failed}\\t2026-08-20 03:00:00 +0000 UTC\\tfailed-template\\n'
+    printf '${tags.uncertain}\\t2026-08-20 04:00:00 +0000 UTC\\tuncertain-template\\n'
+    printf '${tags.current}\\t2026-09-01 14:23:00 +0000 UTC\\tcurrent-template\\n'
     ;;
   rmi) [ "$2" = failed-template ] && exit 1; exit 0 ;;
   stop|rm|builder|image) exit 0 ;;
@@ -97,6 +133,10 @@ esac
 [ "$*" = '-u +%FT%TZ' ] && { echo 2026-09-01T20:00:00Z; exit 0; }
 case "$*" in *"6 hours ago"*) echo '2026-09-01 14:00:00'; exit 0 ;; esac
 exec /bin/date "$@"
+`);
+  executable(join(bin, "stat"), `#!/bin/sh
+case "$*" in *${tags.uncertain}) exit 1 ;; esac
+exec /usr/bin/stat "$@"
 `);
   executable(join(bin, "df"), "#!/bin/sh\nprintf 'overlay 100G 20G 80G 20%% /\\n'\n");
   if (unavailableRuns) {
@@ -125,9 +165,11 @@ exec /bin/ls "$@"
       output,
       calls: readFileSync(log, "utf8").trim().split("\n"),
       markers: {
-        old: existsSync(oldMarker),
+        recent: existsSync(recentMarker),
+        stale: existsSync(staleMarker),
         failed: existsSync(failedMarker),
-        kept: existsSync(keptMarker),
+        uncertain: existsSync(uncertainMarker),
+        current: existsSync(currentMarker),
       },
     };
   } finally {
@@ -137,7 +179,7 @@ exec /bin/ls "$@"
 
 const mutated = (calls, id) => calls.some((call) => /^(rm|stop) /.test(call) && call.includes(id));
 
-test("durable run state reclaims exited sessions promptly and protects live sessions", () => {
+test("production-shaped root and subagent names resolve to bare durable run ids", () => {
   const { output, calls } = runPrune();
   assert.ok(calls.includes("rm terminal"));
   assert.ok(calls.includes("rm missing"));
@@ -147,19 +189,18 @@ test("durable run state reclaims exited sessions promptly and protects live sess
   assert.equal(mutated(calls, "running-current"), false);
   assert.ok(calls.includes("stop running-old"));
   assert.ok(calls.includes("rm running-old"));
-  assert.match(output, /workflow run wrun_terminal is terminal/);
-  assert.match(output, /workflow run wrun_missing is conclusively missing/);
-  assert.match(output, /keeping exited session container .*wrun_running_2h/);
+  assert.match(output, new RegExp(`workflow run wrun_${rootRun} is terminal`));
+  assert.doesNotMatch(output, new RegExp(`workflow run wrun_${rootRun}-__root__`));
+  assert.match(output, new RegExp(`keeping exited session container .*wrun_${builderRun}-subagents-builder.*run state running`));
   assert.ok(calls.includes("rm -f build-leak"));
   assert.equal(mutated(calls, "build-live"), false);
 });
 
-test("without an app environment or readable run store a young exited session is kept", () => {
+test("without an app environment or parseable run id a young exited session is kept", () => {
   const { output, calls } = runPrune({ noAppEnv: true });
   assert.equal(mutated(calls, "young"), false);
   assert.match(output, /keeping exited session container .*run state unknown/);
 });
-
 
 test("an unavailable candidate run directory cannot authorize immediate missing-run deletion", () => {
   const { output, calls } = runPrune({ unavailableRuns: true });
@@ -167,12 +208,17 @@ test("an unavailable candidate run directory cannot authorize immediate missing-
   assert.match(output, /keeping exited session container .*run state unknown/);
 });
 
-test("template batches remain per app hash and only successful exact-image markers are removed", () => {
-  const { calls, markers } = runPrune();
-  assert.ok(calls.includes("rmi old-template"));
-  assert.ok(calls.includes("rmi failed-template"));
+test("recent exact tag markers veto batch removal while stale and absent markers do not", () => {
+  const { output, calls, markers } = runPrune();
+  assert.equal(calls.includes("rmi recent-template"), false, "exactly seven days old is inclusive");
+  assert.equal(calls.includes("rmi uncertain-template"), false, "stat uncertainty protects");
   assert.equal(calls.includes("rmi current-template"), false);
-  assert.deepEqual(markers, { old: false, failed: true, kept: true });
+  assert.ok(calls.includes("rmi stale-template"));
+  assert.ok(calls.includes("rmi absent-template"));
+  assert.ok(calls.includes("rmi failed-template"));
+  assert.deepEqual(markers, { recent: true, stale: false, failed: true, uncertain: true, current: true });
+  assert.match(output, /keeping sandbox template .*recent.*marker touched within 7d/);
+  assert.match(output, /keeping sandbox template .*uncertain.*marker time unavailable/);
   assert.ok(calls.includes("builder prune -af"));
   assert.ok(calls.includes("image prune -f"));
 });
@@ -180,9 +226,10 @@ test("template batches remain per app hash and only successful exact-image marke
 test("dry run performs no Docker or marker mutation", () => {
   const { output, calls, markers } = runPrune({ dryRun: true });
   assert.equal(calls.some((call) => /^(rm|rmi|stop|builder|image|container) /.test(call)), false, calls.join("; "));
-  assert.deepEqual(markers, { old: true, failed: true, kept: true });
+  assert.deepEqual(markers, { recent: true, stale: true, failed: true, uncertain: true, current: true });
   assert.match(output, /would remove session container/);
-  assert.match(output, /would remove superseded sandbox template/);
+  assert.match(output, /would remove superseded sandbox template .*marker stale/);
+  assert.match(output, /would remove superseded sandbox template .*marker absent/);
 });
 
 test("startup runs packaged reclaim before Eve while preserving the orphan sweep", () => {
@@ -194,10 +241,14 @@ test("startup runs packaged reclaim before Eve while preserving the orphan sweep
   assert.match(source, /docker rm -f "\$c"/);
 });
 
-test("session thresholds retain the documented defaults and no blanket container prune exists", () => {
+test("threshold defaults and operational rationale remain documented beside the rules", () => {
   const source = readFileSync(script, "utf8");
   assert.match(source, /KYB_PRUNE_IDLE_HOURS:-24/);
   assert.match(source, /KYB_PRUNE_SESSION_HOURS:-168/);
+  assert.match(source, /KYB_PRUNE_TEMPLATE_MARKER_DAYS:-7/);
   assert.doesNotMatch(source, /docker container prune/);
-  assert.match(source, /never break a live session/i);
+  assert.match(source, /inspect failures protect/i);
+  assert.match(source, /per checkout/i);
+  assert.match(source, /share one Docker daemon/i);
+  assert.match(source, /rebuilt alone/i);
 });
