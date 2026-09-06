@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "../dist/templates.js";
+import { diskUsageDoctorCheck } from "../dist/doctor.js";
+import { dockerPruneCronArtifact, registeredDockerPruneAppDirs } from "../dist/docker-prune-cron.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
@@ -31,6 +33,11 @@ function fixture(options = {}) {
   mkdirSync(join(dir, "agent"));
   mkdirSync(join(dir, "evals"));
   mkdirSync(join(dir, "node_modules"));
+  if (options.exeHost) {
+    const scripts = join(dir, "node_modules/@kybernesis/exe/scripts");
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(scripts, "docker-prune.sh"), "#!/bin/sh\necho prune\n", { mode: 0o755 });
+  }
   if (options.claudeProxyReady !== undefined) {
     const exeDist = join(dir, "node_modules/@kybernesis/exe/dist");
     mkdirSync(exeDist, { recursive: true });
@@ -52,6 +59,7 @@ function fixture(options = {}) {
     scripts: { typecheck: "true", eval: "ARCANA_COMPANY_WORKSPACE=fixture-eval eve eval --strict" },
     dependencies: {
       "@kybernesis/buzz": options.allCurrent ? "^0.9.0" : "~0.8.0",
+      ...(options.exeHost ? { "@kybernesis/exe": "^0.12.1" } : {}),
       "@kybernesis/evals": options.allCurrent ? "^0.6.2" : "0.6.1",
       eve: options.eveRange ?? (options.allCurrent ? "0.49.0" : "0.38.3"),
       zod: "4.4.3",
@@ -66,6 +74,8 @@ case "$*" in
   *"@kybernesis/buzz/package.json"*) echo ${options.allCurrent ? "0.9.0" : "0.8.0"} ;;
   *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.49.0" : "^0.38.0"}" ;;
   *"@kybernesis/evals/package.json"*) echo ${options.allCurrent ? "0.6.2" : "0.6.1"} ;;
+  *"@kybernesis/exe/package.json"*peerDependencies*) echo "^0.49.0" ;;
+  *"@kybernesis/exe/package.json"*) echo 0.12.1 ;;
   *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.49.0" : "^0.38.0"}" ;;
   *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
   *) exec ${JSON.stringify(process.execPath)} "$@" ;;
@@ -78,10 +88,12 @@ if [ "$1" = view ]; then
     "@kybernesis/create version") ${options.createVersion === null ? "exit 1" : `printf '%s\n' ${JSON.stringify(options.createVersion ?? installedCreateVersion)}`} ;;
     "@kybernesis/buzz version") echo 0.9.0 ;;
     "@kybernesis/evals version") echo 0.6.2 ;;
+    "@kybernesis/exe version") echo 0.12.1 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
     "eve version") echo 0.49.0 ;;
     "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^0.49.0" ;;
     "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^0.49.0" ;;
+    "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^0.49.0" ;;
     "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^0.49.0" ;;
     *) exit 1 ;;
   esac
@@ -130,12 +142,19 @@ exit 3
 `);
   executable(join(bin, "sudo"), `#!/bin/sh
 printf 'sudo %s\\n' "$*" >> "$KYB_TEST_COMMAND_LOG"
+if [ "$2" = install ]; then
+  [ "\${KYB_SUDO_INSTALL_FAIL:-}" = 1 ] && exit 1
+  cp "$5" "$6" && chmod "$4" "$6"
+  exit $?
+fi
 case "$*" in
   *" systemctl stop "*) [ "$KYB_STOP_FAIL" = 1 ] && exit 1 ;;
   *" systemctl start "*) [ "$KYB_START_FAIL" = 1 ] && exit 1 ;;
 esac
 exit 0
 `);
+
+  if (options.exeHost) executable(join(bin, "docker"), "#!/bin/sh\nexit 0\n");
 
   if (options.agentUnit !== false) {
     writeFileSync(join(systemd, "fixture-agent.service"), `[Service]\nUser=fixture\nWorkingDirectory=${dir}\nEnvironment=PORT=8000\n`);
@@ -146,11 +165,13 @@ exit 0
     PATH: `${bin}${delimiter}${process.env.PATH}`,
     KYB_TEST_COMMAND_LOG: log,
     KYB_SYSTEMD_DIR: systemd,
+    ...(options.exeHost ? { KYB_DOCKER_PRUNE_TARGET: join(dir, "kyb-docker-prune") } : {}),
     KYB_BRIDGE_STATE: options.bridgeState ?? "inactive",
     ...(options.installFail ? { KYB_INSTALL_FAIL: "1" } : {}),
     ...(options.lsFail ? { KYB_LS_FAIL: "1" } : {}),
     ...(options.stopFail ? { KYB_STOP_FAIL: "1" } : {}),
     ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
+    ...(options.sudoInstallFail ? { KYB_SUDO_INSTALL_FAIL: "1" } : {}),
     ...(options.evalStatus !== undefined ? { KYB_EVAL_STATUS: String(options.evalStatus) } : {}),
     ...(options.sshStatus !== undefined ? { KYB_SSH_STATUS: String(options.sshStatus) } : {}),
   };
@@ -608,3 +629,64 @@ test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tr
     }
   }
 });
+
+
+test("docker reclaim cron rendering keeps the shebang first and merges registered projects", () => {
+  const first = dockerPruneCronArtifact("#!/bin/sh\necho prune\n", "/srv/one", null, "/tmp/prune");
+  const second = dockerPruneCronArtifact(
+    "#!/bin/sh\necho prune\n",
+    "/srv/two",
+    first.content.toString("utf8"),
+    "/tmp/prune",
+  );
+  const deduped = dockerPruneCronArtifact(
+    "#!/bin/sh\necho prune\n",
+    "/srv/two",
+    second.content.toString("utf8"),
+    "/tmp/prune",
+  );
+  assert.equal(second.content.toString("utf8").split("\n")[0], "#!/bin/sh");
+  assert.deepEqual(registeredDockerPruneAppDirs(second.content.toString("utf8")), ["/srv/one", "/srv/two"]);
+  assert.deepEqual(deduped.appDirs, ["/srv/one", "/srv/two"]);
+  assert.match(second.content.toString("utf8"), /EVE_APP_DIRS='\/srv\/one:\/srv\/two'/);
+});
+
+test("upgrade installs the rendered daily reclaim with the current project directory", () => {
+  const fix = fixture({ allCurrent: true, exeHost: true });
+  try {
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const target = fix.env.KYB_DOCKER_PRUNE_TARGET;
+    const installed = readFileSync(target, "utf8");
+    assert.equal(installed.split("\n")[0], "#!/bin/sh");
+    assert.deepEqual(registeredDockerPruneAppDirs(installed), [fix.dir]);
+    assert.equal(statSync(target).mode & 0o777, 0o755);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("failed noninteractive cron installation prints a generated-content repair command", () => {
+  const fix = fixture({ allCurrent: true, exeHost: true, sudoInstallFail: true });
+  try {
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /printf %s '[A-Za-z0-9+/=]+' \| base64 -d \| sudo install -m 0755 \/dev\/stdin/);
+    assert.match(result.stdout, new RegExp(fix.env.KYB_DOCKER_PRUNE_TARGET.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  } finally {
+    fix.cleanup();
+  }
+});
+
+for (const [percent, verdict] of [[84, "pass"], [85, "warn"], [94, "warn"], [95, "fail"]]) {
+  test(`doctor disk threshold ${percent}% is ${verdict}`, () => {
+    const check = diskUsageDoctorCheck(percent, "TYPE TOTAL ACTIVE SIZE RECLAIMABLE;Images 9 2 12GB 8GB");
+    assert.equal(check.verdict, verdict);
+    if (verdict === "pass") {
+      assert.equal(check.detail, undefined);
+    } else {
+      assert.match(check.detail, /docker system df|TYPE TOTAL ACTIVE/i);
+      assert.match(check.detail, /sudo \/etc\/cron\.daily\/kyb-docker-prune/);
+    }
+  });
+}

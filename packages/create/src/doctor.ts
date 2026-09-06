@@ -110,6 +110,15 @@ export function agentInputLimitDoctorCheck(limit: AgentInputLimit): Check {
   }
 }
 
+export function diskUsageDoctorCheck(percent: number, dockerSummary: string | null): Check {
+  if (percent < 85) return { verdict: "pass", label: `disk ${percent}% used` };
+  const detail =
+    `Docker: ${dockerSummary?.trim() || "docker system df unavailable"}. ` +
+    `Run: sudo /etc/cron.daily/kyb-docker-prune`;
+  if (percent < 95) return { verdict: "warn", label: `disk ${percent}% used`, detail };
+  return { verdict: "fail", label: `disk ${percent}% used`, detail };
+}
+
 /**
  * The inspector lives in @kybernesis/exe, next to the runtime that owns the
  * templates; create already resolves that package's scripts out of
@@ -450,17 +459,17 @@ export async function doctor(): Promise<void> {
         add(
           "warn",
           "no daily docker reclaim on this host",
-          "sandbox templates, build cache, and generic stopped containers accumulate; durable sessions stay protected and terminal hooks remove closed sessions; `kyb upgrade` installs /etc/cron.daily/kyb-docker-prune",
-        );
-      } else if (percent >= 80) {
-        add(
-          "fail",
-          `disk ${percent}% full despite the reclaim job`,
-          "run it now: sudo /etc/cron.daily/kyb-docker-prune, and check what else is on this host",
+          "sandbox templates, build cache, and generic stopped containers accumulate; `kyb upgrade` installs /etc/cron.daily/kyb-docker-prune",
         );
       } else {
-        add("pass", `daily docker reclaim installed (disk ${percent}% used)`);
+        add("pass", "daily docker reclaim installed");
       }
+      const dockerSummary = capture("sh", [
+        "-c",
+        "docker system df 2>/dev/null | head -3 | paste -sd ';' -",
+      ]);
+      const diskCheck = diskUsageDoctorCheck(percent, dockerSummary);
+      add(diskCheck.verdict, diskCheck.label, diskCheck.detail);
     }
 
     /**
