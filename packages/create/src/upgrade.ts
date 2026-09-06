@@ -1,10 +1,12 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
+import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
@@ -277,7 +279,7 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
 
   const scripts = join(cwd, "node_modules/@kybernesis/exe/scripts");
   const pruneSource = join(scripts, "docker-prune.sh");
-  const pruneTarget = "/etc/cron.daily/kyb-docker-prune";
+  const pruneTarget = process.env.KYB_DOCKER_PRUNE_TARGET ?? "/etc/cron.daily/kyb-docker-prune";
   const hasDocker =
     capture("sh", ["-c", "command -v docker >/dev/null && echo yes"])?.trim() === "yes";
 
@@ -309,19 +311,39 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
   }
 
   if (existsSync(pruneSource)) {
+    let installedPrune: string | null = null;
+    try {
+      if (existsSync(pruneTarget)) installedPrune = readFileSync(pruneTarget, "utf8");
+    } catch {
+      // reconcileHostArtifact reports the unreadable target and refuses to replace it.
+    }
+    const pruneArtifact = dockerPruneCronArtifact(
+      readFileSync(pruneSource, "utf8"),
+      cwd,
+      installedPrune,
+      pruneTarget,
+    );
     const pruneResult = reconcileHostArtifact({
       targetPath: pruneTarget,
-      desiredContent: readFileSync(pruneSource),
+      desiredContent: pruneArtifact.content,
       expectedMode: 0o755,
       installIfMissing: hasDocker,
-      owner: "@kybernesis/exe/scripts/docker-prune.sh",
-      update: () =>
-        run("sudo", ["-n", "install", "-m", "0755", pruneSource, pruneTarget], {
-          cwd,
-          allowFail: true,
-          quiet: true,
-        }),
-      manualCommand: `sudo install -m 0755 ${shellQuote(pruneSource)} ${pruneTarget}`,
+      owner: "@kybernesis/exe/scripts/docker-prune.sh with registered app directories",
+      update: () => {
+        const stageDir = mkdtempSync(join(tmpdir(), "kyb-docker-prune-"));
+        const staged = join(stageDir, "docker-prune.sh");
+        try {
+          writeFileSync(staged, pruneArtifact.content, { mode: 0o755 });
+          return run("sudo", ["-n", "install", "-m", "0755", staged, pruneTarget], {
+            cwd,
+            allowFail: true,
+            quiet: true,
+          });
+        } finally {
+          rmSync(stageDir, { recursive: true, force: true });
+        }
+      },
+      manualCommand: pruneArtifact.manualCommand,
     });
 
     if ((pruneResult === "current" || pruneResult === "updated") && existsSync("/etc/cron.weekly/docker-prune")) {

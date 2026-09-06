@@ -162,6 +162,13 @@ if command -v docker >/dev/null 2>&1; then
   done
 fi
 
+# Reclaim dead session sandboxes before Eve allocates or prewarms more Docker
+# state. Startup must not fail because best-effort maintenance could not run.
+PRUNE_SCRIPT="$APP/node_modules/@kybernesis/exe/scripts/docker-prune.sh"
+if [ -x "$PRUNE_SCRIPT" ]; then
+  EVE_APP_DIR="$APP" "$PRUNE_SCRIPT" || true
+fi
+
 set -a
 [ -f .env.local ] && . ./.env.local
 set +a
