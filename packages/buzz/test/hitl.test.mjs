@@ -3,11 +3,13 @@ import { test } from "node:test";
 
 import {
   followPendingConversation,
+  followerRetryDelayMs,
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
   resolveInputReply,
   respondToPendingConversation,
+  resumeStalledReply,
 } from "../dist/hitl.js";
 
 const request = {
@@ -313,4 +315,26 @@ test("a resumed turn that ends more than one step with prose is published whole,
   );
 
   assert.deepEqual(messages, ["The answer.\n\nStanding by."]);
+});
+
+
+// KYB-545: a follower that reattaches without progress used to do so on a flat
+// one-second timer, forever. These bound that, and say what the room is told.
+test("the follower backs off as it reattaches, and stops widening at the cap", () => {
+  assert.equal(followerRetryDelayMs(0), 1_000);
+  assert.equal(followerRetryDelayMs(1), 2_000);
+  assert.equal(followerRetryDelayMs(2), 4_000);
+  assert.equal(followerRetryDelayMs(6), 60_000, "reaches the cap rather than overshooting it");
+  assert.equal(followerRetryDelayMs(400), 60_000, "a long spin cannot overflow into a huge delay");
+  assert.equal(followerRetryDelayMs(-3), 1_000, "a nonsensical count still yields a usable delay");
+  assert.equal(followerRetryDelayMs(2, 3_000), 3_000, "the cap is honoured when it is lower");
+});
+
+test("giving up on a resumed turn tells the room what happened", () => {
+  const reply = resumeStalledReply(60 * 60_000);
+  assert.match(reply, /answer reached me/i, "credits the person's reply rather than ignoring it");
+  assert.match(reply, /60 minutes/, "states the bound it waited");
+  assert.match(reply, /nothing was posted/i, "says no work landed");
+  assert.match(reply, /ask me again/i, "says the channel is usable");
+  assert.match(resumeStalledReply(60_000), /1 minute\b/, "reads correctly in the singular");
 });

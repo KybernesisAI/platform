@@ -59,6 +59,38 @@ export async function respondToPendingConversation(
   });
 }
 
+/**
+ * How long a follower waits between reattaching when it saw no progress.
+ *
+ * @remarks
+ * The follower used to reattach on a flat one-second timer. With eve's client
+ * spending about 100 s on an idle stream before giving up, that produced the
+ * fixed ~110 s cycle observed in KYB-545: forever, for as long as the process
+ * lived. Backing off turns a spin into a wait, and the cap keeps a genuinely
+ * slow resume from being abandoned for minutes at a time.
+ */
+export function followerRetryDelayMs(cycles: number, capMs = 60_000): number {
+  const safeCycles = Number.isFinite(cycles) ? Math.max(0, Math.trunc(cycles)) : 0;
+  return Math.min(1_000 * 2 ** Math.min(safeCycles, 30), capMs);
+}
+
+/**
+ * What the room is told when a resumed turn produced nothing for too long.
+ *
+ * @remarks
+ * KYB-529's rule applied to the resumed phase: the person committed attention
+ * to answering a question, so silence is the one outcome they must not get.
+ * Say the answer arrived, say the work did not, and say the channel is usable.
+ */
+export function resumeStalledReply(stallMs: number): string {
+  const minutes = Math.max(1, Math.round(stallMs / 60_000));
+  return (
+    `Your answer reached me, but the turn it restarted then went quiet for over ${minutes} minute` +
+    `${minutes === 1 ? "" : "s"} without producing anything, so I have stopped waiting on it. ` +
+    `Nothing was posted and no work landed from it. This channel is clear — ask me again and I will start fresh.`
+  );
+}
+
 /** A session needs its follower while asking or while resumed output is unpublished. */
 export function needsPendingFollower(session: Pick<StoredSession, "pendingInputRequests" | "resumeInFlight">): boolean {
   return Boolean(session.pendingInputRequests?.length || session.resumeInFlight);
