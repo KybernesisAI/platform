@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
+import { assessPeerTree, staleRangeWarning } from "./peer-tree.js";
 import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
@@ -933,9 +934,22 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   const validation = commandResult("npm", ["ls", "eve"], cwd);
   if (validation.status !== 0) {
-    fail("npm ls eve failed. The installed peer tree is not valid.");
-    recoveryGuidance(targets, stoppedBridge ?? undefined);
-    return;
+    /**
+     * Judge WHO objects, not merely that something did.
+     *
+     * A third-party extension whose declared range trails the framework is not
+     * a broken install, and letting it veto the upgrade left kyber without the
+     * host artifacts it was being upgraded for (KYB-548). A Kybernesis package
+     * disagreeing with the framework it is pinned against still stops
+     * everything, and so does an objection we cannot attribute.
+     */
+    const verdict = assessPeerTree(commandResult("npm", ["ls", "eve", "--json"], cwd, false).stdout);
+    if (verdict.fatal || verdict.ok) {
+      fail("npm ls eve failed. The installed peer tree is not valid.");
+      recoveryGuidance(targets, stoppedBridge ?? undefined);
+      return;
+    }
+    console.log(yellow(`  ! ${staleRangeWarning(verdict.offenders, "eve")}`));
   }
 
   if (stoppedBridge && !startStoppedBridge(cwd, stoppedBridge)) return;
