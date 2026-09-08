@@ -74,9 +74,19 @@ function credentialOf(options: ConnectorToolsOptions): string | undefined {
  * person: at 8am there is no person.
  */
 function principalOf(ctx: unknown): string | undefined {
-  const session = (ctx as { session?: { auth?: { current?: { principalId?: string } | null } } })
-    ?.session;
-  return session?.auth?.current?.principalId;
+  const session = (
+    ctx as {
+      session?: { auth?: { current?: { principalId?: string; principalType?: string } | null } };
+    }
+  )?.session;
+  const current = session?.auth?.current;
+  // A schedule or webhook runs as the runtime itself (`eve:app`, type
+  // "runtime"), which is not a person and must not be sent as one: the control
+  // plane compares `user` against people's ids, and a name where an id belongs
+  // turned every unattended run's connector list into an error rather than
+  // the shared set it is entitled to (Ava's GTM routine, 2026-09-08).
+  if (current?.principalType !== undefined && current.principalType !== "user") return undefined;
+  return current?.principalId;
 }
 
 /**
