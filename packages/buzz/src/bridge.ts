@@ -15,11 +15,13 @@ import {
 } from "./turn.js";
 import {
   followPendingConversation,
+  followerRetryDelayMs,
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
   resolveInputReply,
   respondToPendingConversation,
+  resumeStalledReply,
 } from "./hitl.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -248,6 +250,14 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   /** One abortable durable-stream follower owns each parked conversation. */
   const followers = new Map<string, AbortController>();
   const followerRestartTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Why a follower keeps reattaching, per conversation.
+   *
+   * `index` is the durable cursor it last reattached at. The cursor moving is
+   * the only honest evidence that anything is happening: KYB-545's spin held a
+   * frozen index across 25 minutes of retries while the room was told nothing.
+   */
+  const followerRetries = new Map<string, { cycles: number; index: number; since: number }>();
   let stopped = false;
 
   function clearFollowerRestart(conversation: string): void {
@@ -259,6 +269,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   function stopFollower(community: string, channel: string): void {
     const conversation = SessionStore.key(community, channel);
     clearFollowerRestart(conversation);
+    followerRetries.delete(conversation);
     followers.get(conversation)?.abort();
     followers.delete(conversation);
   }
@@ -325,13 +336,43 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     }).finally(() => {
       if (followers.get(conversation) === controller) followers.delete(conversation);
       const recoverable = sessions.get(community, channel);
-      if (!controller.signal.aborted && recoverable && needsPendingFollower(recoverable)) {
-        const timer = setTimeout(() => {
-          followerRestartTimers.delete(conversation);
-          startFollower(community, channel);
-        }, 1_000);
-        followerRestartTimers.set(conversation, timer);
+      if (controller.signal.aborted || !recoverable || !needsPendingFollower(recoverable)) {
+        followerRetries.delete(conversation);
+        return;
       }
+
+      const previous = followerRetries.get(conversation);
+      const progressed = previous === undefined || recoverable.streamIndex > previous.index;
+      const retry = progressed
+        ? { cycles: 0, index: recoverable.streamIndex, since: Date.now() }
+        : { ...previous, cycles: previous.cycles + 1 };
+      followerRetries.set(conversation, retry);
+
+      /**
+       * A resumed turn is the agent working, so it answers to the same ceiling
+       * a live turn does. A question nobody has answered yet is not: a person
+       * may reply tomorrow, and waiting for them is the entire point. Only the
+       * first case can be a stall, and only it gives up.
+       */
+      if (recoverable.resumeInFlight && Date.now() - retry.since >= agentWorkTimeoutMs) {
+        followerRetries.delete(conversation);
+        void serialize(community, channel, async () => {
+          const current = sessions.get(community, channel);
+          if (!current || !needsPendingFollower(current)) return;
+          if (current.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
+          const { pendingInputRequests: _p, resumeInFlight: _r, promptEventIds: _e, ...cleared } = current;
+          sessions.set(community, channel, cleared);
+          relay.reply(channel, resumeStalledReply(agentWorkTimeoutMs));
+          log(`gave up on the resumed turn in ${channel.slice(0, 8)}: no progress past index ${retry.index}`);
+        });
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        followerRestartTimers.delete(conversation);
+        startFollower(community, channel);
+      }, followerRetryDelayMs(retry.cycles));
+      followerRestartTimers.set(conversation, timer);
     });
   }
 
@@ -402,6 +443,24 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           });
           await respondToPendingConversation(session, responses, from, channel);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
+          /**
+           * The answer is in, so this conversation is no longer waiting on a
+           * person. It is waiting on the agent, and that is a thing the bridge
+           * may time out.
+           *
+           * Recording it here rather than leaving it to the follower's
+           * `input.resolved` is what makes a stalled resume detectable at all.
+           * In KYB-545 the follower could not reach the agent, so it never saw
+           * that event, and the store still read "one question pending" an hour
+           * after the person had answered. Nothing may ever time out a wait for
+           * a human, so while that flag was set the room could only be told
+           * nothing.
+           */
+          const answered = sessions.get(from, channel);
+          if (answered?.pendingInputRequests?.length) {
+            const { pendingInputRequests: _resolved, ...rest } = answered;
+            sessions.set(from, channel, { ...rest, resumeInFlight: true });
+          }
           return;
         }
 
