@@ -443,6 +443,24 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           });
           await respondToPendingConversation(session, responses, from, channel);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
+          /**
+           * The answer is in, so this conversation is no longer waiting on a
+           * person. It is waiting on the agent, and that is a thing the bridge
+           * may time out.
+           *
+           * Recording it here rather than leaving it to the follower's
+           * `input.resolved` is what makes a stalled resume detectable at all.
+           * In KYB-545 the follower could not reach the agent, so it never saw
+           * that event, and the store still read "one question pending" an hour
+           * after the person had answered. Nothing may ever time out a wait for
+           * a human, so while that flag was set the room could only be told
+           * nothing.
+           */
+          const answered = sessions.get(from, channel);
+          if (answered?.pendingInputRequests?.length) {
+            const { pendingInputRequests: _resolved, ...rest } = answered;
+            sessions.set(from, channel, { ...rest, resumeInFlight: true });
+          }
           return;
         }
 
