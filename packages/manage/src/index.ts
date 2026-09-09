@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
@@ -78,6 +79,71 @@ export interface ManageOptions {
   issuer?: string;
   /** This agent's registered name. Defaults to KYBERNESIS_AGENT. */
   agent?: string;
+  /** Where the surfaces on this host declare themselves. Defaults to KYB_SURFACES_DIR, then ~/.kybernesis/surfaces. */
+  surfacesDir?: string;
+}
+
+/**
+ * A surface is a way to reach this agent that eve does not know about.
+ *
+ * eve reports the channels the agent authored; a workspace bridge is a separate
+ * process, and without this every console showed an agent that was answering in
+ * a workspace all day as reachable "only through this app". Each bridge writes
+ * a small manifest and touches it every minute (see @kybernesis/buzz's
+ * surface.ts); this reads the directory back and says which are live. Three
+ * missed heartbeats is dead, and the file says so rather than the row vanishing.
+ */
+export interface Surface {
+  kind: string;
+  name: string;
+  /** Where it is connected, in a form a person recognises: relay hosts, a workspace name. */
+  detail: string;
+  live: boolean;
+  heartbeatAt: string;
+  conversations?: number;
+}
+
+const SURFACE_STALE_MS = 3 * 60_000;
+
+export function readSurfaces(dir: string, now = Date.now()): Surface[] {
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out: Surface[] = [];
+  for (const f of files) {
+    try {
+      const m = JSON.parse(readFileSync(join(dir, f), "utf8")) as {
+        kind?: unknown;
+        name?: unknown;
+        relays?: unknown;
+        heartbeatAt?: unknown;
+        conversations?: unknown;
+      };
+      if (typeof m.kind !== "string" || typeof m.heartbeatAt !== "string") continue;
+      const relays = Array.isArray(m.relays) ? m.relays.filter((r): r is string => typeof r === "string") : [];
+      const hosts = relays.map((r) => {
+        try {
+          return new URL(r).hostname;
+        } catch {
+          return r;
+        }
+      });
+      out.push({
+        kind: m.kind,
+        name: typeof m.name === "string" ? m.name : m.kind,
+        detail: hosts.join(", "),
+        live: now - Date.parse(m.heartbeatAt) < SURFACE_STALE_MS,
+        heartbeatAt: m.heartbeatAt,
+        ...(typeof m.conversations === "number" ? { conversations: m.conversations } : {}),
+      });
+    } catch {
+      /* not a manifest */
+    }
+  }
+  return out;
 }
 
 interface RunResult {
@@ -148,8 +214,17 @@ export function manageChannel(options: ManageOptions = {}) {
   const appRoot = options.appRoot ?? process.cwd();
   const registry = options.registry ?? "https://registry.kybernesis.ai/r/registry.json";
 
+  const surfacesDir = options.surfacesDir ?? process.env.KYB_SURFACES_DIR ?? join(homedir(), ".kybernesis", "surfaces");
+
   return defineChannel({
     routes: [
+      // The ways to reach this agent that eve does not list: workspace bridges on this host.
+      GET(PREFIX + "/surfaces", async (req) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+        return Response.json({ surfaces: readSurfaces(surfacesDir) });
+      }),
+
       // What can be installed, and what already is.
       GET(PREFIX + "/catalog", async (req) => {
         const denied = await authorize(req, options);

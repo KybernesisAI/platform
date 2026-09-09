@@ -1,6 +1,7 @@
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
+import { surfaceWriter } from "./surface.js";
 import { SessionStore } from "./sessions.js";
 import {
   agentSilenceReply,
@@ -550,14 +551,20 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     }
   }
 
+  // What this bridge is, for the consoles: see surface.ts.
+  const surface = surfaceWriter({ relays: urls, npub: key.npub, conversations: () => sessions.size }, log);
+
   return {
     /** The key the workspace has to invite for any of this to happen. */
     npub: key.npub,
     pubkey: key.publicKey,
     /** The communities this agent is a member of. */
     relays: urls,
+    /** Where this bridge declares itself for the management routes to read. */
+    surfaceFile: surface.file,
     start(): void {
       stopped = false;
+      surface.start();
       for (const relay of relays.values()) relay.connect();
       for (const { community, channel, session } of sessions.entries()) {
         if (session.pendingInputRequests?.length && session.promptEventIds?.length) {
@@ -576,6 +583,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     /** Say goodbye rather than letting presence lapse: a stopped agent should not look online. */
     stop(): void {
       stopped = true;
+      surface.stop();
       for (const controller of followers.values()) controller.abort();
       followers.clear();
       for (const timer of followerRestartTimers.values()) clearTimeout(timer);
