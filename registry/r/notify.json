@@ -1,0 +1,23 @@
+{
+  "name": "notify",
+  "type": "registry:item",
+  "title": "Kybernesis Notify",
+  "description": "Tell the person's phone when this agent needs them: a question it parked on, or a reply that finished while they were away. Delivered by the control plane to KYBER Studio for iOS.",
+  "dependencies": [
+    "@kybernesis/notify",
+    "@kybernesis/enterprise"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": ""
+  },
+  "files": [
+    {
+      "path": "registry/notify.ts",
+      "type": "registry:file",
+      "target": "agent/extensions/notify.ts",
+      "content": "// Tell the person's phone when this agent parks on a question or finishes a\n// reply while they are away. The person is the verified session principal;\n// the control plane does the ringing. See @kybernesis/notify.\nexport { default } from \"@kybernesis/notify/extension\";\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

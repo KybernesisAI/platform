@@ -17,7 +17,7 @@ import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { remoteProjectPath, sshTarget } from "./deploy.js";
 import { classifyModelReach } from "./model-reach.js";
 import { checkSelfVersion, versionLt } from "./self-version.js";
-import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "./templates.js";
+import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs, notifyMountTs } from "./templates.js";
 import {
   confirmEveUpgrade,
   inspectBuzzSessions,
@@ -184,6 +184,53 @@ function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
 
   if (done.length > 0) {
     console.log(`  ${green("+")} Buzz: ${done.join("; ")}`);
+    console.log(`    ${dim("Takes effect after the next build and restart.")}\n`);
+  }
+}
+
+/**
+ * A Studio agent that cannot ring the person's phone.
+ *
+ * `@kybernesis/notify` arrived after most agents were made, and an upgrade
+ * only ever moved packages an agent already had — so every existing agent
+ * would have stayed silent on the phone, and the first sign would have been
+ * a person waiting for a notification that never came. The agents that need
+ * it are the ones a desktop can manage: anything with `@kybernesis/manage`.
+ *
+ * The pure part — is it needed, is the mount there — is separate from the
+ * npm call so it can be tested without a network.
+ */
+export function needsNotify(deps: Record<string, string>): boolean {
+  return Boolean(deps["@kybernesis/manage"]) && !deps["@kybernesis/notify"];
+}
+
+/** Write the notify mount if it is missing. Never touches a file that exists. */
+export function repairNotifyMount(cwd: string): "mounted" | "present" {
+  const mount = join(cwd, "agent/extensions/notify.ts");
+  if (existsSync(mount)) return "present";
+  mkdirSync(join(cwd, "agent/extensions"), { recursive: true });
+  writeFileSync(mount, notifyMountTs());
+  return "mounted";
+}
+
+function repairNotifySetup(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/manage"]) return;
+  const done: string[] = [];
+  if (needsNotify(deps)) {
+    const ok = run("npm", ["install", "@kybernesis/notify@latest", "--no-audit", "--no-fund"], { cwd, allowFail: true, quiet: true });
+    if (!ok) {
+      console.log(
+        `  ${yellow("!")} could not install @kybernesis/notify, so this agent cannot reach the person's phone.\n` +
+          `    Run: npm install @kybernesis/notify@latest && npx kyb upgrade`,
+      );
+      return;
+    }
+    deps["@kybernesis/notify"] = "latest";
+    done.push("installed @kybernesis/notify");
+  }
+  if (repairNotifyMount(cwd) === "mounted") done.push("mounted it (agent/extensions/notify.ts)");
+  if (done.length > 0) {
+    console.log(`  ${green("+")} Notify: ${done.join("; ")} ${dim("— the person's phone hears when this agent needs them")}`);
     console.log(`    ${dim("Takes effect after the next build and restart.")}\n`);
   }
 }
@@ -886,6 +933,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     reportGithubToolsMountRepair(cwd);
     repairHostArtifacts(cwd, deps);
     repairEvalCommand(cwd);
+    repairNotifySetup(cwd, deps);
     repairManageRestart(cwd, deps);
     return;
   }
@@ -960,6 +1008,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   reportGithubToolsMountRepair(cwd);
   repairHostArtifacts(cwd, deps);
   repairEvalCommand(cwd);
+  repairNotifySetup(cwd, deps);
   repairManageRestart(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
