@@ -225,13 +225,14 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   }
 
   if (studio) {
-    // Two separate items on purpose: `local` lets the agent act on the USER'S
+    // Three separate items on purpose: `local` lets the agent act on the USER'S
     // machine (consent per effect, granted on the desktop); `manage` lets a
-    // client change THIS AGENT — its dependencies and its source. Different
-    // blast radius, so an agent can have one without the other.
-    console.log(bold("\n2b2  KYBER Studio: local execution + management routes …"));
+    // client change THIS AGENT — its dependencies and its source; `notify`
+    // lets it reach the person's phone. Different blast radius, so an agent
+    // can have one without the others.
+    console.log(bold("\n2b2  KYBER Studio: local execution + management routes + phone notifications …"));
     const studioFailures: string[] = [];
-    for (const item of ["local", "manage"]) {
+    for (const item of ["local", "manage", "notify"]) {
       // The @kybernesis/ prefix is load-bearing: a bare name resolves against
       // eve OWN registry, which has no such item, so both installs failed with
       // "not found" — and allowFail swallowed it. --studio therefore did

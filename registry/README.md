@@ -92,6 +92,19 @@ eve add @kybernesis/engineer
 
 Package: [`@kybernesis/engineer`](https://www.npmjs.com/package/@kybernesis/engineer)
 
+### notify — the person's phone
+
+An observe-only hook: when the agent parks on a question, or finishes a reply
+while the person is away, the control plane pushes to their KYBER Studio for
+iOS. The device that started the turn owns its notifications; they never cross.
+Writes `agent/extensions/notify.ts`. Needs the `enterprise` item.
+
+```bash
+eve add @kybernesis/notify
+```
+
+Package: [`@kybernesis/notify`](https://www.npmjs.com/package/@kybernesis/notify)
+
 ## The full install (a governed, remembering, multiplayer, self-testing agent)
 
 ```bash
