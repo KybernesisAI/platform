@@ -814,16 +814,6 @@ function startStoppedBridge(cwd: string, unit: string): boolean {
 
 export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
-  const selfVersion = checkSelfVersion();
-  if (selfVersion.kind === "stale") {
-    console.log(`  ${yellow("!")} ${selfVersion.message}`);
-    console.log(`    ${dim(selfVersion.fix)}\n`);
-    if (!options.allowStale) {
-      process.exitCode = 1;
-      return;
-    }
-  }
-
   const cwd = process.cwd();
   const packagePath = join(cwd, "package.json");
   const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
@@ -831,6 +821,40 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     ...((pkg.dependencies as Record<string, string> | undefined) ?? {}),
     ...((pkg.devDependencies as Record<string, string> | undefined) ?? {}),
   };
+
+  const selfVersion = checkSelfVersion();
+  if (selfVersion.kind === "stale" && !options.allowStale) {
+    /**
+     * A stale kyb that is the PROJECT's own dependency renews itself.
+     *
+     * On every self-hosted agent, kyb is in package.json and `npx kyb` runs
+     * that copy; a global install — the printed fix until now — changes
+     * nothing there, and the person who followed it was back at the same
+     * message. So when the project owns kyb, install the latest into the
+     * project and run the upgrade again from that copy. The re-run is marked
+     * so that a registry that has not caught up cannot make this loop.
+     */
+    if (deps["@kybernesis/create"] && process.env.KYB_UPGRADE_RENEWED !== "1") {
+      console.log(`  ${yellow("↑")} kyb ${selfVersion.installed} → ${selfVersion.latest} ${dim("(this project's own copy; renewing it first)")}`);
+      const renewed = run("npm", ["install", `@kybernesis/create@${selfVersion.latest}`, "--no-audit", "--no-fund"], { cwd, allowFail: true, quiet: true });
+      const cli = join(cwd, "node_modules/@kybernesis/create/dist/cli.js");
+      if (renewed && existsSync(cli)) {
+        const again = spawnSync(process.execPath, [cli, "upgrade", ...process.argv.slice(3)], {
+          cwd, stdio: "inherit", env: { ...process.env, KYB_UPGRADE_RENEWED: "1" },
+        });
+        process.exitCode = again.status ?? 1;
+        return;
+      }
+    }
+    console.log(`  ${yellow("!")} ${selfVersion.message}`);
+    console.log(`    ${dim(deps["@kybernesis/create"] ? `npm install @kybernesis/create@latest && npx kyb upgrade` : selfVersion.fix)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (selfVersion.kind === "stale") {
+    console.log(`  ${yellow("!")} ${selfVersion.message}`);
+    console.log(`    ${dim(selfVersion.fix)} ${dim("(continuing: --allow-stale)")}\n`);
+  }
 
   reportAgentInputLimit(cwd);
 

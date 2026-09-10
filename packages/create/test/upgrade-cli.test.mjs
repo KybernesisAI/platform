@@ -690,3 +690,24 @@ for (const [percent, verdict] of [[84, "pass"], [85, "warn"], [94, "warn"], [95,
     }
   });
 }
+
+test("a stale kyb that is the project's own dependency renews itself before anything else", () => {
+  const fix = fixture({ createVersion: newerCreateVersion, bridgeState: "active" });
+  try {
+    const manifestPath = join(fix.dir, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.dependencies["@kybernesis/create"] = installedCreateVersion;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    const result = runUpgrade(fix);
+    // The fixture's npm installs nothing real, so the renewed copy never appears
+    // and the upgrade stops with the fix that is right for a project-owned kyb.
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /renewing it first/);
+    assert.match(result.stdout, /npm install @kybernesis\/create@latest && npx kyb upgrade/);
+    assert.doesNotMatch(result.stdout, /npm install -g/);
+    assert.match(commandLog(fix), new RegExp(`^npm install @kybernesis/create@${escapeRe(newerCreateVersion)}`, "m"));
+    assert.doesNotMatch(commandLog(fix), /^npm ls eve$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
