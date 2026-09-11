@@ -20,11 +20,11 @@
     "@kybernesis/evals": "^0.6.0",
     "@vercel/connect": "0.4.3",
     "ai": "^7.0.38",
-    "eve": "^0.49.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
+    "eve": "^0.53.1",
     "typescript": "7.0.2"
   },
   "registries": {

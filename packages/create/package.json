@@ -1,7 +1,7 @@
 {
   "name": "@kybernesis/create",
-  "version": "0.15.2",
-  "description": "The Kybernesis agent scaffolder and FDE toolkit: one command to a governed, remembering, multiplayer, self-testing eve agent — plus doctor and upgrade.",
+  "version": "0.15.3",
+  "description": "The Kybernesis agent scaffolder and FDE toolkit: one command to a governed, remembering, multiplayer, self-testing eve agent \u2014 plus doctor and upgrade.",
   "license": "Apache-2.0",
   "type": "module",
   "homepage": "https://kybernesis.ai",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
+    "eve": "^0.53.1",
     "typescript": "7.0.2"
   },
   "engines": {
