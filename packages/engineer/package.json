@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/engineer",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Engineer capabilities for eve agents: a vision-verified dev loop (in-sandbox screenshots the model can see), trade-school skills for building and shipping software, and disciplined git/deploy behavior.",
   "license": "Apache-2.0",
   "type": "module",
@@ -57,11 +57,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "^0.53.1",
+    "eve": "^0.51.1",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.53.0 <0.54.0"
+    "eve": ">=0.51.0 <0.52.0"
   },
   "engines": {
     "node": ">=20"

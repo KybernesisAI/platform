@@ -61,7 +61,7 @@ function fixture(options = {}) {
       "@kybernesis/buzz": options.allCurrent ? "^0.9.0" : "~0.8.0",
       ...(options.exeHost ? { "@kybernesis/exe": "^0.12.1" } : {}),
       "@kybernesis/evals": options.allCurrent ? "^0.6.2" : "0.6.1",
-      eve: options.eveRange ?? (options.allCurrent ? "0.53.1" : "0.38.3"),
+      eve: options.eveRange ?? (options.allCurrent ? "0.51.1" : "0.38.3"),
       zod: "4.4.3",
     },
     devDependencies: { "@kybernesis/enterprise": options.allCurrent ? "^0.8.0" : "0.7.0", typescript: "7.0.2" },
@@ -69,14 +69,14 @@ function fixture(options = {}) {
 
   executable(join(bin, "node"), `#!/bin/sh
 case "$*" in
-  *"eve/package.json"*) echo "${options.eveInstalled ?? (options.allCurrent ? "0.53.1" : "0.38.3")}" ;;
-  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.53.0" : "^0.38.0"}" ;;
+  *"eve/package.json"*) echo "${options.eveInstalled ?? (options.allCurrent ? "0.51.1" : "0.38.3")}" ;;
+  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.51.0" : "^0.38.0"}" ;;
   *"@kybernesis/buzz/package.json"*) echo ${options.allCurrent ? "0.9.0" : "0.8.0"} ;;
-  *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.53.0" : "^0.38.0"}" ;;
+  *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.51.0" : "^0.38.0"}" ;;
   *"@kybernesis/evals/package.json"*) echo ${options.allCurrent ? "0.6.2" : "0.6.1"} ;;
-  *"@kybernesis/exe/package.json"*peerDependencies*) echo "^0.53.0" ;;
+  *"@kybernesis/exe/package.json"*peerDependencies*) echo "^0.51.0" ;;
   *"@kybernesis/exe/package.json"*) echo 0.12.1 ;;
-  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.53.0" : "^0.38.0"}" ;;
+  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.51.0" : "^0.38.0"}" ;;
   *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
   *) exec ${JSON.stringify(process.execPath)} "$@" ;;
 esac
@@ -90,11 +90,11 @@ if [ "$1" = view ]; then
     "@kybernesis/evals version") echo 0.6.2 ;;
     "@kybernesis/exe version") echo 0.12.1 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
-    "eve version") echo 0.53.1 ;;
-    "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^0.53.0" ;;
-    "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^0.53.0" ;;
-    "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^0.53.0" ;;
-    "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^0.53.0" ;;
+    "eve version") echo 0.51.1 ;;
+    "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^0.51.0" ;;
+    "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^0.51.0" ;;
+    "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^0.51.0" ;;
+    "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^0.51.0" ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -118,7 +118,7 @@ fi
 if [ "$1 $2" = "ls eve" ]; then
   [ "$KYB_LS_FAIL" = 1 ] && exit 1
   echo 'fixture@1.0.0'
-  echo 'eve@0.53.1'
+  echo 'eve@0.51.1'
   exit 0
 fi
 exit 0
@@ -376,8 +376,8 @@ export default defineEvalConfig({ judge: { model: exe("judge") } });
 
 test("an unreachable host-only model and judge stop before eval with distinct guidance", () => {
   const fix = fixture({
-    eveInstalled: "0.53.1",
-    eveRange: "^0.53.0",
+    eveInstalled: "0.51.1",
+    eveRange: "^0.51.0",
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
     compiledRouting: { kind: "external", provider: "anthropic" },
     claudeProxyReady: false,
@@ -398,8 +398,8 @@ test("an unreachable host-only model and judge stop before eval with distinct gu
 
 test("reachable subscription proxy and exe judge preserve the local eval gate", () => {
   const fix = fixture({
-    eveInstalled: "0.53.1",
-    eveRange: "^0.53.0",
+    eveInstalled: "0.51.1",
+    eveRange: "^0.51.0",
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
     compiledRouting: { kind: "external", provider: "anthropic" },
     claudeProxyReady: true,
@@ -417,7 +417,7 @@ test("reachable subscription proxy and exe judge preserve the local eval gate", 
 });
 
 test("bare --host uses deploy defaults and the remote gate exit decides the verdict", () => {
-  const green = fixture({ eveInstalled: "0.53.1", eveRange: "^0.53.0", envLocal: "EXE_VM_NAME=fixture-vm\n" });
+  const green = fixture({ eveInstalled: "0.51.1", eveRange: "^0.51.0", envLocal: "EXE_VM_NAME=fixture-vm\n" });
   try {
     const result = runUpgradeWithEval(green, ["--yes", "--host"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -427,7 +427,7 @@ test("bare --host uses deploy defaults and the remote gate exit decides the verd
     green.cleanup();
   }
 
-  const red = fixture({ eveInstalled: "0.53.1", eveRange: "^0.53.0", sshStatus: 9 });
+  const red = fixture({ eveInstalled: "0.51.1", eveRange: "^0.51.0", sshStatus: 9 });
   try {
     const result = runUpgradeWithEval(red, ["--yes", "--host=ops@example"]);
     assert.equal(result.status, 1, result.stdout + result.stderr);
@@ -464,8 +464,8 @@ for (const flag of ["--yes", "-y"]) {
       const pkg = JSON.parse(readFileSync(join(fix.dir, "package.json"), "utf8"));
       assert.equal(pkg.dependencies["@kybernesis/buzz"], "^0.9.0");
       assert.equal(pkg.dependencies["@kybernesis/evals"], "^0.6.2");
-      // Exact on purpose: the pin is the certification (a caret would pull 0.53.x).
-      assert.equal(pkg.dependencies.eve, "0.53.1");
+      // Exact on purpose: the pin is the certification (a caret would pull 0.51.x).
+      assert.equal(pkg.dependencies.eve, "0.51.1");
       assert.equal(pkg.devDependencies["@kybernesis/enterprise"], "^0.8.0");
       assert.equal(pkg.dependencies.zod, "4.4.3");
       assert.equal(pkg.devDependencies.typescript, "7.0.2");
@@ -482,7 +482,7 @@ for (const flag of ["--yes", "-y"]) {
 }
 
 test("same-major/minor Eve state uses the in-place package install without bridge interruption", () => {
-  const fix = fixture({ eveInstalled: "0.53.1", eveRange: "^0.53.0", bridgeState: "active" });
+  const fix = fixture({ eveInstalled: "0.51.1", eveRange: "^0.51.0", bridgeState: "active" });
   try {
     const result = runUpgrade(fix);
     assert.equal(result.status, 0, result.stderr);
@@ -566,9 +566,9 @@ test("ERESOLVE reports factual Eve peer-range changes and the complete remedy", 
     assert.equal(result.status, 1);
     const output = result.stdout + result.stderr;
     assert.match(output, /ERESOLVE/);
-    assert.match(output, /@kybernesis\/buzz: 0\.8\.0 peers on \^0\.38\.0; 0\.9\.0 peers on \^0\.53\.0/);
-    assert.match(output, /@kybernesis\/enterprise: 0\.7\.0 peers on \^0\.38\.0; 0\.8\.0 peers on \^0\.53\.0/);
-    assert.match(output, /@kybernesis\/evals: 0\.6\.1 peers on \^0\.38\.0; 0\.6\.2 peers on \^0\.53\.0/);
+    assert.match(output, /@kybernesis\/buzz: 0\.8\.0 peers on \^0\.38\.0; 0\.9\.0 peers on \^0\.51\.0/);
+    assert.match(output, /@kybernesis\/enterprise: 0\.7\.0 peers on \^0\.38\.0; 0\.8\.0 peers on \^0\.51\.0/);
+    assert.match(output, /@kybernesis\/evals: 0\.6\.1 peers on \^0\.38\.0; 0\.6\.2 peers on \^0\.51\.0/);
     for (const command of ["rm -rf node_modules", "rm -f package-lock.json", "npm install", "npm ls eve"]) {
       assert.ok(output.includes(command), output);
     }
@@ -608,7 +608,7 @@ const publishedBehindPin = (() => {
   if (npmOffline) return false;
   const peer = spawnSync("npm", ["view", "@kybernesis/buzz@latest", "peerDependencies.eve"], { encoding: "utf8" });
   if (peer.status !== 0) return false;
-  return !peer.stdout.includes("0.53");
+  return !peer.stdout.includes("0.51");
 })();
 test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tree", { skip: npmOffline || publishedBehindPin }, () => {
   const dir = mkdtempSync(join(tmpdir(), "kyb-upgrade-network-"));
@@ -629,7 +629,7 @@ test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tr
     assert.equal(upgraded.status, 0, upgraded.stdout + upgraded.stderr);
     const tree = spawnSync("npm", ["ls", "eve"], { cwd: dir, encoding: "utf8" });
     assert.equal(tree.status, 0, tree.stdout + tree.stderr);
-    assert.match(tree.stdout, /eve@0\.53\.1/);
+    assert.match(tree.stdout, /eve@0\.51\.1/);
   } finally {
     // A real eve install leaves read-only directories behind (the baked
     // sandbox tree); rmSync alone hit EACCES on CI and failed a test whose
