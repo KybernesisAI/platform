@@ -1,0 +1,24 @@
+{
+  "name": "voice",
+  "type": "registry:item",
+  "title": "Kybernesis Voice",
+  "description": "Give this agent its own realtime voice in KYBER Studio: the floating orb speaks as the agent and delegates every real request back to the agent's own session. The agent holds its own OpenAI key.",
+  "dependencies": [
+    "@kybernesis/voice",
+    "@kybernesis/enterprise"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": "",
+    "KYBERNESIS_VOICE_OPENAI_KEY": ""
+  },
+  "files": [
+    {
+      "path": "registry/voice-channel.ts",
+      "type": "registry:file",
+      "target": "agent/channels/voice.ts",
+      "content": "import { voiceChannel } from \"@kybernesis/voice\";\n\n// Realtime voice for KYBER Studio: the floating orb speaks as this agent and\n// delegates every real request back to the agent's own session, authorized by\n// the caller's control-plane grant. This agent holds its OWN OpenAI key\n// (KYBERNESIS_VOICE_OPENAI_KEY), read only here \u2014 never a shared one, never in\n// Studio.\nexport default voiceChannel({\n  openaiApiKey: process.env.KYBERNESIS_VOICE_OPENAI_KEY!,\n  // voice: \"cedar\", // any OpenAI Live voice; the Studio per-agent setting overrides per call\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}
