@@ -824,3 +824,36 @@ export function notifyMountTs(): string {
 export { default } from "@kybernesis/notify/extension";
 `;
 }
+
+/**
+ * The sandbox source for a reasoning-only specialist. One source for the
+ * `kyb upgrade` repair and any future scaffold, so they cannot disagree.
+ *
+ * Every eve agent has exactly one sandbox, and a declared subagent that
+ * authors none gets the framework default — on a self-hosted host, a Docker
+ * container from an 840MB image. A specialist that reasons and remembers with
+ * its file tools disabled never touches a filesystem, yet still booted a
+ * container per call; on a small host those boots blow eve's command-hook
+ * wait, which reads as the specialist being unavailable. `justbash` is eve's
+ * pure-JS bash: a virtual filesystem, no daemon, no VM, no container, no
+ * image, available instantly.
+ */
+export function reasoningSandboxLibTs(): string {
+  return `import { defineSandbox } from "eve/sandbox";
+import { justbash } from "eve/sandbox/just-bash";
+
+// The sandbox for a reasoning-only specialist: an instant virtual filesystem,
+// no Docker container. See agent/subagents/<id>/sandbox.ts, which re-export
+// this. Only subagents that do real build/git/network work keep a docker()
+// sandbox of their own.
+export default defineSandbox({ backend: justbash() });
+`;
+}
+
+/** What each reasoning-only subagent's `sandbox.ts` re-exports. */
+export function reasoningSandboxReexportTs(): string {
+  return `// Reasoning-only specialist: no real filesystem, so no Docker container.
+// See agent/lib/reasoning-sandbox for why this exists and what it replaces.
+export { default } from "../../lib/reasoning-sandbox";
+`;
+}

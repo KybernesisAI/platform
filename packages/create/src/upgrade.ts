@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { remoteProjectPath, sshTarget } from "./deploy.js";
 import { classifyModelReach } from "./model-reach.js";
 import { checkSelfVersion, versionLt } from "./self-version.js";
-import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs, notifyMountTs } from "./templates.js";
+import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs, notifyMountTs, reasoningSandboxLibTs, reasoningSandboxReexportTs } from "./templates.js";
 import {
   confirmEveUpgrade,
   inspectBuzzSessions,
@@ -231,6 +231,104 @@ function repairNotifySetup(cwd: string, deps: Record<string, string>): void {
   if (repairNotifyMount(cwd) === "mounted") done.push("mounted it (agent/extensions/notify.ts)");
   if (done.length > 0) {
     console.log(`  ${green("+")} Notify: ${done.join("; ")} ${dim("— the person's phone hears when this agent needs them")}`);
+    console.log(`    ${dim("Takes effect after the next build and restart.")}\n`);
+  }
+}
+
+/**
+ * A reasoning-only specialist that still boots a Docker container.
+ *
+ * Every eve agent has exactly one sandbox, and a declared subagent that
+ * authors none gets the framework default — on a self-hosted host, a Docker
+ * container from an 840MB image. A specialist whose `bash`, `read_file`, and
+ * `write_file` tools are all disabled reasons and remembers and never touches
+ * a filesystem, yet each still booted its own container per call. On a small
+ * host those boots contend and blow eve's ~120s command-hook wait, which reads
+ * as "the specialist is unavailable" and, under a scheduled fan-out, thrashes
+ * the host. Disabling the file tools never stopped the sandbox: it is a slot
+ * eve always fills, not a consequence of the tools.
+ *
+ * The signal is deliberately narrow and static: a subagent that disables all
+ * three file tools has declared it does no filesystem work, so `just-bash` —
+ * eve's containerless virtual filesystem — is safe and correct for it. A
+ * subagent that leaves those tools enabled is left alone; whether it needs a
+ * real sandbox is a judgment only a person can make.
+ */
+function disablesAllFileTools(dir: string): boolean {
+  const tools = join(dir, "tools");
+  if (!existsSync(tools)) return false;
+  return ["bash", "read_file", "write_file"].every((name) => {
+    const file = join(tools, `${name}.ts`);
+    if (!existsSync(file)) return false;
+    try {
+      return /disableTool\s*\(/.test(readFileSync(file, "utf8"));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function hasAuthoredSandbox(dir: string): boolean {
+  return existsSync(join(dir, "sandbox.ts")) || existsSync(join(dir, "sandbox"));
+}
+
+/** Reasoning-only subagents (disable all file tools) that have no sandbox of their own. */
+export function reasoningSubagentsNeedingSandbox(cwd: string): string[] {
+  const root = join(cwd, "agent/subagents");
+  if (!existsSync(root)) return [];
+  const found: string[] = [];
+  for (const entry of readdirSync(root)) {
+    const dir = join(root, entry);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (!existsSync(join(dir, "agent.ts"))) continue;
+    if (hasAuthoredSandbox(dir)) continue;
+    if (disablesAllFileTools(dir)) found.push(entry);
+  }
+  return found.sort();
+}
+
+/** Write the shared lib source and each specialist's re-export. Never touches a file that exists. */
+export function writeReasoningSandboxes(cwd: string, subagents: string[]): string[] {
+  const wrote: string[] = [];
+  const lib = join(cwd, "agent/lib/reasoning-sandbox.ts");
+  if (!existsSync(lib)) {
+    mkdirSync(join(cwd, "agent/lib"), { recursive: true });
+    writeFileSync(lib, reasoningSandboxLibTs());
+    wrote.push("agent/lib/reasoning-sandbox.ts");
+  }
+  for (const name of subagents) {
+    const file = join(cwd, "agent/subagents", name, "sandbox.ts");
+    if (existsSync(file)) continue;
+    writeFileSync(file, reasoningSandboxReexportTs());
+    wrote.push(`agent/subagents/${name}/sandbox.ts`);
+  }
+  return wrote;
+}
+
+function repairReasoningSandboxes(cwd: string, deps: Record<string, string>): void {
+  const needing = reasoningSubagentsNeedingSandbox(cwd);
+  if (needing.length === 0) return;
+  const done: string[] = [];
+  if (!deps["just-bash"]) {
+    const ok = run("npm", ["install", "just-bash@^3.1.0", "--no-audit", "--no-fund"], { cwd, allowFail: true, quiet: true });
+    if (!ok) {
+      console.log(
+        `  ${yellow("!")} ${needing.length} reasoning specialist(s) still boot a Docker container per call, but just-bash could not be installed.\n` +
+          `    Run: npm install just-bash@^3.1.0 && npx kyb upgrade`,
+      );
+      return;
+    }
+    deps["just-bash"] = "^3.1.0";
+    done.push("installed just-bash");
+  }
+  const wrote = writeReasoningSandboxes(cwd, needing);
+  if (wrote.length > 0) done.push(`gave ${needing.join(", ")} an instant sandbox (${wrote.length} file${wrote.length === 1 ? "" : "s"})`);
+  if (done.length > 0) {
+    console.log(`  ${green("+")} Sandboxes: ${done.join("; ")} ${dim("— reasoning specialists no longer boot a Docker container")}`);
     console.log(`    ${dim("Takes effect after the next build and restart.")}\n`);
   }
 }
@@ -958,6 +1056,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairHostArtifacts(cwd, deps);
     repairEvalCommand(cwd);
     repairNotifySetup(cwd, deps);
+    repairReasoningSandboxes(cwd, deps);
     repairManageRestart(cwd, deps);
     return;
   }
@@ -1033,6 +1132,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairHostArtifacts(cwd, deps);
   repairEvalCommand(cwd);
   repairNotifySetup(cwd, deps);
+  repairReasoningSandboxes(cwd, deps);
   repairManageRestart(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
