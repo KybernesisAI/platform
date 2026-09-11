@@ -224,6 +224,28 @@
       ]
     },
     {
+      "name": "voice",
+      "type": "registry:item",
+      "title": "Kybernesis Voice",
+      "description": "Give this agent its own realtime voice in KYBER Studio: the floating orb speaks as the agent and delegates every real request back to the agent's own session. The agent holds its own OpenAI key.",
+      "dependencies": [
+        "@kybernesis/voice",
+        "@kybernesis/enterprise"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": "",
+        "KYBERNESIS_VOICE_OPENAI_KEY": ""
+      },
+      "files": [
+        {
+          "path": "registry/voice-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/voice.ts"
+        }
+      ]
+    },
+    {
       "name": "connectors",
       "type": "registry:item",
       "title": "Kybernesis Connectors",
