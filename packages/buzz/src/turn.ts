@@ -38,6 +38,17 @@ export interface AgentTimeouts {
 
 const isWorkPhase = (phase: AgentSilencePhase): boolean => phase.endsWith("response stream");
 
+/**
+ * A phase that runs BEFORE the message is sent to the agent.
+ *
+ * The unread drain runs before the send, so a timeout here means the message
+ * never reached the agent and no run was created. Every other phase — the
+ * send/create acknowledgement and the response stream — is after the POST that
+ * delivers it, so by then the agent has the message. This is the difference
+ * between a lost message and a lost turn, and the recovery text turns on it.
+ */
+const isPreSendPhase = (phase: AgentSilencePhase): boolean => phase === "unread drain";
+
 
 export type AgentSilencePhase =
   | "unread drain"
@@ -510,8 +521,21 @@ export function rejectedTurnReply(error: unknown): string | null {
     : "I couldn't read that message. Try sending it again, or as plain text.";
 }
 
-/** Give the originating channel one accurate recovery message for bridge-owned silence. */
+/**
+ * Give the originating channel one accurate recovery message for bridge-owned silence.
+ *
+ * Two different failures wear the same timeout. Before the send, a stalled
+ * unread drain means the message never reached the agent: "try again here" is
+ * actively wrong, because there is nothing to resume and the agent will answer
+ * whatever it last genuinely received — a confident reply to a question nobody
+ * asked. After the send, the message did reach the agent and the conversation
+ * is kept, so trying again is the right advice. The phase on the error tells
+ * the two apart.
+ */
 export function agentSilenceReply(error: unknown): string | null {
   if (!(error instanceof AgentSilenceTimeoutError)) return null;
+  if (isPreSendPhase(error.phase)) {
+    return "I couldn't get your message to the agent before it went quiet, so it was not delivered — nothing was sent and no answer is coming. Please send it again.";
+  }
   return "The agent was silent for too long, so I stopped waiting. I kept this conversation, and you can try again here.";
 }

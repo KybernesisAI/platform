@@ -414,6 +414,23 @@ test("timeout replies are useful, singular, and do not claim cancellation", () =
   assert.equal(agentSilenceReply(new Error("socket hang up")), null);
 });
 
+test("a pre-send drain timeout tells the room the message was not delivered, not to try again", () => {
+  // AC1: a timeout before the message reaches the agent (the unread drain runs
+  // first) must say it was not delivered and must be re-sent.
+  const drain = agentSilenceReply(new AgentSilenceTimeoutError("unread drain", 300_000));
+  assert.match(drain, /not delivered/i);
+  assert.match(drain, /send it again/i);
+  assert.doesNotMatch(drain, /try again here/i);
+  assert.doesNotMatch(drain, /kept this conversation/i);
+
+  // AC2: after the message reached the agent, the kept-conversation wording stays.
+  for (const phase of ["send acknowledgement", "response stream", "create acknowledgement", "create response stream"]) {
+    const kept = agentSilenceReply(new AgentSilenceTimeoutError(phase, 300_000));
+    assert.match(kept, /kept this conversation/i, phase);
+    assert.doesNotMatch(kept, /not delivered/i, phase);
+  }
+});
+
 test("a request rejection becomes words for the room, not a log line", () => {
   const reply = rejectedTurnReply(new ClientError(400, JSON.stringify({ error: "Invalid message part: image" })));
 
