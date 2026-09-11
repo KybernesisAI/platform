@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/connectors",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Connector tools for an eve agent, resolved per user from the Kybernesis control plane.",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,12 +25,12 @@
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "peerDependencies": {
-    "eve": ">=0.53.0 <0.54.0",
+    "eve": ">=0.51.0 <0.52.0",
     "zod": "^3.23.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "eve": "^0.53.1",
+    "eve": "^0.51.1",
     "typescript": "^5.7.2"
   }
 }

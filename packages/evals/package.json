@@ -1,7 +1,7 @@
 {
   "name": "@kybernesis/evals",
-  "version": "0.6.4",
-  "description": "Baseline eval suites for Kybernesis eve agents: memory, routing, and smoke behaviors as composable factories \u2014 every hardening lesson shipped as a default.",
+  "version": "0.6.5",
+  "description": "Baseline eval suites for Kybernesis eve agents: memory, routing, and smoke behaviors as composable factories — every hardening lesson shipped as a default.",
   "license": "Apache-2.0",
   "type": "module",
   "homepage": "https://kybernesis.ai",
@@ -33,11 +33,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "^0.53.1",
+    "eve": "^0.51.1",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.53.0 <0.54.0"
+    "eve": ">=0.51.0 <0.52.0"
   },
   "engines": {
     "node": ">=20"

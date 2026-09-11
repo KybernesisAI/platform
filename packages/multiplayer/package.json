@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/multiplayer",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Multiplayer conversations for eve agents: shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions.",
   "license": "Apache-2.0",
   "type": "module",
@@ -36,11 +36,11 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "^0.53.1",
+    "eve": "^0.51.1",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=0.53.0 <0.54.0"
+    "eve": ">=0.51.0 <0.52.0"
   },
   "engines": {
     "node": ">=20"
