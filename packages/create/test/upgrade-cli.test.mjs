@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,7 @@ const newerCreateVersion = installedCreateVersion.replace(/(\d+)$/, (n) => Strin
 const escapeRe = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function fixture(options = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "kyb-upgrade-cli-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "kyb-upgrade-cli-")));
   const bin = join(dir, "bin");
   const systemd = join(dir, "systemd");
   const log = join(dir, "commands.log");
@@ -108,6 +108,16 @@ if [ "$1" = install ]; then
     echo "npm ERR! unable to resolve dependency tree" >&2
     exit 1
   fi
+  if [ "$KYB_INSTALL_NEEDS_LEGACY" = 1 ]; then
+    case " $* " in
+      *" --legacy-peer-deps "*) : ;;
+      *)
+        echo "npm ERR! code ERESOLVE" >&2
+        echo "npm ERR! While resolving: @github-tools/eve-extension@0.7.0" >&2
+        echo "npm ERR! Conflicting peer dependency: eve@0.47.3" >&2
+        exit 1 ;;
+    esac
+  fi
   mkdir -p node_modules
   echo regenerated > package-lock.json
   exit 0
@@ -168,6 +178,7 @@ exit 0
     ...(options.exeHost ? { KYB_DOCKER_PRUNE_TARGET: join(dir, "kyb-docker-prune") } : {}),
     KYB_BRIDGE_STATE: options.bridgeState ?? "inactive",
     ...(options.installFail ? { KYB_INSTALL_FAIL: "1" } : {}),
+    ...(options.installNeedsLegacy ? { KYB_INSTALL_NEEDS_LEGACY: "1" } : {}),
     ...(options.lsFail ? { KYB_LS_FAIL: "1" } : {}),
     ...(options.stopFail ? { KYB_STOP_FAIL: "1" } : {}),
     ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
@@ -575,6 +586,26 @@ test("ERESOLVE reports factual Eve peer-range changes and the complete remedy", 
     assert.match(output, /metadata facts, not an attribution/);
     assert.match(output, /bridge remains stopped/);
     assert.doesNotMatch(commandLog(fix), /systemctl start/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("a stale third-party peer is cleared with --legacy-peer-deps, not aborted (KYB-561)", () => {
+  const fix = fixture({ bridgeState: "active", installNeedsLegacy: true });
+  try {
+    const result = runUpgrade(fix);
+    // The Vercel-owned github-tools extension peers below the certified eve, so
+    // npm's default resolver ERESOLVEs. The upgrade must recover, not abort.
+    assert.equal(result.status, 0);
+    const output = result.stdout + result.stderr;
+    assert.match(output, /peer conflict.*Retrying with --legacy-peer-deps/);
+    const log = commandLog(fix);
+    // The install was retried with the flag, then the peer tree was assessed
+    // and the bridge was brought back up: a completed upgrade, not a bail-out.
+    assert.match(log, /npm install.*--legacy-peer-deps/);
+    assert.match(log, /npm ls eve/);
+    assert.match(log, /systemctl start fixture-buzz-bridge/);
   } finally {
     fix.cleanup();
   }
