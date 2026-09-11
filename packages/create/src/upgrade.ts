@@ -1086,10 +1086,30 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   // reason rewriteManifest pins it: npm would save a caret by default.
   const eveChange = changed.find((spec) => spec.startsWith("eve@"));
   const others = changed.filter((spec) => spec !== eveChange);
+
+  /**
+   * A third-party extension whose declared peer range trails the certified
+   * eve (the Vercel-owned @github-tools/eve-extension and @agent-browser/eve
+   * both do) makes npm's default resolver ERESOLVE before it will write a
+   * tree at all. That is not a reason to abort the upgrade: retry the same
+   * install with --legacy-peer-deps so the tree is written, then let
+   * assessPeerTree below judge WHO actually objects. A @kybernesis or root
+   * conflict still stops everything; only a stale third-party edge is
+   * tolerated (same principle as the KYB-548 peer-tree gate). KYB-561.
+   */
+  const npmInstall = (args: string[]): CommandResult => {
+    let result = commandResult("npm", args, cwd);
+    if (result.status !== 0 && /ERESOLVE/i.test(`${result.stdout}\n${result.stderr}`)) {
+      console.log(yellow("\n  ! npm reported a peer conflict. Retrying with --legacy-peer-deps so the installed peer tree can be assessed."));
+      result = commandResult("npm", [...args, "--legacy-peer-deps"], cwd);
+    }
+    return result;
+  };
+
   const installArgs = cleanInstall ? ["install"] : ["install", ...others];
-  let installed = cleanInstall || others.length > 0 ? commandResult("npm", installArgs, cwd) : { status: 0, stdout: "", stderr: "" };
+  let installed: CommandResult = cleanInstall || others.length > 0 ? npmInstall(installArgs) : { status: 0, stdout: "", stderr: "" };
   if (installed.status === 0 && !cleanInstall && eveChange) {
-    installed = commandResult("npm", ["install", "--save-exact", eveChange], cwd);
+    installed = npmInstall(["install", "--save-exact", eveChange]);
   }
   if (installed.status !== 0) {
     const output = `${installed.stdout}\n${installed.stderr}`;
