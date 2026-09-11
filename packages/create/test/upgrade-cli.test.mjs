@@ -566,9 +566,9 @@ test("ERESOLVE reports factual Eve peer-range changes and the complete remedy", 
     assert.equal(result.status, 1);
     const output = result.stdout + result.stderr;
     assert.match(output, /ERESOLVE/);
-    assert.match(output, /@kybernesis\/buzz: 0\.8\.0 peers on \^0\.38\.0; 0\.9\.0 peers on \^0\.49\.0/);
-    assert.match(output, /@kybernesis\/enterprise: 0\.7\.0 peers on \^0\.38\.0; 0\.8\.0 peers on \^0\.49\.0/);
-    assert.match(output, /@kybernesis\/evals: 0\.6\.1 peers on \^0\.38\.0; 0\.6\.2 peers on \^0\.49\.0/);
+    assert.match(output, /@kybernesis\/buzz: 0\.8\.0 peers on \^0\.38\.0; 0\.9\.0 peers on \^0\.53\.0/);
+    assert.match(output, /@kybernesis\/enterprise: 0\.7\.0 peers on \^0\.38\.0; 0\.8\.0 peers on \^0\.53\.0/);
+    assert.match(output, /@kybernesis\/evals: 0\.6\.1 peers on \^0\.38\.0; 0\.6\.2 peers on \^0\.53\.0/);
     for (const command of ["rm -rf node_modules", "rm -f package-lock.json", "npm install", "npm ls eve"]) {
       assert.ok(output.includes(command), output);
     }
