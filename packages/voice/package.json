@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/voice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Give a KYBER Studio agent its own realtime voice: the floating orb speaks as the agent and delegates every real request back to the agent's own session. The agent holds its own OpenAI key.",
   "license": "Apache-2.0",
   "type": "module",
