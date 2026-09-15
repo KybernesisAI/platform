@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
+import { readCurrentSession } from "./current-session.js";
+import { routineSource } from "./routine-source.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -40,6 +42,31 @@ const PREFIX = "/eve/v1/kyb";
 const RESTART_DELAY_MS = 20_000;
 
 /**
+ * eve's binder for "one exact durable session id", held from the last route
+ * call.
+ *
+ * A schedule cannot reach this. It gets `{ to, waitUntil, appAuth }`, and the
+ * channel `receive` it reaches through gets `{ from, resolveSession }` — none
+ * of which can name an existing session. Route handlers get `attachSession`,
+ * and this channel has routes, so the binder is kept from there and used by
+ * `receive` to deliver a routine into the open conversation.
+ *
+ * It is a binding over the runtime rather than over one request, so holding it
+ * is safe; if no route has run since boot it is simply absent and the routine
+ * starts a new conversation instead.
+ */
+type AttachBinder = (sessionId: string) => {
+  send: (message: unknown, options: { auth: unknown }) => Promise<never>;
+};
+let attachBinder: AttachBinder | undefined;
+
+/** Keep the binder the first time any route provides one. */
+function captureAttach(args: unknown): void {
+  const fn = (args as { attachSession?: unknown } | undefined)?.attachSession;
+  if (typeof fn === "function") attachBinder = fn as AttachBinder;
+}
+
+/**
  * Custom channels do NOT run the eve channel's authenticator, so these routes
  * must verify identity themselves. They verify the SAME control-plane identity
  * the user already signed in with — not a separate key.
@@ -64,6 +91,12 @@ async function authorize(req: Request, options: ManageOptions): Promise<Response
 }
 
 export interface ManageOptions {
+  /**
+   * The module name of this channel under `agent/channels/`, without extension.
+   * A routine created from Studio imports it to deliver its answer, so it must
+   * match the real filename. Defaults to "kyb".
+   */
+  channelModule?: string;
   /** Repo root. Defaults to the process working directory. */
   appRoot?: string;
   /**
@@ -216,17 +249,62 @@ export function manageChannel(options: ManageOptions = {}) {
 
   const surfacesDir = options.surfacesDir ?? process.env.KYB_SURFACES_DIR ?? join(homedir(), ".kybernesis", "surfaces");
 
+  // Which file under agent/channels/ this channel is, so a scaffolded routine
+  // can import it. Defaults to the name every kyb-scaffolded agent uses; an
+  // agent that named the file something else says so rather than getting a
+  // routine that fails to compile.
+  const manageModule = options.channelModule ?? "kyb";
+
   return defineChannel({
+    /**
+     * Where a routine's answer lands.
+     *
+     * A schedule can only reach a channel through `to(channel, target)`, and it
+     * cannot name a session — so without this, a routine has nowhere to deliver
+     * and eve discards its output. That was the whole bug.
+     *
+     * `from(address)` continues the session that address already owns, and
+     * creates one the first time. The address is the conversation the person is
+     * currently in, recorded by the eve channel on every inbound turn, so a
+     * routine answers into the chat they are actually looking at. With no
+     * recorded conversation — a fresh agent, or nobody has spoken yet — it
+     * falls back to a stable per-routine address, which starts a new one.
+     */
+    receive: async ({ message, target, auth }, { from }) => {
+      const routine = String((target as { routine?: unknown }).routine ?? "routine");
+      const current = readCurrentSession(appRoot);
+
+      // Continue the conversation the person is actually in.
+      //
+      // `from(address)` cannot do this: an address is channel-local, so handing
+      // it a session id mints a NEW session keyed by that string rather than
+      // continuing the one it names — measured, not assumed. `attachSession` is
+      // the only thing that binds an exact session id, and eve hands it to route
+      // handlers only, never to `receive`. So it is captured when a route runs
+      // (see attachBinder) and reused here.
+      if (current && attachBinder) {
+        try {
+          return await attachBinder(current.sessionId).send(message, { auth });
+        } catch {
+          // The session may have been retired since it was recorded. Falling
+          // through starts a fresh conversation, which is the behaviour asked
+          // for when there is no open one — better than dropping the routine.
+        }
+      }
+      return from(`routine:${routine}`).send(message, { auth });
+    },
     routes: [
       // The ways to reach this agent that eve does not list: workspace bridges on this host.
-      GET(PREFIX + "/surfaces", async (req) => {
+      GET(PREFIX + "/surfaces", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
         return Response.json({ surfaces: readSurfaces(surfacesDir) });
       }),
 
       // What can be installed, and what already is.
-      GET(PREFIX + "/catalog", async (req) => {
+      GET(PREFIX + "/catalog", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
         const res = await fetch(registry, { signal: AbortSignal.timeout(20_000) }).catch(
@@ -270,7 +348,8 @@ export function manageChannel(options: ManageOptions = {}) {
        * Only keys that identify the agent to the control plane are accepted, and
        * no value is ever read back out.
        */
-      POST(PREFIX + "/credential", async (req) => {
+      POST(PREFIX + "/credential", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
 
@@ -321,7 +400,8 @@ export function manageChannel(options: ManageOptions = {}) {
         });
       }),
 
-      POST(PREFIX + "/install", async (req) => {
+      POST(PREFIX + "/install", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { item?: string };
@@ -378,7 +458,8 @@ export function manageChannel(options: ManageOptions = {}) {
       }),
 
       // Write a schedule into the repo. eve discovers agent/schedules/*.ts.
-      POST(PREFIX + "/schedule", async (req) => {
+      POST(PREFIX + "/schedule", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as {
@@ -407,14 +488,12 @@ export function manageChannel(options: ManageOptions = {}) {
 
         // Authored as source, because that is what it is: the repository stays
         // the truth, and this file is reviewable and revertable like any other.
-        const source = `import { defineSchedule } from "eve/schedules";
-
-/** Created from KYBER Studio. */
-export default defineSchedule({
-  cron: ${JSON.stringify(body.cron)},
-  markdown: ${JSON.stringify(body.instruction)},
-});
-`;
+        const source = routineSource({
+          name: slug,
+          cron: body.cron,
+          instruction: body.instruction,
+          manageChannelModule: manageModule,
+        });
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, source, "utf8");
 
@@ -444,7 +523,8 @@ export default defineSchedule({
       }),
 
       // Remove a schedule this agent owns.
-      POST(PREFIX + "/schedule/delete", async (req) => {
+      POST(PREFIX + "/schedule/delete", async (req, _args) => {
+        captureAttach(_args);
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { name?: string };
@@ -499,6 +579,7 @@ export default manageChannel;
  */
 export function routineTools(options: ManageOptions = {}) {
   const appRoot = options.appRoot ?? process.cwd();
+  const manageModule = options.channelModule ?? "kyb";
 
   /**
    * Apply a change WITHOUT holding the turn open.
@@ -549,7 +630,12 @@ export function routineTools(options: ManageOptions = {}) {
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(
           file,
-          `import { defineSchedule } from "eve/schedules";\n\n/** ${input.name} */\nexport default defineSchedule({\n  cron: ${JSON.stringify(input.cron)},\n  markdown: ${JSON.stringify(input.instruction)},\n});\n`,
+          routineSource({
+            name: slug,
+            cron: input.cron,
+            instruction: input.instruction,
+            manageChannelModule: manageModule,
+          }),
           "utf8",
         );
 
@@ -580,7 +666,12 @@ export function routineTools(options: ManageOptions = {}) {
             return {
               name: f.replace(/\.ts$/, ""),
               cron: /cron:\s*"([^"]+)"/.exec(source)?.[1] ?? null,
-              instruction: /markdown:\s*"((?:[^"\\]|\\.)*)"/.exec(source)?.[1]?.replace(/\\"/g, '"') ?? null,
+              // Both shapes: `markdown:` is the pre-0.8.4 form that discarded
+              // its output, still on disk until a routine is recreated.
+              instruction:
+                (/markdown:\s*"((?:[^"\\]|\\.)*)"/.exec(source)?.[1] ??
+                  /\.send\(\s*"((?:[^"\\]|\\.)*)"/.exec(source)?.[1] ??
+                  null)?.replace(/\\"/g, '"') ?? null,
             };
           });
         return { routines };

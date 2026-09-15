@@ -32,3 +32,10 @@ export {
 } from "./channel.js";
 
 export { governedPeers, type GovernedPeersOptions } from "./governed-peers.js";
+
+export {
+  currentSessionFile,
+  readCurrentSession,
+  recordCurrentSession,
+  type CurrentSession,
+} from "./current-session.js";
