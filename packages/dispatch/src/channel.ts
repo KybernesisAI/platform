@@ -1,4 +1,5 @@
-import { eveChannel } from "eve/channels/eve";
+import { defaultEveAuth, eveChannel } from "eve/channels/eve";
+import { recordCurrentSession } from "./current-session.js";
 import {
   localDev,
   placeholderAuth,
@@ -125,6 +126,28 @@ export function dispatchChannel(options: DispatchChannelOptions) {
   };
 
   return eveChannel({
+    // Remember which conversation this agent is in.
+    //
+    // A schedule is handed `{ to, waitUntil, appAuth }` and has no way to name
+    // an existing session, so a routine cannot answer into the chat the person
+    // is actually looking at. This is the only place that knows — every inbound
+    // turn carries its session id — so it is written down here for the routine
+    // to find. See ./current-session.ts for why it is a file.
+    //
+    // `defaultEveAuth` is returned unchanged: this observes, it must never
+    // change who a turn runs as.
+    onMessage: (ctx) => {
+      const id = ctx.eve.sessionId;
+      if (typeof id === "string" && id !== "") {
+        const principal = ctx.eve.caller?.principalId;
+        recordCurrentSession({
+          sessionId: id,
+          ...(typeof principal === "string" ? { principalId: principal } : {}),
+          at: new Date().toISOString(),
+        });
+      }
+      return { auth: defaultEveAuth(ctx) };
+    },
     auth: [
       // Verifies which deployment is calling: this project's own tokens are
       // always accepted; other projects only when enumerated as peers.
