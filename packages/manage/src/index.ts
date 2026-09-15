@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
-import { readCurrentSession } from "./current-session.js";
 import { routineSource } from "./routine-source.js";
 
 /**
@@ -42,29 +41,57 @@ const PREFIX = "/eve/v1/kyb";
 const RESTART_DELAY_MS = 20_000;
 
 /**
- * eve's binder for "one exact durable session id", held from the last route
- * call.
+ * The address of the agent's one conversation with its person.
  *
- * A schedule cannot reach this. It gets `{ to, waitUntil, appAuth }`, and the
- * channel `receive` it reaches through gets `{ from, resolveSession }` — none
- * of which can name an existing session. Route handlers get `attachSession`,
- * and this channel has routes, so the binder is kept from there and used by
- * `receive` to deliver a routine into the open conversation.
- *
- * It is a binding over the runtime rather than over one request, so holding it
- * is safe; if no route has run since boot it is simply absent and the routine
- * starts a new conversation instead.
+ * Fixed, because both sides have to name it without coordinating: routines
+ * deliver here, and the client asks for it by calling /session. A per-routine
+ * address would give every routine its own thread, which is exactly the
+ * behaviour that made routines look broken — they ran, and their answers piled
+ * up somewhere nobody opens.
  */
-type AttachBinder = (sessionId: string) => {
-  send: (message: unknown, options: { auth: unknown }) => Promise<never>;
-};
-let attachBinder: AttachBinder | undefined;
+const CANONICAL_ADDRESS = "studio";
 
-/** Keep the binder the first time any route provides one. */
-function captureAttach(args: unknown): void {
-  const fn = (args as { attachSession?: unknown } | undefined)?.attachSession;
-  if (typeof fn === "function") attachBinder = fn as AttachBinder;
+/** Where the canonical session id is published for clients to adopt. */
+function canonicalSessionFile(appRoot: string): string {
+  return join(appRoot, ".eve", "canonical-session.json");
 }
+
+/**
+ * Record which session the canonical address currently resolves to.
+ *
+ * Written on delivery rather than derived on request: only the send knows the
+ * id, and a client asking later must get the same answer without starting a
+ * turn of its own to find out.
+ */
+function rememberCanonicalSession(appRoot: string, sessionId: string, routine: string): void {
+  try {
+    const file = canonicalSessionFile(appRoot);
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ sessionId, lastRoutine: routine, at: new Date().toISOString() }), "utf8");
+    renameSync(tmp, file);
+  } catch {
+    // A routine that delivered must not fail because a pointer could not be
+    // written; the client simply keeps the session it already had.
+  }
+}
+
+/** The canonical session id, or undefined before any routine has delivered. */
+function readCanonicalSession(appRoot: string): { sessionId: string; lastRoutine?: string; at?: string } | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(canonicalSessionFile(appRoot), "utf8")) as Record<string, unknown>;
+    return typeof raw.sessionId === "string" && raw.sessionId !== ""
+      ? {
+          sessionId: raw.sessionId,
+          ...(typeof raw.lastRoutine === "string" ? { lastRoutine: raw.lastRoutine } : {}),
+          ...(typeof raw.at === "string" ? { at: raw.at } : {}),
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 
 /**
  * Custom channels do NOT run the eve channel's authenticator, so these routes
@@ -272,39 +299,54 @@ export function manageChannel(options: ManageOptions = {}) {
      */
     receive: async ({ message, target, auth }, { from }) => {
       const routine = String((target as { routine?: unknown }).routine ?? "routine");
-      const current = readCurrentSession(appRoot);
 
-      // Continue the conversation the person is actually in.
+      // One conversation per agent, shared by the person and every routine.
       //
-      // `from(address)` cannot do this: an address is channel-local, so handing
-      // it a session id mints a NEW session keyed by that string rather than
-      // continuing the one it names — measured, not assumed. `attachSession` is
-      // the only thing that binds an exact session id, and eve hands it to route
-      // handlers only, never to `receive`. So it is captured when a route runs
-      // (see attachBinder) and reused here.
-      if (current && attachBinder) {
-        try {
-          return await attachBinder(current.sessionId).send(message, { auth });
-        } catch {
-          // The session may have been retired since it was recorded. Falling
-          // through starts a fresh conversation, which is the behaviour asked
-          // for when there is no open one — better than dropping the routine.
-        }
-      }
-      return from(`routine:${routine}`).send(message, { auth });
+      // A schedule cannot post into a session the way a person's client can.
+      // eve reserves the session namespace: addressing `eve:session:<id>:inbox`
+      // from a channel is refused outright ("uses eve's reserved session
+      // namespace"), and `attachSession` — the only thing that binds an exact
+      // session id — is handed to HTTP route handlers and nothing else. There
+      // is no supported path from a cron to an existing conversation.
+      //
+      // So do not chase one. The agent owns a canonical conversation at a fixed
+      // address, every routine delivers into it, and the client adopts it (see
+      // the /session route below). Then a routine's answer and what the person
+      // types are the same thread, which is what they expected in the first
+      // place, and nothing has to reach across into a session it does not own.
+      const session = await from(CANONICAL_ADDRESS).send(message, { auth });
+      rememberCanonicalSession(appRoot, session.id, routine);
+      return session;
     },
     routes: [
+      /**
+       * The conversation this agent considers canonical.
+       *
+       * A client asks once and adopts it, so what a routine says and what the
+       * person types land in the same thread. Without this each side keeps its
+       * own session and routines appear to do nothing — they ran, they just ran
+       * somewhere nobody opens.
+       *
+       * Absent until a routine has actually delivered, which is deliberate: a
+       * client must not abandon a live conversation to adopt one that does not
+       * exist yet.
+       */
+      GET(PREFIX + "/session", async (req) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+        const canonical = readCanonicalSession(appRoot);
+        return Response.json({ session: canonical ?? null });
+      }),
+
       // The ways to reach this agent that eve does not list: workspace bridges on this host.
-      GET(PREFIX + "/surfaces", async (req, _args) => {
-        captureAttach(_args);
+      GET(PREFIX + "/surfaces", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
         return Response.json({ surfaces: readSurfaces(surfacesDir) });
       }),
 
       // What can be installed, and what already is.
-      GET(PREFIX + "/catalog", async (req, _args) => {
-        captureAttach(_args);
+      GET(PREFIX + "/catalog", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
         const res = await fetch(registry, { signal: AbortSignal.timeout(20_000) }).catch(
@@ -348,8 +390,7 @@ export function manageChannel(options: ManageOptions = {}) {
        * Only keys that identify the agent to the control plane are accepted, and
        * no value is ever read back out.
        */
-      POST(PREFIX + "/credential", async (req, _args) => {
-        captureAttach(_args);
+      POST(PREFIX + "/credential", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
 
@@ -400,8 +441,7 @@ export function manageChannel(options: ManageOptions = {}) {
         });
       }),
 
-      POST(PREFIX + "/install", async (req, _args) => {
-        captureAttach(_args);
+      POST(PREFIX + "/install", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { item?: string };
@@ -458,8 +498,7 @@ export function manageChannel(options: ManageOptions = {}) {
       }),
 
       // Write a schedule into the repo. eve discovers agent/schedules/*.ts.
-      POST(PREFIX + "/schedule", async (req, _args) => {
-        captureAttach(_args);
+      POST(PREFIX + "/schedule", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as {
@@ -523,8 +562,7 @@ export function manageChannel(options: ManageOptions = {}) {
       }),
 
       // Remove a schedule this agent owns.
-      POST(PREFIX + "/schedule/delete", async (req, _args) => {
-        captureAttach(_args);
+      POST(PREFIX + "/schedule/delete", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
         const body = (await req.json().catch(() => ({}))) as { name?: string };
