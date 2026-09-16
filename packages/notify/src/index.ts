@@ -20,13 +20,44 @@ export interface NotifyInput {
 
 /** The context shape the runtime hands a hook; only what this needs. */
 export interface HookLike {
-  session?: { id?: string; auth?: { current?: { principalId?: string } | null } | null } | null;
+  session?: {
+    id?: string;
+    auth?: { current?: { principalId?: string; principalType?: string } | null } | null;
+  } | null;
   agent?: { name?: string };
 }
 
-/** The person whose turn this is, from the verified session principal. Undefined for a schedule or an anonymous caller. */
+/**
+ * Principals that are the agent itself rather than a person.
+ *
+ * A schedule runs as the app, so its turns carry `eve:app` with
+ * `principalType: "runtime"`. That is a perfectly good principal — it is simply
+ * not somebody with a phone.
+ */
+function isMachinePrincipal(id: string, type: string | undefined): boolean {
+  if (type === "runtime" || type === "app" || type === "agent") return true;
+  // Namespaced framework principals, whatever the type says.
+  return id.startsWith("eve:");
+}
+
+/**
+ * The person whose turn this is, from the verified session principal. Undefined
+ * for a schedule or an anonymous caller.
+ *
+ * This used to return whatever principal was on the session, and a routine's
+ * turn carries `eve:app` — truthy, so it passed the caller's `!user` guard and
+ * was POSTed to the control plane, which answered 500 every time. On the
+ * reference host that was every scheduled turn: 50 notifications delivered for
+ * real users, and three 500s, all of them routines. So a routine's completion
+ * never reached anyone AND it errored on the way to not reaching them.
+ *
+ * Returning undefined is the honest answer: there is nobody to ring.
+ */
 export function askingUser(ctx: HookLike | undefined): string | undefined {
-  return ctx?.session?.auth?.current?.principalId;
+  const current = ctx?.session?.auth?.current;
+  const id = current?.principalId;
+  if (typeof id !== "string" || id === "") return undefined;
+  return isMachinePrincipal(id, current?.principalType) ? undefined : id;
 }
 
 /** One line of a message, for a lock screen. */

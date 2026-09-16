@@ -669,8 +669,25 @@ test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tr
     spawnSync("chmod", ["-R", "u+rwX", dir]);
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
-    } catch (error) {
-      console.warn(`could not remove ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      // `kyb upgrade` installs the Buzz CLI, which builds Rust under sudo and
+      // leaves ROOT-owned files in here. `chmod -R u+rwX` as the test user
+      // cannot reopen those, so the removal above fails and a warning was all
+      // this used to do. Three such directories were found on a production host
+      // holding 1.6 GB between them, months old.
+      //
+      // Non-interactive only: this must never sit waiting for a password on CI.
+      spawnSync("sudo", ["-n", "rm", "-rf", dir]);
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      } catch (error) {
+        // Still loud, but never the verdict: the assertions above already
+        // passed, and a leaked temp dir must not fail a green test.
+        console.warn(
+          `LEAKED ${dir} — remove it by hand; it holds a full npm + Rust build. ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
     }
   }
 });
