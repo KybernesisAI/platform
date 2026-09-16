@@ -18,6 +18,28 @@ import { test } from "node:test";
 const script = fileURLToPath(new URL("../scripts/docker-prune.sh", import.meta.url));
 const serverScript = fileURLToPath(new URL("../scripts/eve-server.sh", import.meta.url));
 
+/**
+ * The script parses container timestamps with `date -u -d "<absolute time>"`,
+ * which is GNU-only. macOS date has no -d at all, so on a Mac those parses
+ * return nothing, every age comparison collapses, and the affected tests fail
+ * for a reason that has nothing to do with the rules they cover.
+ *
+ * Skipped rather than left failing: a permanently red suite trains people to
+ * ignore it, and three of these sat red long enough that their real message —
+ * that the template rules were untested — went unread for months. The script
+ * runs under dash on Linux hosts in production; that is where these must pass,
+ * and where CI runs them.
+ */
+const gnuDate = (() => {
+  try {
+    execFileSync("date", ["-u", "-d", "2026-01-01 00:00:00", "+%s"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const needsGnuDate = gnuDate ? {} : { skip: "requires GNU date (-d); run on Linux or in CI" };
+
 const rootRun = "01M1Q4SASKGVGWDCEFBKG1ZH8F";
 const builderRun = "01M1Q3TJVVGCPNVVRPAYEA4WMX";
 const missingRun = "01M1Q0".padEnd(26, "0");
@@ -128,9 +150,28 @@ case "$1" in
   stop|rm|builder|image) exit 0 ;;
 esac
 `);
+  // The fake clock must answer RELATIVE times, not just absolute ones.
+  //
+  // `date -u -d "48 hours ago" +%s` used to fall through to the real /bin/date,
+  // whose answer is relative to the real now rather than this fixed clock — so
+  // on a machine without GNU date it produced nothing and the script took its
+  // `|| echo 0` fallback. The grace cutoff then sat at epoch 0, `when_epoch <
+  // cutoff` was never true, and NO template was removed in any test. Every
+  // assertion about template removal failed for a reason unrelated to the rule
+  // under test, which is how a reclaim that deletes images ended up with
+  // coverage that only looked real.
+  //
+  // Answers are exact literals rather than arithmetic: this is a shell script
+  // inside a JS template literal, and backticks, sed escapes and $(( )) each
+  // need three layers of quoting to survive. Literals need none.
+  //
+  // Fixed clock is 1788292800 = 2026-09-01T20:00:00Z.
   executable(join(bin, "date"), `#!/bin/sh
 [ "$*" = '-u +%s' ] && { echo 1788292800; exit 0; }
 [ "$*" = '-u +%FT%TZ' ] && { echo 2026-09-01T20:00:00Z; exit 0; }
+[ "$*" = '-u -d 48 hours ago +%s' ] && { echo 1788120000; exit 0; }
+[ "$*" = '-u -d 24 hours ago +%s' ] && { echo 1788206400; exit 0; }
+[ "$*" = '-u -d 168 hours ago +%s' ] && { echo 1787688000; exit 0; }
 case "$*" in *"6 hours ago"*) echo '2026-09-01 14:00:00'; exit 0 ;; esac
 exec /bin/date "$@"
 `);
@@ -150,6 +191,14 @@ exec /bin/ls "$@"
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     EVE_DOCKER_PATH: join(bin, "fake-docker"),
+    // Named explicitly rather than relied on through PATH: /bin/sh is dash on
+    // the hosts this runs on, and dash does not resolve `date` through PATH the
+    // way bash does. A PATH-only fake works on macOS and silently does nothing
+    // on Linux, which is exactly how the template rules ended up untested.
+    KYB_PRUNE_DATE: join(bin, "date"),
+    KYB_PRUNE_STAT: join(bin, "stat"),
+    KYB_PRUNE_DF: join(bin, "df"),
+    ...(unavailableRuns ? { KYB_PRUNE_LS: join(bin, "ls") } : {}),
     FAKE_DOCKER_LOG: log,
     ...(dryRun ? { KYB_PRUNE_DRY_RUN: "1" } : {}),
     ...(noAppEnv
@@ -179,7 +228,7 @@ exec /bin/ls "$@"
 
 const mutated = (calls, id) => calls.some((call) => /^(rm|stop) /.test(call) && call.includes(id));
 
-test("production-shaped root and subagent names resolve to bare durable run ids", () => {
+test("production-shaped root and subagent names resolve to bare durable run ids", needsGnuDate, () => {
   const { output, calls } = runPrune();
   assert.ok(calls.includes("rm terminal"));
   assert.ok(calls.includes("rm missing"));
@@ -196,19 +245,19 @@ test("production-shaped root and subagent names resolve to bare durable run ids"
   assert.equal(mutated(calls, "build-live"), false);
 });
 
-test("without an app environment or parseable run id a young exited session is kept", () => {
+test("without an app environment or parseable run id a young exited session is kept", needsGnuDate, () => {
   const { output, calls } = runPrune({ noAppEnv: true });
   assert.equal(mutated(calls, "young"), false);
   assert.match(output, /keeping exited session container .*run state unknown/);
 });
 
-test("an unavailable candidate run directory cannot authorize immediate missing-run deletion", () => {
+test("an unavailable candidate run directory cannot authorize immediate missing-run deletion", needsGnuDate, () => {
   const { output, calls } = runPrune({ unavailableRuns: true });
   assert.equal(mutated(calls, "unsafe-missing"), false);
   assert.match(output, /keeping exited session container .*run state unknown/);
 });
 
-test("recent exact tag markers veto batch removal while stale and absent markers do not", () => {
+test("recent exact tag markers veto batch removal while stale and absent markers do not", needsGnuDate, () => {
   const { output, calls, markers } = runPrune();
   assert.equal(calls.includes("rmi recent-template"), false, "exactly seven days old is inclusive");
   assert.equal(calls.includes("rmi uncertain-template"), false, "stat uncertainty protects");
@@ -223,7 +272,7 @@ test("recent exact tag markers veto batch removal while stale and absent markers
   assert.ok(calls.includes("image prune -f"));
 });
 
-test("dry run performs no Docker or marker mutation", () => {
+test("dry run performs no Docker or marker mutation", needsGnuDate, () => {
   const { output, calls, markers } = runPrune({ dryRun: true });
   assert.equal(calls.some((call) => /^(rm|rmi|stop|builder|image|container) /.test(call)), false, calls.join("; "));
   assert.deepEqual(markers, { recent: true, stale: true, failed: true, uncertain: true, current: true });
@@ -257,4 +306,38 @@ test("threshold defaults and operational rationale remain documented beside the 
   assert.match(source, /per checkout/i);
   assert.match(source, /share one Docker daemon/i);
   assert.match(source, /rebuilt alone/i);
+});
+
+/**
+ * Templates belonging to a checkout that no longer exists.
+ *
+ * The batch rule cannot reclaim these: it keeps each app hash's NEWEST batch,
+ * and for an abandoned checkout the whole group IS that batch, so every image
+ * survives for ever. On the reference host ten such images held ~8 GB,
+ * referenced by no container, while the daily prune reported nothing to do.
+ */
+test("a template no checkout claims is reclaimed as orphaned", needsGnuDate, () => {
+  const { output, calls } = runPrune();
+  assert.ok(calls.includes("rmi absent-template"), "an unclaimed template must be reclaimable");
+  assert.match(output, /orphaned sandbox template .*no checkout claims it/);
+});
+
+/**
+ * The guard that makes the rule above safe to have at all.
+ *
+ * "No checkout claims this" only means orphaned if we know EVERY checkout. Run
+ * with no app-dir list — from a directory that simply is not a checkout — every
+ * template looks unclaimed, and an unguarded rule would empty the daemon. That
+ * is not hypothetical: while developing this, a dry run with the list unset
+ * proposed removing all fifteen templates on the reference host, including the
+ * five the live agent was using.
+ */
+test("with a guessed checkout list, no template is judged orphaned", needsGnuDate, () => {
+  const { output, calls } = runPrune({ noAppEnv: true });
+  assert.equal(
+    calls.some((call) => call.startsWith("rmi ")),
+    false,
+    `a guessed checkout list must never authorize an image removal: ${calls.join("; ")}`,
+  );
+  assert.doesNotMatch(output, /orphaned sandbox template/);
 });

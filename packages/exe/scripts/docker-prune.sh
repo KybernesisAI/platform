@@ -26,6 +26,19 @@
 set -u
 
 DOCKER="${EVE_DOCKER_PATH:-docker}"
+# Same seam as DOCKER, and for the same reason: a test must be able to fix the
+# clock. Overriding PATH is not enough — /bin/sh is dash on Debian hosts, which
+# does not resolve `date` through PATH the way bash does, so a PATH-based fake
+# silently has no effect and every age rule then evaluates against the real
+# now. That is what left the template rules here untested for months.
+DATE="${KYB_PRUNE_DATE:-date}"
+# Same seam, same reason. Everything a test needs to control is named, never
+# shadowed through PATH: under dash a PATH fake is simply not picked up, so a
+# suite that relies on one passes on macOS and tests nothing on the hosts this
+# actually runs on.
+STAT="${KYB_PRUNE_STAT:-stat}"
+LS="${KYB_PRUNE_LS:-ls}"
+DF="${KYB_PRUNE_DF:-df}"
 command -v "$DOCKER" >/dev/null 2>&1 || exit 0
 
 DRY_RUN="${KYB_PRUNE_DRY_RUN:-}"
@@ -67,17 +80,17 @@ app_dirs_authoritative=0
 [ -s "$app_dirs" ] && app_dirs_authoritative=1
 if [ ! -s "$app_dirs" ]; then add_app_dir "$(pwd)"; fi
 
-now_epoch=$(date -u +%s 2>/dev/null) || now_epoch=""
+now_epoch=$("$DATE" -u +%s 2>/dev/null) || now_epoch=""
 session_cutoff=""
 idle_cutoff=""
 [ -n "$now_epoch" ] && session_cutoff=$((now_epoch - SESSION_HOURS * 3600))
 [ -n "$now_epoch" ] && idle_cutoff=$((now_epoch - IDLE_HOURS * 3600))
 marker_cutoff=""
 [ -n "$now_epoch" ] && marker_cutoff=$((now_epoch - MARKER_DAYS * 86400))
-build_cutoff=$(date -u -d "${BUILD_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || build_cutoff=""
+build_cutoff=$("$DATE" -u -d "${BUILD_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || build_cutoff=""
 
-echo "=== $(date -u +%FT%TZ) start ==="
-df -h / | tail -1
+echo "=== $("$DATE" -u +%FT%TZ) start ==="
+"$DF" -h / | tail -1
 
 # A real Eve container adds a scope suffix after the workflow ULID, for example
 # -__root__ or -subagents-builder. Only the exact wrun_ token maps to the run
@@ -97,7 +110,7 @@ run_state() {
   while IFS= read -r app; do
     runs="$app/.eve/.workflow-data/runs"
     [ -d "$runs" ] || continue
-    if ! ls "$runs" >/dev/null 2>&1; then
+    if ! "$LS" "$runs" >/dev/null 2>&1; then
       unsafe=1
       continue
     fi
@@ -169,7 +182,7 @@ remove_session() {
 
     if [ "$role" = "session" ] || [ "${name#eve-sbx-ses-}" != "$name" ]; then
       if [ "$running" = 1 ]; then
-        created_epoch=$(date -u -d "$when" +%s 2>/dev/null) || created_epoch=""
+        created_epoch=$("$DATE" -u -d "$when" +%s 2>/dev/null) || created_epoch=""
         if [ -n "$session_cutoff" ] && [ -n "$created_epoch" ] && [ "$created_epoch" -lt "$session_cutoff" ]; then
           remove_session "$id" "$name" "created ${when}, older than ${SESSION_HOURS}h" 1
         else
@@ -190,7 +203,7 @@ remove_session() {
         echo "keeping exited session container ${name}: finished time inspect failed"
         continue
       }
-      finished_epoch=$(date -u -d "$finished" +%s 2>/dev/null) || finished_epoch=""
+      finished_epoch=$("$DATE" -u -d "$finished" +%s 2>/dev/null) || finished_epoch=""
       if [ -n "$idle_cutoff" ] && [ -n "$finished_epoch" ] && [ "$finished_epoch" -lt "$idle_cutoff" ]; then
         remove_session "$id" "$name" "finished ${finished}, idle more than ${IDLE_HOURS}h; run state ${state}" 0
       else
@@ -246,7 +259,7 @@ marker_state() {
     [ -e "$marker" ] || continue
     seen=1
     [ -n "$marker_cutoff" ] || { echo uncertain; return; }
-    mtime=$(stat -c %Y "$marker" 2>/dev/null) || { echo uncertain; return; }
+    mtime=$("$STAT" -c %Y "$marker" 2>/dev/null) || { echo uncertain; return; }
     case "$mtime" in *[!0-9]*|'') echo uncertain; return ;; esac
     if [ "$mtime" -ge "$marker_cutoff" ]; then
       echo recent
@@ -282,12 +295,12 @@ marker_state() {
 # that isolated rebuild must not make the other recently used templates look
 # obsolete. Missing or stale markers merely defer to the batch/grace rule, while
 # marker stat uncertainty protects the image rather than guessing permission.
-grace_epoch=$(date -u -d "${GRACE_HOURS} hours ago" +%s 2>/dev/null || echo 0)
+grace_epoch=$("$DATE" -u -d "${GRACE_HOURS} hours ago" +%s 2>/dev/null || echo 0)
 "$DOCKER" images --filter 'reference=eve-sandbox-template' --format '{{.Tag}}\t{{.CreatedAt}}\t{{.ID}}' 2>/dev/null |
   while IFS="$(printf '\t')" read -r tag created image; do
     [ -z "$image" ] && continue
     when=$(echo "$created" | awk '{print $1" "$2}')
-    when_epoch=$(date -u -d "$when" +%s 2>/dev/null || echo 0)
+    when_epoch=$("$DATE" -u -d "$when" +%s 2>/dev/null || echo 0)
     app=$(echo "$tag" | awk -F- 'NF >= 7 && $1 == "eve" && $2 == "sbx" && $3 == "tpl" { print $5 }')
     echo "${app:--} ${when_epoch} ${tag} ${image}"
   done > "$templates"
@@ -298,7 +311,7 @@ awk '{print $1}' "$templates" | sort -u | while read -r app; do
   cutoff_epoch=$grace_epoch
   [ "$batch_epoch" -lt "$cutoff_epoch" ] && cutoff_epoch=$batch_epoch
   total=$(awk -v a="$app" '$1 == a' "$templates" | wc -l | tr -d ' ')
-  echo "templates for ${app}: ${total}, newest $(date -u -d "@${newest_epoch}" +%FT%TZ 2>/dev/null), keeping from $(date -u -d "@${cutoff_epoch}" +%FT%TZ 2>/dev/null)"
+  echo "templates for ${app}: ${total}, newest $("$DATE" -u -d "@${newest_epoch}" +%FT%TZ 2>/dev/null), keeping from $("$DATE" -u -d "@${cutoff_epoch}" +%FT%TZ 2>/dev/null)"
   awk -v a="$app" '$1 == a {print $2" "$3" "$4}' "$templates" |
     while read -r when_epoch tag image; do
       marker=$(marker_state "$tag")
@@ -359,5 +372,5 @@ done
 # 4. Dangling layers.
 [ -n "$DRY_RUN" ] || "$DOCKER" image prune -f
 
-df -h / | tail -1
+"$DF" -h / | tail -1
 echo "=== done ==="
