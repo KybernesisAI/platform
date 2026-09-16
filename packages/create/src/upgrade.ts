@@ -8,6 +8,7 @@ import { upsertEnv } from "./envfile.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
 import { assessPeerTree, staleRangeWarning } from "./peer-tree.js";
 import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
+import { newestOnLine, type Candidate } from "./on-line-version.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
@@ -831,6 +832,42 @@ function targetEvePeer(name: string, version: string): string | undefined {
   return capture("npm", ["view", `${name}@${version}`, "peerDependencies.eve"])?.trim() || undefined;
 }
 
+/**
+ * The newest published build of a @kybernesis package that supports a given eve.
+ *
+ * NOT `npm view <name> version`. These packages ship one build per eve line and
+ * the versions are not ordered by line — voice 0.1.2 is the eve 0.49 build and
+ * was published after 0.1.1, the 0.51 build — so npm's `latest` is routinely the
+ * wrong package. Installing it puts the agent on a build compiled against an eve
+ * API it is not running, which fails at neither install nor build, only later
+ * and only on one path. That is how an 0.51 build of @kybernesis/manage ran on
+ * two eve 0.49 agents for days, and how @kybernesis/notify took one down.
+ *
+ * Returns undefined when nothing published supports this eve — a real answer,
+ * and one the caller must report rather than paper over.
+ */
+function newestBuildForEve(name: string, eve: string): string | undefined {
+  const raw = capture("npm", ["view", name, "versions", "--json"]);
+  if (!raw) return undefined;
+  let versions: string[];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    versions = Array.isArray(parsed) ? (parsed as string[]) : [String(parsed)];
+  } catch {
+    return undefined;
+  }
+  // Newest first, so the usual case stops after one lookup.
+  const ordered = [...versions].reverse();
+  const candidates: Candidate[] = [];
+  for (const version of ordered) {
+    const peer = targetEvePeer(name, version);
+    candidates.push({ version, ...(peer ? { peer } : {}) });
+    const hit = newestOnLine(candidates, eve);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 function dependencyEntries(pkg: Record<string, unknown>): Array<{ name: string; section: DependencySection; range: string }> {
   const entries: Array<{ name: string; section: DependencySection; range: string }> = [];
   for (const section of ["dependencies", "devDependencies"] as const) {
@@ -972,9 +1009,23 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     }
     installedVersions.set(name, installed);
 
-    const target = name === "eve" ? EVE_VERSION : capture("npm", ["view", name, "version"])?.trim();
+    // eve goes to the certified pin. Everything else goes to the newest build
+    // that supports the eve this host will be running — NOT npm's `latest`,
+    // which for a per-eve-line package is routinely a build for a different
+    // line and installs without complaint.
+    const target =
+      name === "eve"
+        ? EVE_VERSION
+        : name.startsWith("@kybernesis/")
+          ? newestBuildForEve(name, EVE_VERSION)
+          : capture("npm", ["view", name, "version"])?.trim();
     if (!target) {
-      console.log(`  ${yellow("!")} ${name}: could not resolve target version`);
+      console.log(
+        `  ${yellow("!")} ${name}: ` +
+          (name.startsWith("@kybernesis/")
+            ? `no published build declares support for eve ${EVE_VERSION} — leaving it alone`
+            : "could not resolve target version"),
+      );
       unresolved.add(name);
       continue;
     }
@@ -986,7 +1037,9 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     }
 
     if (installed === target) {
-      console.log(`  ${green("✓")} ${name}@${installed} ${dim(name === "eve" ? "(certified)" : "(latest)")}`);
+      console.log(
+        `  ${green("✓")} ${name}@${installed} ${dim(name === "eve" ? "(certified)" : name.startsWith("@kybernesis/") ? `(newest for eve ${EVE_VERSION})` : "(latest)")}`,
+      );
     } else if (name === "eve" && versionLt(EVE_VERSION, installed)) {
       console.log(`  ${yellow("!")} eve@${installed} is AHEAD of the certified ${EVE_VERSION} ${dim("— unsupported territory")}`);
     } else {

@@ -91,6 +91,19 @@ if [ "$1" = view ]; then
     "@kybernesis/exe version") echo 0.12.1 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
     "eve version") echo 0.51.1 ;;
+    # upgrade no longer asks for \`latest\`: a @kybernesis package ships one
+    # build per eve line and the versions are not ordered by line, so it
+    # enumerates and picks the newest build whose peer range covers the
+    # certified eve. Each list ends with a build for a DIFFERENT line, so a
+    # resolver that just took the last entry would fail these.
+    "@kybernesis/buzz versions") echo '["0.9.0","0.9.1"]' ;;
+    "@kybernesis/evals versions") echo '["0.6.2","0.6.3"]' ;;
+    "@kybernesis/exe versions") echo '["0.12.1","0.12.2"]' ;;
+    "@kybernesis/enterprise versions") echo '["0.8.0","0.8.1"]' ;;
+    "@kybernesis/buzz@0.9.1 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
+    "@kybernesis/evals@0.6.3 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
+    "@kybernesis/exe@0.12.2 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
+    "@kybernesis/enterprise@0.8.1 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
     "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^0.51.0" ;;
     "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^0.51.0" ;;
     "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^0.51.0" ;;
