@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineSource } from "./routine-source.js";
+import { sessionAwaitingPerson } from "./awaiting-person.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -297,7 +298,7 @@ export function manageChannel(options: ManageOptions = {}) {
      * recorded conversation — a fresh agent, or nobody has spoken yet — it
      * falls back to a stable per-routine address, which starts a new one.
      */
-    receive: async ({ message, target, auth }, { from }) => {
+    receive: async ({ message, target, auth }, { from, resolveSession }) => {
       const routine = String((target as { routine?: unknown }).routine ?? "routine");
 
       // One conversation per agent, shared by the person and every routine.
@@ -314,6 +315,38 @@ export function manageChannel(options: ManageOptions = {}) {
       // the /session route below). Then a routine's answer and what the person
       // types are the same thread, which is what they expected in the first
       // place, and nothing has to reach across into a session it does not own.
+      /**
+       * Never speak into a conversation that is waiting on the person.
+       *
+       * eve resolves a pending question with the NEXT message to arrive. From a
+       * person that is the answer; from a routine on a timer it is the routine's
+       * own prompt recorded as their reply, and the agent carries on as though
+       * they had said yes. A routine asking "ship this draft?" would get a
+       * consent nobody gave.
+       *
+       * Skipping a firing costs one reminder. The alternative costs the meaning
+       * of an answer, so this fails toward silence.
+       */
+      let waiting: { id: string } | undefined;
+      try {
+        const existing = await resolveSession(CANONICAL_ADDRESS);
+        if (existing && (await sessionAwaitingPerson(existing))) waiting = existing;
+      } catch (error) {
+        // Deliver anyway. A guard that throws here takes EVERY routine down
+        // silently: `receive` rejects, the schedule's waitUntil swallows it,
+        // and nothing is logged — no turn, no error, just an agent that
+        // quietly stopped. That failure is far worse than the one this guards
+        // against, so the guard must never be the reason a routine is lost.
+        console.warn(`[manage] routine ${routine}: could not check for a pending question, delivering anyway.`, error);
+      }
+      if (waiting) {
+        console.warn(
+          `[manage] routine ${routine} skipped: the conversation is waiting on an answer, ` +
+            `and delivering now would answer it on their behalf.`,
+        );
+        return waiting as never;
+      }
+
       const session = await from(CANONICAL_ADDRESS).send(message, { auth });
       rememberCanonicalSession(appRoot, session.id, routine);
       return session;
