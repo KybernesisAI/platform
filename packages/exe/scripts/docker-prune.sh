@@ -51,6 +51,20 @@ if [ -n "${EVE_APP_DIRS:-}" ]; then
   IFS=$old_ifs
 fi
 [ -n "${EVE_APP_DIR:-}" ] && add_app_dir "$EVE_APP_DIR"
+
+# Whether the checkout list is AUTHORITATIVE — i.e. someone told us where the
+# checkouts are, rather than us guessing from the working directory.
+#
+# This gates orphan removal, and the distinction is the difference between
+# reclaiming dead images and deleting live ones. "No checkout claims this
+# template" only means orphaned if we actually know every checkout. Run from a
+# directory that happens not to be one, every template looks unclaimed — and a
+# rule that deletes unclaimed templates would then delete the whole daemon.
+# Observed in testing against the reference host: with the list unset, a dry run
+# proposed removing all fifteen templates, including the five the live agent
+# needs.
+app_dirs_authoritative=0
+[ -s "$app_dirs" ] && app_dirs_authoritative=1
 if [ ! -s "$app_dirs" ]; then add_app_dir "$(pwd)"; fi
 
 now_epoch=$(date -u +%s 2>/dev/null) || now_epoch=""
@@ -295,6 +309,35 @@ awk '{print $1}' "$templates" | sort -u | while read -r app; do
           ;;
         uncertain)
           echo "keeping sandbox template ${tag} (${image}; marker time unavailable)"
+          continue
+          ;;
+        absent)
+          if [ "$app_dirs_authoritative" -ne 1 ]; then
+            echo "keeping sandbox template ${tag} (${image}; unclaimed, but the checkout list was guessed — refusing to judge)"
+            continue
+          fi
+          # No registered checkout claims this template, so it belongs to a
+          # checkout that is gone. The batch rule below cannot reclaim these:
+          # it keeps each app hash's NEWEST batch, and for an abandoned checkout
+          # the whole group IS the newest batch, so every one is preserved for
+          # ever. Ten such images held 8 GB on the reference host, unreferenced
+          # by any container, while the daily prune reported nothing to do.
+          #
+          # Judged against the grace period alone, never the batch: an orphan is
+          # not superseded by anything, and the only reason to keep one is that
+          # it may be a fresh build whose marker has not been written yet.
+          if [ "$when_epoch" -lt "$grace_epoch" ]; then
+            if [ -n "$DRY_RUN" ]; then
+              echo "would remove orphaned sandbox template ${tag} (${image}; no checkout claims it)"
+            else
+              if "$DOCKER" rmi "$image" >/dev/null 2>&1; then
+                echo "removed orphaned sandbox template ${tag} (${image}; no checkout claims it)"
+                remove_image_markers "$tag"
+              fi
+            fi
+          else
+            echo "keeping sandbox template ${tag} (${image}; unclaimed but built within ${GRACE_HOURS}h)"
+          fi
           continue
           ;;
       esac
