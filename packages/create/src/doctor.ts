@@ -8,6 +8,7 @@ import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.j
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
 import { countAbandonedRuns } from "./run-store.js";
+import { describeStaleSidecar, newestPackageChange, staleSidecars } from "./stale-sidecar.js";
 import { checkSelfVersion } from "./self-version.js";
 
 type Verdict = "pass" | "warn" | "fail";
@@ -145,6 +146,17 @@ async function head(url: string, headers?: Record<string, string>): Promise<numb
   }
 }
 
+/** Running units that belong to a Kybernesis agent on this host. */
+function listAgentUnits(): string[] {
+  const out = capture("systemctl", ["list-units", "--type=service", "--state=running", "--no-legend", "--plain"]);
+  if (!out) return [];
+  return out
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/)[0] ?? "")
+    .filter((unit) => /-(agent|buzz-bridge)\.service$/.test(unit))
+    .map((unit) => unit.replace(/\.service$/, ""));
+}
+
 export async function doctor(): Promise<void> {
   const cwd = process.cwd();
   const installedAgentService = findMatchingAgentServiceUnit(cwd);
@@ -162,6 +174,29 @@ export async function doctor(): Promise<void> {
    * them. Reported rather than fixed: the remedy restarts the agent, which is
    * not something a diagnostic should do behind someone's back.
    */
+  /**
+   * Services still running the code they loaded at start.
+   *
+   * An agent host has more than one: deploy.sh restarts the agent, and the Buzz
+   * bridge is a separate unit it never touches. Both bridges on the reference
+   * fleet ran four days on a superseded package while the fix sat on disk, so
+   * two changes signed off as deployed were live nowhere. Nothing looked
+   * broken — the old code simply kept doing what it did.
+   */
+  const packageChange = newestPackageChange(cwd);
+  const started = new Map<string, Date>();
+  for (const unit of listAgentUnits()) {
+    const stamp = capture("systemctl", ["show", "-p", "ActiveEnterTimestamp", "--value", unit])?.trim();
+    const at = stamp ? new Date(stamp) : null;
+    if (at && !Number.isNaN(at.getTime())) started.set(unit, at);
+  }
+  for (const stale of staleSidecars({ started, packageChange })) {
+    add("fail", `${stale.service} is running superseded code`, describeStaleSidecar(stale));
+  }
+  if (started.size > 0 && staleSidecars({ started, packageChange }).length === 0) {
+    add("pass", `every service is running the code currently installed (${started.size} checked)`);
+  }
+
   const runs = countAbandonedRuns(cwd);
   if (runs) {
     if (runs.abandoned === 0) {
