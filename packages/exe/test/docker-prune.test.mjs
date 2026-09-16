@@ -229,7 +229,13 @@ test("dry run performs no Docker or marker mutation", () => {
   assert.deepEqual(markers, { recent: true, stale: true, failed: true, uncertain: true, current: true });
   assert.match(output, /would remove session container/);
   assert.match(output, /would remove superseded sandbox template .*marker stale/);
-  assert.match(output, /would remove superseded sandbox template .*marker absent/);
+  // `absent` — no registered checkout claims the tag — is now the ORPHAN path,
+  // not the superseded one. A checkout that is deleted leaves its templates
+  // behind, and the batch rule cannot reclaim them: it keeps each app hash's
+  // newest batch, and for an abandoned checkout the whole group IS that batch.
+  // Ten such images held ~8 GB on the reference host while the daily prune
+  // reported nothing to do.
+  assert.match(output, /would remove orphaned sandbox template .*no checkout claims it/);
 });
 
 test("startup runs packaged reclaim before Eve while preserving the orphan sweep", () => {
