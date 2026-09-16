@@ -7,6 +7,7 @@ import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
+import { countAbandonedRuns } from "./run-store.js";
 import { checkSelfVersion } from "./self-version.js";
 
 type Verdict = "pass" | "warn" | "fail";
@@ -153,6 +154,25 @@ export async function doctor(): Promise<void> {
   const selfVersion = checkSelfVersion();
   if (selfVersion.kind === "stale") {
     add("warn", selfVersion.message, selfVersion.fix);
+  }
+
+  /**
+   * Durable runs nothing will ever finish. They are replayed at every boot and
+   * eve removes none of them, so this only ever grows until something retires
+   * them. Reported rather than fixed: the remedy restarts the agent, which is
+   * not something a diagnostic should do behind someone's back.
+   */
+  const runs = countAbandonedRuns(cwd);
+  if (runs) {
+    if (runs.abandoned === 0) {
+      add("pass", `durable run store is clean (${runs.total} runs, ${runs.held} held by a hook)`);
+    } else {
+      add(
+        "warn",
+        `${runs.abandoned} abandoned durable run(s) of ${runs.total} — replayed at every boot, never removed`,
+        "scripts/safe-restart.sh, or reclaimAbandonedRuns() from @kybernesis/exe. Runs a hook still holds (routine sessions) are never retired.",
+      );
+    }
   }
 
   // ── project shape ──────────────────────────────────────────────────────

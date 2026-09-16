@@ -40,3 +40,11 @@ export {
   type HostPreflightResult,
   type HostCheck,
 } from "./preflight.js";
+
+export {
+  describeReclaim,
+  heldRunIds,
+  reclaimAbandonedRuns,
+  type ReclaimOptions,
+  type ReclaimReport,
+} from "./run-reclaim.js";
