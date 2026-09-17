@@ -1,0 +1,42 @@
+{
+  "name": "@kybernesis/identity",
+  "version": "0.1.0",
+  "description": "Give an eve agent its .agent identity: verify ARP Cloud push tokens, serve the verification document, and reach paired peers as tools — no daemon, no socket, no key in the bundle.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "eve": ">=0.51.0 <0.52.0"
+  },
+  "dependencies": {
+    "jose": "^5.9.6",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "eve": "^0.51.1",
+    "typescript": "7.0.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KybernesisAI/platform",
+    "directory": "packages/identity"
+  }
+}
