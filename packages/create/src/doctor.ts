@@ -10,6 +10,7 @@ import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js"
 import { countAbandonedRuns } from "./run-store.js";
 import { describeStaleSidecar, newestPackageChange, staleSidecars } from "./stale-sidecar.js";
 import { checkSelfVersion } from "./self-version.js";
+import { envUrlProblems } from "./env-urls.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -251,6 +252,23 @@ export async function doctor(): Promise<void> {
     ...(process.env as Record<string, string>),
   };
   if (!existsSync(envPath)) add("warn", ".env.local missing", "copy .env.example and fill it");
+
+  /**
+   * Config that is shaped wrong rather than missing.
+   *
+   * A URL-valued setting with no scheme does not fail at start; it fails inside
+   * whatever background drain uses it, once per turn, forever. The reference
+   * fleet logged 121 of these and lost every analytics event of a deployment
+   * while reporting healthy throughout. The value alone is enough to know, so
+   * this costs nothing and lands before a client's first turn.
+   */
+  const urlProblems = existsSync(envPath) ? envUrlProblems(readFileSync(envPath, "utf8")) : [];
+  for (const problem of urlProblems) {
+    add("fail", `${problem.name} cannot build a request (${problem.reason})`, problem.fix);
+  }
+  if (existsSync(envPath) && urlProblems.length === 0) {
+    add("pass", "every URL-valued setting is an absolute http(s) URL");
+  }
 
   const githubCheck = githubToolsDoctorCheck(
     existsSync(join(cwd, "agent/extensions/github.ts")),

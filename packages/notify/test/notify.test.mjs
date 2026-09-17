@@ -5,7 +5,10 @@ import { test } from "node:test";
 import { askingUser, notify, preview } from "../dist/index.js";
 
 test("the agent names the person from the verified principal, and nobody otherwise", () => {
-  assert.equal(askingUser({ session: { auth: { current: { principalId: "user_1" } } } }), "user_1");
+  assert.equal(
+    askingUser({ session: { auth: { current: { principalId: "user_1", principalType: "user" } } } }),
+    "user_1"
+  );
   assert.equal(askingUser({ session: { auth: null } }), undefined, "a schedule has no person");
   assert.equal(askingUser(undefined), undefined);
 });

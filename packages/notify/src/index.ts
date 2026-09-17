@@ -28,21 +28,30 @@ export interface HookLike {
 }
 
 /**
- * Principals that are the agent itself rather than a person.
+ * Is this principal a person the control plane can ring?
  *
- * A schedule runs as the app, so its turns carry `eve:app` with
- * `principalType: "runtime"`. That is a perfectly good principal — it is simply
- * not somebody with a phone.
+ * Default-deny, and deliberately so. This used to enumerate the machine types
+ * ("runtime", "app", "agent") and treat everything else as a person. That is
+ * the wrong polarity: every principal type the framework adds later is a person
+ * until somebody notices. It shipped, and `local-dev` — the principal every
+ * `eve dev` turn and every eval turn carries — was not on the list, so each one
+ * POSTed `local-dev` to the control plane and took a 500 back. An eval suite
+ * logged one per turn.
+ *
+ * A person is a control-plane user principal. The authenticator is NOT part of
+ * the test: real people arrive through several (`kybernesis` for Studio and the
+ * clients, `slack-webhook` for a Slack sender), and gating on the name of the
+ * one we happen to see most would silently stop notifying the others.
  */
-function isMachinePrincipal(id: string, type: string | undefined): boolean {
-  if (type === "runtime" || type === "app" || type === "agent") return true;
-  // Namespaced framework principals, whatever the type says.
-  return id.startsWith("eve:");
+function isPersonPrincipal(id: string, type: string | undefined): boolean {
+  if (type !== "user") return false;
+  // Namespaced framework principals are never people, whatever the type says.
+  return !id.startsWith("eve:");
 }
 
 /**
  * The person whose turn this is, from the verified session principal. Undefined
- * for a schedule or an anonymous caller.
+ * for a schedule, a local-dev or eval turn, or an anonymous caller.
  *
  * This used to return whatever principal was on the session, and a routine's
  * turn carries `eve:app` — truthy, so it passed the caller's `!user` guard and
@@ -57,8 +66,9 @@ export function askingUser(ctx: HookLike | undefined): string | undefined {
   const current = ctx?.session?.auth?.current;
   const id = current?.principalId;
   if (typeof id !== "string" || id === "") return undefined;
-  return isMachinePrincipal(id, current?.principalType) ? undefined : id;
+  return isPersonPrincipal(id, current?.principalType) ? id : undefined;
 }
+
 
 /** One line of a message, for a lock screen. */
 export function preview(text: string, max = 140): string {
