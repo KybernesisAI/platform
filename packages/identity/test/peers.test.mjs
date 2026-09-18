@@ -20,8 +20,8 @@ const fetchImpl = async (input, init = {}) => {
 };
 
 test("tool names are stable slugs", () => {
-  assert.equal(toolName("ghost"), "ask_ghost");
-  assert.equal(toolName("Support Bot"), "ask_support_bot");
+  assert.equal(toolName("ghost"), "ask_ghost_agent");
+  assert.equal(toolName("Support Bot"), "ask_support_bot_agent");
 });
 
 test("discovers peers with a credential and degrades to [] without one or on 401", async () => {
@@ -41,10 +41,10 @@ test("askPeer returns the reply, a decline for 403, and a pending note on timeou
   assert.equal(JSON.parse(sent.init.body).connection_id, "c1");
 });
 
-test("arpPeers exposes one ask_<peer> tool per connection on turn.started", async () => {
+test("arpPeers exposes one ask_<peer>_agent tool per connection on turn.started", async () => {
   const dyn = arpPeers({ issuer: ISSUER, credential: "good", fetchImpl, cacheMs: 0 });
   const handler = dyn.events?.["turn.started"] ?? dyn["turn.started"];
   assert.equal(typeof handler, "function");
   const tools = await handler({});
-  assert.ok(tools && tools.ask_ghost, "ask_ghost tool present");
+  assert.ok(tools && tools.ask_ghost_agent, "ask_ghost_agent tool present");
 });
