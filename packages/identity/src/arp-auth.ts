@@ -1,5 +1,6 @@
 import { createLocalJWKSet, jwtVerify, type JWK, type JWTPayload } from "jose";
 import { UnauthenticatedError, extractBearerToken, type AuthFn } from "eve/channels/auth";
+import { resolveIdentity } from "./store.js";
 
 export interface ArpAuthOptions {
   /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.arp.run. */
@@ -26,15 +27,16 @@ export interface ArpAuthOptions {
  * gateway outage is distinguishable from a bad credential.
  */
 export function arpAuth(options: ArpAuthOptions = {}): AuthFn<Request> {
-  const issuer = (options.issuer ?? process.env.ARP_ISSUER ?? "https://gateway.arp.run").replace(/\/+$/, "");
-  const agentDid = options.agentDid ?? process.env.ARP_AGENT_DID ?? "";
+  // Identity is resolved per request (options → env → identity file) so a
+  // "Connect your agent" that lands mid-life takes effect without a restart.
+  const identity = () => resolveIdentity({ ...(options.issuer ? { issuer: options.issuer } : {}), ...(options.agentDid ? { agentDid: options.agentDid } : {}) });
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const ttl = options.jwksTtlMs ?? 5 * 60_000;
   let cached: { at: number; set: ReturnType<typeof createLocalJWKSet> } | null = null;
 
   // JWKS via global fetch (stubbable, same as the peers module) with a short
   // cache; one refetch when a key id is unknown (rotation).
-  async function keySet(force = false): Promise<ReturnType<typeof createLocalJWKSet>> {
+  async function keySet(issuer: string, force = false): Promise<ReturnType<typeof createLocalJWKSet>> {
     if (!force && cached && Date.now() - cached.at < ttl) return cached.set;
     const res = await fetchImpl(`${issuer}/.well-known/jwks.json`, { signal: AbortSignal.timeout(6_000) });
     if (!res.ok) throw Object.assign(new Error(`jwks ${res.status}`), { code: "ERR_JWKS_FETCH" });
@@ -45,6 +47,7 @@ export function arpAuth(options: ArpAuthOptions = {}): AuthFn<Request> {
 
   return async (request) => {
     const token = extractBearerToken(request.headers.get("authorization"));
+    const { did: agentDid, issuer } = identity();
     if (!token || !agentDid) return null;
 
     // Only ARP tokens are ours; anything else falls through to the next entry.
@@ -59,11 +62,11 @@ export function arpAuth(options: ArpAuthOptions = {}): AuthFn<Request> {
     let payload: JWTPayload;
     try {
       try {
-        ({ payload } = await jwtVerify(token, await keySet(), { issuer, audience: agentDid }));
+        ({ payload } = await jwtVerify(token, await keySet(issuer), { issuer, audience: agentDid }));
       } catch (first) {
         const code = (first as { code?: unknown } | null)?.code;
         if (code === "ERR_JWKS_NO_MATCHING_KEY") {
-          ({ payload } = await jwtVerify(token, await keySet(true), { issuer, audience: agentDid }));
+          ({ payload } = await jwtVerify(token, await keySet(issuer, true), { issuer, audience: agentDid }));
         } else {
           throw first;
         }
