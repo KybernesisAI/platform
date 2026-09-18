@@ -48,7 +48,8 @@ export default eveChannel({ auth: [arpAuth(), localDev()] });
 - `identityChannel()` — serves `GET /eve/v1/arp/.well-known/agentid-verification`
   (`{ did, challenge }`) and `/eve/v1/arp/health`.
 - `arpPeers()` — on every turn, lists active connections from ARP Cloud and
-  exposes `ask_<peer>` tools. Pair or revoke in the console; nothing to redeploy.
+  exposes `ask_<peer>_agent` tools (the `_agent` suffix keeps them distinct from
+  control-plane peers, which are `ask_<peer>`). Pair or revoke in the console; nothing to redeploy.
 - `ARP_INSTRUCTIONS` — append to your instructions so the model uses the tools well.
 
 Degrades, never throws at boot: with no credential there are simply no peer

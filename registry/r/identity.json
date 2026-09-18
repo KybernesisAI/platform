@@ -24,7 +24,7 @@
       "path": "registry/identity-peers.ts",
       "type": "registry:file",
       "target": "agent/tools/arp-peers.ts",
-      "content": "import { arpPeers } from \"@kybernesis/identity\";\n\n// Every agent this one is PAIRED with on the agent network, as tools \u2014 resolved\n// from ARP Cloud at the start of each turn.\n//\n// Pairing in the console is the whole job: the ask_<name> tool appears on the\n// next turn and disappears when the connection is revoked. Each message is\n// checked against the permissions the other owner granted and logged for both\n// sides before it is delivered.\nexport default arpPeers();\n"
+      "content": "import { arpPeers } from \"@kybernesis/identity\";\n\n// Every agent this one is PAIRED with on the agent network, as tools \u2014 resolved\n// from ARP Cloud at the start of each turn.\n//\n// Pairing in the console is the whole job: the ask_<name>_agent tool appears on the\n// next turn and disappears when the connection is revoked. Each message is\n// checked against the permissions the other owner granted and logged for both\n// sides before it is delivered.\nexport default arpPeers();\n"
     }
   ]
 }

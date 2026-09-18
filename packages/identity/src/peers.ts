@@ -78,8 +78,15 @@ export async function askPeer(options: ArpPeersOptions, peer: ArpPeer, message: 
   return body.reply;
 }
 
+/**
+ * `ask_<name>_agent` — the `_agent` suffix is the namespace. Without it the
+ * tool collides with `@kybernesis/dispatch`'s control-plane peers (also
+ * `ask_<name>`) whenever the same agent is reachable both ways, and eve
+ * refuses to run the turn at all ("Dynamic tool ... collides with dynamic
+ * resolver"). Hit live on 2026-09-18 with Sid ↔ Kyber.
+ */
 export function toolName(peerName: string): string {
-  return `ask_${peerName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`;
+  return `ask_${peerName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}_agent`;
 }
 
 /**
@@ -97,7 +104,7 @@ export function arpPeers(options: ArpPeersOptions = {}) {
         for (const peer of peers) {
           tools[toolName(peer.name)] = defineTool({
             description:
-              `Send a message to ${peer.name}, a separate agent paired with you, and get its reply. ` +
+              `Send a message to ${peer.name}.agent, a separate agent paired with you on the agent network, and get its reply. ` +
               (peer.purpose ? `Paired for: ${peer.purpose}. ` : "") +
               `Every message is checked against the permissions its owner granted and is logged for both sides.`,
             inputSchema: z.object({
