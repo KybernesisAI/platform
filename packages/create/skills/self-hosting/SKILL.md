@@ -86,6 +86,31 @@ What this arrangement costs you, and it is worth saying to the client:
   presents as the agent "breaking".
 - **Ask the vendor's terms question before a client demo**, not after.
 
+### A Claude subscription expires on a ~28-day clock, and lies on the way out
+
+Claude is the third provider and behaves differently enough to plan around.
+Grok and ChatGPT are a file a CLI keeps fresh; Claude is a **proxy process**
+holding Claude Code's own OAuth (`scripts/claude-subscription.sh` in
+`@kybernesis/exe`). Two things follow, both learned on Sid:
+
+- **The sign-in has a hard expiry of about 28 days.** The access token refreshes
+  hourly and does so happily the whole time, which tells you nothing — the
+  *refresh* token underneath carries its own fixed expiry, and using it does not
+  extend it. On expiry the proxy blanks the credential file to empty strings and
+  every turn 401s. Only `login` recovers it; `reload` and restarts cannot.
+  **Diary the re-login for every subscription-backed agent you deploy.**
+- **`/ready` cannot see a dead credential.** It reports that a credential was
+  *loaded*, not that it is *valid*, so it answers 200 over a blanked file while
+  the API 401s — `status` read "signed in, answering" straight through an
+  outage. `status` now probes `/v1/models` as well and warns from the refresh
+  expiry (`✓ sign-in valid for 27d`, escalating at 7 and 3 days). Run it on a
+  schedule; the failure is silent and looks like a model outage, so people go
+  and read Anthropic's status page instead of opening a browser.
+
+Say the re-login cadence out loud to a client before it strands their agent at
+a weekend. It is the one piece of operational debt this arrangement creates in
+exchange for not billing metered API usage.
+
 ## The failure modes, each of which cost a real session
 
 - **`EXE_MODEL` is deliberately empty after `kyb init`.** Set it from the

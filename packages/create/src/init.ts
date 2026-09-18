@@ -46,7 +46,9 @@ import { MODEL_REACH_ENV, resolveModelScaffold, type ModelScaffoldConfig } from 
  * host bindings — is opt-in, because assuming them means the FDE deletes files
  * AND undoes real setup work (an Arcana workspace + scoped key per subagent).
  */
-const CORE_ITEMS = ["enterprise", "arcana", "evals"] as const;
+// `identity` gives the agent its .agent name surface: the owner connects it
+// from the ARP console with one click and never touches this repo again.
+const CORE_ITEMS = ["enterprise", "arcana", "evals", "identity"] as const;
 // Official eve-registry limbs installed with the engineer subagent.
 // connection/vercel is Vercel-Connect-backed, so it is VERCEL-HOST ONLY: on a
 // self-hosted agent it cannot get an OIDC token and the agent fails to boot.
@@ -281,6 +283,18 @@ export async function init(rawName: string | undefined, options: InitOptions = {
 
   console.log(bold("\n3/6  Writing identity, model config, memory mount, and evals …"));
   mkdirSync(join(dir, "agent/instructions"), { recursive: true });
+  // .agent identity: the channel + peers tool came from the registry item;
+  // deliveries need arpAuth() on the eve channel, and the model needs to know
+  // what the ask_<name>_agent tools are. Both are idempotent.
+  writeFileSync(join(dir, "agent/instructions/arp.md"), arpInstructionsMd());
+  {
+    const eveChannelPath = join(dir, "agent/channels/eve.ts");
+    if (existsSync(eveChannelPath)) {
+      const wired = wireArpAuth(readFileSync(eveChannelPath, "utf8"));
+      if (wired) writeFileSync(eveChannelPath, wired);
+      else console.log(yellow("  ! agent/channels/eve.ts: could not add arpAuth() — add it to the channel's auth list by hand"));
+    }
+  }
   writeFileSync(join(dir, "agent/instructions/identity.md"), identityMd(displayName, depts));
   try {
     unlinkSync(join(dir, "agent/instructions.md"));
@@ -500,4 +514,35 @@ ${steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n")}
   Run ${bold("kyb doctor")} inside ${name}/ any time to check the wiring.
 ${dim("  Add more later: kyb add channel <kind> · kyb add subagent <name>")}
 `);
+}
+
+/**
+ * Put `arpAuth()` first in the eve channel's auth walk so ARP Cloud deliveries
+ * are accepted. Returns the new source, the same source when already wired,
+ * or null when the file has no recognisable auth list.
+ */
+export function wireArpAuth(src: string): string | null {
+  if (src.includes("arpAuth(")) return src;
+  const lines = src.split("\n");
+  const lastImport = lines.reduce((acc, l, i) => (l.startsWith("import ") ? i : acc), -1);
+  lines.splice(lastImport + 1, 0, 'import { arpAuth } from "@kybernesis/identity";');
+  let out = lines.join("\n");
+  const comment = "// Deliveries from paired .agent peers: a per-message token ARP Cloud signs,\n    // verified offline against its JWKS; skips to the next entry otherwise.";
+  if (/extraAuth:\s*\[/.test(out)) return out.replace(/extraAuth:\s*\[/, `extraAuth: [\n    ${comment}\n    arpAuth(),`);
+  if (/\bauth:\s*\[/.test(out)) return out.replace(/\bauth:\s*\[/, `auth: [\n    ${comment}\n    arpAuth(),`);
+  return null;
+}
+
+function arpInstructionsMd(): string {
+  return `## Your .agent identity
+
+You have a registered name on the agent network. Other agents that are paired
+with you appear as \`ask_<name>_agent\` tools (the name is their .agent name; a
+plain \`ask_<name>\` tool, if present, is a different, non-network peer); use
+them when a request belongs to that agent rather than to you. When a message
+arrives from a paired agent, the caller's identity has already been verified
+and the message has already been checked against what its owner allowed —
+answer it as you would a trusted colleague, and honour any obligations
+attached (for example, do not include fields you were told to redact).
+`;
 }

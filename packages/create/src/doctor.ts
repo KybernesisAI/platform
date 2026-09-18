@@ -407,6 +407,19 @@ export async function doctor(): Promise<void> {
     }
   }
 
+  // ── .agent identity (ARP) ──────────────────────────────────────────────
+  // The owner connects the agent from the ARP console; the only thing that
+  // has to be true in this repo is that deliveries get in.
+  if (deps["@kybernesis/identity"]) {
+    if (!existsSync(join(cwd, "agent/channels/arp.ts")))
+      add("warn", "identity: agent/channels/arp.ts missing", "npx eve add @kybernesis/identity  (serves /eve/v1/arp for Connect your agent)");
+    if (eveChannelSrc && !eveChannelSrc.includes("arpAuth("))
+      add("fail", "identity: eve channel has no arpAuth()", "add arpAuth() to the channel's auth list — without it every delivery from a paired agent is a 401");
+    else if (eveChannelSrc) add("pass", "identity: eve channel accepts ARP deliveries (arpAuth)");
+  } else {
+    add("warn", "no .agent identity add-on", "npx eve add @kybernesis/identity — lets the owner connect this agent to a .agent name from the console");
+  }
+
   // ── self-hosted agents (host !== Vercel) ───────────────────────────────
   // Every check here cost a real debugging session on the first exe.dev
   // deployment. None of them are theoretical.

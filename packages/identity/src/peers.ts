@@ -1,5 +1,6 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
+import { resolveIdentity } from "./store.js";
 
 export interface ArpPeersOptions {
   /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.arp.run. */
@@ -24,9 +25,11 @@ export interface ArpPeer {
 const cache = new Map<string, { at: number; peers: ArpPeer[] }>();
 
 function config(options: ArpPeersOptions) {
+  // Per call, so a "Connect your agent" takes effect on the next turn.
+  const id = resolveIdentity({ ...(options.issuer ? { issuer: options.issuer } : {}), ...(options.credential ? { credential: options.credential } : {}) });
   return {
-    issuer: (options.issuer ?? process.env.ARP_ISSUER ?? "https://gateway.arp.run").replace(/\/+$/, ""),
-    credential: options.credential ?? process.env.ARP_AGENT_CREDENTIAL ?? "",
+    issuer: id.issuer,
+    credential: id.credential,
     cacheMs: options.cacheMs ?? 60_000,
     timeoutMs: options.timeoutMs ?? 120_000,
     fetchImpl: options.fetchImpl ?? globalThis.fetch,
