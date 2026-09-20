@@ -89,6 +89,42 @@ ready_state() {
   curl -s -o /dev/null -w '%{http_code}' -m 5 "http://127.0.0.1:${PORT}/ready" 2>/dev/null || echo 000
 }
 
+# THE THIRD STATE, and the one that cost a morning: signed in with a DEAD
+# credential. /ready reports that a credential was LOADED, not that it is still
+# worth anything. When the refresh token reaches its own expiry the proxy
+# writes the file back with EMPTY token strings and goes on serving /ready 200
+# — so `status` said "signed in, answering" while every single turn 401'd with
+# "OAuth access token has expired". Only the upstream API can answer this
+# honestly, so ask it rather than trusting a liveness endpoint.
+auth_state() {
+  curl -s -o /dev/null -w '%{http_code}' -m 10 \
+    -H 'anthropic-version: 2023-06-01' \
+    "http://127.0.0.1:${PORT}/v1/models" 2>/dev/null || echo 000
+}
+
+# Whole days until the REFRESH token expires; empty when it cannot be read.
+#
+# The access token refreshing cleanly tells you nothing. It did exactly that,
+# every hour, for four weeks — while the refresh token underneath it aged out
+# on a fixed ~28-day window. That is the expiry that ends the sign-in, using it
+# does not extend it, and nothing in place recovers once it passes. So it is
+# the number to put in front of somebody BEFORE it lands, not after.
+refresh_days_left() {
+  local mount
+  mount=$(docker volume inspect -f '{{.Mountpoint}}' "$VOLUME" 2>/dev/null) || return 1
+  sudo -n python3 -c '
+import json, sys, time
+try:
+    d = json.load(open(sys.argv[1]))["claudeAiOauth"]
+except Exception:
+    sys.exit(1)
+exp = d.get("refreshTokenExpiresAt") or 0
+if not exp or not d.get("refreshToken"):
+    sys.exit(1)
+print(int((exp / 1000 - time.time()) // 86400))
+' "${mount}/.claude/.credentials.json" 2>/dev/null || return 1
+}
+
 case "${1:-}" in
   up)
     require_docker
@@ -138,9 +174,14 @@ case "${1:-}" in
     # effect until the process reloads them.
     docker restart "$NAME" >/dev/null
     sleep 3
-    [ "$(ready_state)" = "200" ] \
-      && echo "  ✓ subscription loaded — http://127.0.0.1:${PORT}" \
-      || echo "  ✗ still no credential. Re-run login and complete the browser step."
+    # Confirm against the API, not /ready: a blanked credential loads happily.
+    if [ "$(auth_state)" = "200" ]; then
+      echo "  ✓ subscription live — http://127.0.0.1:${PORT}"
+      days=$(refresh_days_left) && echo "  ✓ good for ${days}d — next login due $(date -d "+${days} days" +%d\ %b 2>/dev/null || date -v"+${days}d" +%d\ %b 2>/dev/null)"
+    else
+      echo "  ✗ still not authenticating (/v1/models → $(auth_state))."
+      echo "    Re-run login and choose 'Sign in with Claude', completing the browser step."
+    fi
     ;;
 
   reload)
@@ -153,9 +194,14 @@ case "${1:-}" in
     require_docker
     docker restart "$NAME" >/dev/null
     sleep 4
-    [ "$(ready_state)" = "200" ] \
-      && echo "  ✓ ${NAME}: credentials reloaded, ready on 127.0.0.1:${PORT}" \
-      || echo "  ✗ still not ready. Run 'login' — there may be no sign-in in ${VOLUME} yet."
+    if [ "$(auth_state)" = "200" ]; then
+      echo "  ✓ ${NAME}: credentials reloaded and authenticating on 127.0.0.1:${PORT}"
+    elif [ "$(ready_state)" = "200" ]; then
+      echo "  ✗ ${NAME}: reloaded a credential that no longer authenticates. Reloading"
+      echo "    cannot fix an expired sign-in — run 'login'."
+    else
+      echo "  ✗ still not ready. Run 'login' — there may be no sign-in in ${VOLUME} yet."
+    fi
     ;;
 
   status)
@@ -164,7 +210,22 @@ case "${1:-}" in
     running=$(docker ps -q -f "name=^${NAME}$")
     [ -n "$running" ] || die "${NAME} is not running. Every turn will fail looking like a model outage."
     if [ "$state" = "200" ]; then
-      echo "  ✓ ${NAME}: signed in, answering on 127.0.0.1:${PORT}"
+      # Loaded is not the same as valid. Ask the API before claiming health.
+      auth=$(auth_state)
+      case "$auth" in
+        200)
+          echo "  ✓ ${NAME}: signed in and authenticating, answering on 127.0.0.1:${PORT}"
+          ;;
+        401|403)
+          echo "  ✗ ${NAME}: credential is DEAD (/ready → 200 but /v1/models → ${auth})."
+          echo "    The refresh token expired and the proxy blanked the sign-in. Nothing"
+          echo "    in place recovers from this. Run 'login'."
+          ;;
+        *)
+          echo "  ! ${NAME}: loaded a credential, but the API is unreachable (/v1/models → ${auth})."
+          echo "    Check the host's network before assuming a sign-in problem."
+          ;;
+      esac
     else
       credential_rc=0
       credentials_on_disk || credential_rc=$?
@@ -173,6 +234,16 @@ case "${1:-}" in
         1) echo "  ✗ ${NAME}: running but NOT signed in (/ready → ${state}). Run 'login'." ;;
         *) echo "  ✗ ${NAME}: not ready (/ready → ${state}). Run 'reload' first; if that does not fix it, 'login'." ;;
       esac
+    fi
+    # The sign-in dies on a schedule, so say when — an outage you can diary is
+    # not an outage. Silent when it cannot read the volume: a missing number is
+    # not a reason to nag, and root is not always available here.
+    if days=$(refresh_days_left); then
+      if   [ "$days" -lt 0 ]; then echo "  ✗ sign-in EXPIRED $(( -days ))d ago — run 'login'."
+      elif [ "$days" -le 3 ]; then echo "  ✗ sign-in expires in ${days}d — run 'login' now, before it strands the agent."
+      elif [ "$days" -le 7 ]; then echo "  ! sign-in expires in ${days}d — book the re-login."
+      else echo "  ✓ sign-in valid for ${days}d"
+      fi
     fi
     # A port published on 0.0.0.0 is the failure that costs money rather than
     # uptime, so it is checked here and not left to a code review.

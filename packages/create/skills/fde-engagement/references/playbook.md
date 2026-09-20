@@ -1989,7 +1989,7 @@ export default defineAgent({
 });
 ```
 
-Four things to know before you promise it:
+Five things to know before you promise it:
 
 - **The exe LLM integration also serves `anthropic/*` ids, and that is NOT this.**
   It reaches Anthropic through a gateway, which bills metered usage. Same model,
@@ -2000,9 +2000,18 @@ Four things to know before you promise it:
   provider-defined tools, which Anthropic validates by name, and the failure
   (`tools.N.web_search_20250305.name: Input should be 'web_search'`) reads like
   a bug in the agent's own tool definitions.
-- **The sign-in is per host and interactive** — a browser step, once, in the
-  container. It survives restarts because it lives in a named volume, but a new
-  VM needs its own.
+- **The sign-in is per host and interactive** — a browser step in the container.
+  It survives restarts because it lives in a named volume, but a new VM needs
+  its own.
+- **And it is not a one-off: the sign-in expires about every 28 days.** The
+  access token refreshes hourly and does so happily the whole time, which tells
+  you nothing — the refresh token underneath carries a fixed expiry that using
+  it does not extend. On expiry the proxy blanks the credential to empty strings
+  and every turn 401s; only `login` recovers it, never `reload` or a restart.
+  **Say this to the client before you promise the arrangement, and put the
+  re-login in someone's calendar** — it is the operational debt you take on in
+  exchange for not billing metered usage. Run `scripts/claude-subscription.sh
+  status` on a schedule: it now reports days remaining and escalates at 7 and 3.
 - **It is a process to keep alive.** If the container stops, every turn fails
   with a connection error from inside the model SDK, which reads like the model
   being down. `hostPreflight({ claudeProxyUrl })` asks about it at boot; the

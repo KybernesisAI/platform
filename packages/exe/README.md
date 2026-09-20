@@ -117,6 +117,37 @@ a browser. `status` distinguishes *running* from *signed in* — the proxy answe
 `/health` as soon as it listens but `/ready` only once it holds a credential,
 and conflating those is how a proxy looks healthy and answers nothing.
 
+### The sign-in dies on a schedule — about every 28 days
+
+This is the one to diary. The access token refreshes hourly and will do so
+happily for weeks, which tells you nothing: underneath it the **refresh token**
+carries its own fixed expiry, roughly 28 days from the browser sign-in. Using it
+does not extend it. When it passes, the refresh fails, the proxy writes the
+credential file back with **empty token strings**, and every turn 401s with
+`OAuth access token has expired`.
+
+Nothing in place recovers — not `reload`, not a restart, not waiting. Only
+`login`, because only a browser can mint a new refresh token.
+
+There is a **third state `/ready` cannot see**, and it cost a morning on Sid:
+*signed in with a dead credential*. `/ready` reports that a credential was
+loaded, not that it is still valid, so it answers `200` over a blanked file
+while the API 401s — `status` claimed "signed in, answering" through an outage.
+`status` now probes `/v1/models` too, and reads the refresh expiry out of the
+volume so it can warn before the cliff rather than after:
+
+```
+✓ sid-claude-subscription: signed in and authenticating, answering on 127.0.0.1:3333
+✓ sign-in valid for 27d
+✓ loopback only
+```
+
+It escalates at 7 days (`!`) and 3 days (`✗`), and says `EXPIRED Nd ago` past
+it. **Run `status` on a schedule for every subscription-backed agent** — this
+failure is silent, presents as a model outage, and sends people to Anthropic's
+status page instead of to a browser. Reading the expiry needs root on the host;
+without it that line is omitted rather than guessed.
+
 **If the agent uses web search, build the patched image first:**
 
 ```bash
