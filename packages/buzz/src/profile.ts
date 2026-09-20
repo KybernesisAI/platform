@@ -25,6 +25,8 @@ export type Profile = {
   about?: string;
   /** A URL. Relays store the address, never the image. */
   picture?: string;
+  /** NIP-05 handle, e.g. `_@kyber.agent` — verified by the name's own NIP-05 document. */
+  nip05?: string;
   /** Says plainly that this is an agent. Clients use it; so should we. */
   bot?: boolean;
 };
