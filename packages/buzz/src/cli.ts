@@ -51,6 +51,34 @@ function flag(name: string): string | undefined {
   return at === -1 ? undefined : process.argv[at + 1];
 }
 
+
+/** The `.agent` identity this directory's agent was connected to, if any. */
+function identityDidFromFile(): string | null {
+  const file = process.env.ARP_IDENTITY_FILE ?? join(process.cwd(), ".eve", "arp-identity.json");
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { did?: unknown };
+    return typeof parsed.did === "string" && parsed.did.startsWith("did:web:") ? parsed.did : null;
+  } catch {
+    return null;
+  }
+}
+
+type AgentIdProfile = { name: string; description: string; picture: string | null; nip05: string | null };
+
+/** The name's public profile document, served from the name's own address. */
+async function fetchAgentIdProfile(sld: string): Promise<AgentIdProfile> {
+  const suffix = process.env.AGENTID_MIRROR_SUFFIX ?? ".agent.arp.run";
+  const url = `https://${sld}${suffix.startsWith(".") ? suffix : `.${suffix}`}/.well-known/agent-profile.json`;
+  const res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) {
+    console.error(`\n  ${sld}.agent has no profile document yet (${res.status} from ${url}).\n`);
+    process.exit(1);
+  }
+  const doc = (await res.json()) as Partial<AgentIdProfile>;
+  return { name: doc.name ?? sld, description: doc.description ?? "", picture: doc.picture ?? null, nip05: doc.nip05 ?? null };
+}
+
 /**
  * Say who this agent is, in every community it belongs to.
  *
@@ -71,9 +99,46 @@ async function setProfile(): Promise<void> {
     return;
   }
 
+  // AgentID: the agent's `.agent` name is the source of truth for how it
+  // presents itself. `--from-agentid` reads the name's public profile document
+  // and publishes it as this key's kind-0 — name, description, picture and
+  // the NIP-05 handle that nostr clients verify against the name itself. The
+  // Buzz key never leaves this host; ARP Cloud only publishes the document.
+  if (process.argv.includes("--from-agentid")) {
+    const did = flag("from-agentid") && !flag("from-agentid")!.startsWith("--") ? flag("from-agentid")! : identityDidFromFile();
+    if (!did) {
+      console.error("\n  Which name? kybernesis-buzz profile --from-agentid <name>.agent\n  (or run it from the agent's directory, where .eve/arp-identity.json says who it is)\n");
+      process.exit(1);
+    }
+    const sld = did.replace(/^did:web:/, "").replace(/\.agent$/, "").toLowerCase();
+    const doc = await fetchAgentIdProfile(sld);
+    const wanted: profile.Profile = {
+      name: sld,
+      display_name: doc.name,
+      ...(doc.description ? { about: doc.description } : {}),
+      ...(doc.picture ? { picture: doc.picture } : {}),
+      ...(doc.nip05 ? { nip05: doc.nip05 } : {}),
+      bot: true,
+    };
+    let published = 0;
+    for (const url of urls) {
+      try {
+        await profile.write(url, key, wanted);
+        console.log(`  ✓ ${url}`);
+        published += 1;
+      } catch (error) {
+        const why = (error as Error).message;
+        console.log(why.includes("not a relay member") ? `  · ${url} — not a member yet, so nothing to be known as there` : `  ✕ ${url} — ${why}`);
+      }
+    }
+    console.log(published > 0 ? `\n  ${doc.name} (${sld}.agent) is ${key.npub.slice(0, 20)}… — profile taken from the name.\n` : "\n  Nothing published — invite this key to a community first.\n");
+    return;
+  }
+
   const name = flag("name");
   if (!name) {
     console.error("usage: kybernesis-buzz profile --name <name> [--about …] [--picture <file|url>]");
+    console.error("   or: kybernesis-buzz profile --from-agentid [<name>.agent]");
     console.error("   or: kybernesis-buzz profile --copy-from <wss://…>");
     process.exit(1);
   }
