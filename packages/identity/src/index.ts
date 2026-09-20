@@ -4,3 +4,5 @@ export { arpPeers, discoverPeers, askPeer, toolName, type ArpPeersOptions, type 
 export { ARP_INSTRUCTIONS } from "./instructions.js";
 export { resolveIdentity, readIdentityFile, saveIdentity, storeKind, identityFilePath, DEFAULT_ISSUER, type Identity } from "./store.js";
 export { handleConnect, requestHostOf, type ConnectOptions, type ConnectRequest } from "./connect.js";
+
+export { INTENTS, type Intent } from "./peers.js";
