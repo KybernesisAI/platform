@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/identity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Give an eve agent its .agent identity: verify ARP Cloud push tokens, serve the verification document, and reach paired peers as tools \u2014 no daemon, no socket, no key in the bundle.",
   "type": "module",
   "license": "Apache-2.0",

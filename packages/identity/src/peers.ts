@@ -65,13 +65,30 @@ export async function discoverPeers(options: ArpPeersOptions = {}): Promise<ArpP
   }
 }
 
+/**
+ * The kinds of request an agent can make of a peer, and the ARP scope each one
+ * is checked against. `message` is plain conversation (the baseline every
+ * pairing grants); the rest are additive and only work when the peer's owner
+ * granted that scope on the connection — otherwise ARP Cloud declines the
+ * request before it reaches the peer, and both audit logs record the denial.
+ */
+export const INTENTS = {
+  message: null,
+  status: "work.status.read",
+  projects: "work.projects.list",
+  files: "files.projects.list",
+  calendar: "calendar.events.modify",
+} as const;
+export type Intent = keyof typeof INTENTS;
+
 /** Send one message to a paired peer through ARP Cloud and return its reply. */
-export async function askPeer(options: ArpPeersOptions, peer: ArpPeer, message: string): Promise<string> {
+export async function askPeer(options: ArpPeersOptions, peer: ArpPeer, message: string, intent: Intent = "message"): Promise<string> {
   const c = config(options);
+  const action = INTENTS[intent] ?? null;
   const res = await c.fetchImpl(`${c.issuer}/agent-api/send`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${c.credential}` },
-    body: JSON.stringify({ connection_id: peer.connectionId, text: message, wait_ms: c.timeoutMs }),
+    body: JSON.stringify({ connection_id: peer.connectionId, text: message, wait_ms: c.timeoutMs, ...(action ? { action } : {}) }),
     signal: AbortSignal.timeout(c.timeoutMs + 10_000),
   });
   const body = (await res.json().catch(() => ({}))) as { ok?: boolean; reply?: string | null; timed_out?: boolean; error?: string; reason?: string };
@@ -107,13 +124,19 @@ export function arpPeers(options: ArpPeersOptions = {}) {
         for (const peer of peers) {
           tools[toolName(peer.name)] = defineTool({
             description:
-              `Send a message to ${peer.name}.agent, a separate agent paired with you on the agent network, and get its reply. ` +
+              `Send a request to ${peer.name}.agent, a separate agent paired with you on the agent network, and get its reply. ` +
               (peer.purpose ? `Paired for: ${peer.purpose}. ` : "") +
-              `Every message is checked against the permissions its owner granted and is logged for both sides.`,
+              `Every request is checked against the permissions its owner granted for that kind of request and is logged for both sides.`,
             inputSchema: z.object({
               message: z.string().describe("What to ask or tell it. It has no view of this conversation."),
+              intent: z
+                .enum(Object.keys(INTENTS) as [Intent, ...Intent[]])
+                .default("message")
+                .describe(
+                  "The kind of request: message (plain conversation), status (its current work status), projects (its project list), files (its project files), calendar (change its calendar). Its owner decides which kinds this connection allows; a kind that is not allowed is declined and logged on both sides.",
+                ),
             }),
-            execute: (input: { message: string }) => askPeer(options, peer, input.message),
+            execute: (input: { message: string; intent?: Intent }) => askPeer(options, peer, input.message, input.intent ?? "message"),
           });
         }
         return tools;
