@@ -12,6 +12,12 @@ import { askingUser, notify, preview } from "../../src/index.js";
  */
 const lastReply = new Map<string, string>();
 
+/** The surface the client declared for this turn, when it did (see @kybernesis/enterprise). */
+function surfaceOf(ctx: unknown): string | undefined {
+  const attrs = (ctx as { session?: { auth?: { current?: { attributes?: Record<string, unknown> } } } })?.session?.auth?.current?.attributes;
+  return typeof attrs?.surface === "string" ? attrs.surface : undefined;
+}
+
 function settings(): { issuer: string; credential: string } | null {
   const credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;
   if (!credential) return null;
@@ -56,6 +62,11 @@ export default defineHook({
         lastReply.delete(sessionId);
         // A turn that ended without a reply — a question parked, a cancel — already said what it had to.
         if (!s || !user || !reply) return;
+        // A reply the person is already hearing: a live voice call relays each
+        // turn as that person, and pushing "replied" to the phone in their pocket
+        // — mirrored onto the watch they are talking into — is noise. Questions
+        // still push: those need the app to answer.
+        if (surfaceOf(ctx) === "voice") return;
         const r = await notify({ ...s, user, sessionId, kind: "reply", body: preview(reply) });
         console.log(`[notify] reply for ${user.slice(0, 8)} → ${r.status}`);
       } catch {

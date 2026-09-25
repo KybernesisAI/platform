@@ -42,6 +42,15 @@ function isAssertedAsker(value: unknown): value is { id: string; label?: string 
   );
 }
 
+
+/** The declared surfaces a client may name. Anything else is ignored. */
+const SURFACES = new Set(["voice", "studio", "phone", "watch", "terminal"]);
+
+function surfaceAttribute(request: Request): { surface?: string } {
+  const value = request.headers.get("x-kybernesis-surface")?.trim().toLowerCase();
+  return value && SURFACES.has(value) ? { surface: value } : {};
+}
+
 export interface KybernesisAuthOptions {
   /** Control-plane issuer URL (e.g. https://agent.kybernesis.ai). Must match the token `iss`. */
   issuer: string;
@@ -188,6 +197,11 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
         ...(typeof identity.email === "string" ? { email: identity.email } : {}),
         agentGrantLevel: grant.level,
         kybernesisGrants: grants.map((g) => `${g.agent}:${g.level}`),
+        // Where the person is, as the client declares it. Not a security claim
+        // — nothing is granted or denied by it. It lets a hook know that a
+        // reply is already being HEARD (a live voice call) and need not also be
+        // pushed to the phone the person is standing next to.
+        ...surfaceAttribute(request),
       },
     };
   };

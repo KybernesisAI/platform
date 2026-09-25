@@ -34,6 +34,7 @@
   "devDependencies": {
     "@kybernesis/enterprise": "^0.8.0",
     "@types/node": "^22.10.2",
+    "@types/ws": "^8.18.1",
     "eve": "^0.49.0",
     "typescript": "^5.7.2"
   },
@@ -53,5 +54,8 @@
     "type": "git",
     "url": "https://github.com/KybernesisAI/platform.git",
     "directory": "packages/voice"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
   }
 }

@@ -79,3 +79,14 @@ test("absent, empty or anonymous principals yield nobody", () => {
   assert.equal(askingUser({ session: { id: "s", auth: null } }), undefined);
   assert.equal(askingUser(person("", "user")), undefined);
 });
+
+/**
+ * A live voice call relays every question as the person on the line and they
+ * hear the answer as it is spoken. Pushing "replied" to the phone in their
+ * pocket — mirrored onto the very watch they are talking into — is noise.
+ */
+test("the reply push is skipped for a turn the person is hearing live", async () => {
+  const src = await import("node:fs").then((fs) => fs.readFileSync(new URL("../extension/hooks/notify.ts", import.meta.url), "utf8"));
+  assert.match(src, /surfaceOf\(ctx\) === "voice"\) return;/, "the reply hook consults the declared surface");
+  assert.ok(src.indexOf('"input.requested"') < src.indexOf("surfaceOf(ctx)"), "questions are not gated by it");
+});

@@ -1,5 +1,24 @@
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
-import { defineChannel, GET, POST } from "eve/channels";
+import { defineChannel, GET, POST, WS } from "eve/channels";
+import { LiveCall, parseControl } from "./stream.js";
+
+/**
+ * A call over two plain HTTPS requests instead of a socket, for devices that
+ * can only use high-level networking without a phone-call UI taking over the
+ * screen — the watch. `down` is a chunked response that stays open for the
+ * length of the call and carries framed audio and JSON status; `up` is a
+ * streamed request body carrying the microphone. Frames on `down` are
+ * `[type:1][length:4 BE][payload]`, type 0 audio (mu-law) and type 1 JSON.
+ */
+const httpCalls = new Map<string, LiveCall>();
+
+function frame(type: 0 | 1, payload: Uint8Array): Uint8Array {
+  const out = new Uint8Array(5 + payload.length);
+  out[0] = type;
+  new DataView(out.buffer).setUint32(1, payload.length);
+  out.set(payload, 5);
+  return out;
+}
 
 /**
  * @kybernesis/voice — the agent side of KYBER Studio's realtime voice orb.
@@ -52,6 +71,20 @@ export interface VoiceOptions {
   issuer?: string;
   /** This agent's registered name, for grant checks. Defaults to KYBERNESIS_AGENT. */
   agent?: string;
+  /**
+   * Where this agent's own eve routes are reachable, for the turns a watch call
+   * delegates. Defaults to loopback on `PORT` when set (a self-hosted agent), else
+   * the origin the call arrived on. Override with KYBERNESIS_VOICE_SELF_URL.
+   */
+  selfUrl?: string;
+}
+
+/** Where to send the turns a streamed call delegates. Loopback when the host says which port it serves. */
+function selfUrl(req: Request, options: VoiceOptions): string {
+  const configured = options.selfUrl ?? process.env.KYBERNESIS_VOICE_SELF_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  if (process.env.PORT) return `http://127.0.0.1:${process.env.PORT}`;
+  return new URL(req.url).origin;
 }
 
 /**
@@ -166,6 +199,147 @@ export function voiceChannel(options: VoiceOptions) {
           return Response.json({ ok: false, error: "OpenAI session had no answer SDP." }, { status: 502 });
         }
         return Response.json({ ok: true, sdp: answer });
+      }),
+
+      /**
+       * A live call for devices that cannot do WebRTC — the watch. The device
+       * streams G.711 mu-law up as binary frames; this agent holds the GPT-Live
+       * session with its own key, runs each delegation as a turn on itself AS
+       * that person, and streams back only audible voice plus JSON status. See
+       * `stream.ts` for why each piece is shaped the way it is.
+       *
+       * The grant check runs in `upgrade`, so a device without one is refused
+       * before any audio moves or any GPT-Live time is spent.
+       */
+      WS(PREFIX + "/stream", async (req) => {
+        let call: LiveCall | undefined;
+        const url = new URL(req.url);
+        const requestedVoice = url.searchParams.get("voice");
+        const callVoice = requestedVoice && /^[a-z][a-z0-9_-]{1,31}$/.test(requestedVoice) ? requestedVoice : voice;
+        return {
+          async upgrade(request) {
+            const denied = await authorize(request, options);
+            if (denied) return denied;
+            if (!options.openaiApiKey) {
+              return Response.json(
+                { ok: false, error: "This agent has no voice key set (KYBERNESIS_VOICE_OPENAI_KEY)." },
+                { status: 500 },
+              );
+            }
+          },
+          open(peer) {
+            // Say hello, but spend nothing yet. A device on the iPhone relay races
+            // several connections and keeps one; starting GPT-Live on every one
+            // of them opened six to nine sessions per call. The device sends
+            // `start` on the connection it adopts, and only that one goes live.
+            peer.send(JSON.stringify({ type: "ready" }));
+          },
+          message(peer, message) {
+            const bytes = message.uint8Array();
+            const control = parseControl(bytes);
+            if (!call) {
+              if (control?.type !== "start") return;
+              call = new LiveCall({
+              apiKey: options.openaiApiKey,
+              model,
+              voice: callVoice,
+              instructions: liveInstructions(displayName),
+              displayName,
+              agentUrl: selfUrl(req, options),
+              userHeaders: {
+                authorization: req.headers.get("authorization") ?? "",
+                bundle: req.headers.get("x-kybernesis-bundle") ?? "",
+              },
+              watch: {
+                audio: (bytes) => peer.send(bytes),
+                event: (event) => peer.send(JSON.stringify(event)),
+                close: (code, reason) => peer.close(code, reason),
+              },
+              log: (event) => console.log(`[voice-stream] ${new Date().toISOString()} ${JSON.stringify(event)}`),
+              });
+              return;
+            }
+            if (control) call.control(control);
+            else call.audio(bytes);
+          },
+          close() {
+            call?.end("device disconnected");
+          },
+          error() {
+            call?.end("device connection error");
+          },
+        };
+      }),
+
+      /** The downlink of an HTTP call: opens the call and streams the agent's voice and status. */
+      GET(PREFIX + "/http/down/:call", async (req, { params }) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+        if (!options.openaiApiKey) {
+          return Response.json({ ok: false, error: "This agent has no voice key set (KYBERNESIS_VOICE_OPENAI_KEY)." }, { status: 500 });
+        }
+        const id = String(params.call);
+        if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) return Response.json({ ok: false, error: "bad call id" }, { status: 400 });
+        const url = new URL(req.url);
+        const requestedVoice = url.searchParams.get("voice");
+        const callVoice = requestedVoice && /^[a-z][a-z0-9_-]{1,31}$/.test(requestedVoice) ? requestedVoice : voice;
+        const encoder = new TextEncoder();
+        let call: LiveCall | undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const push = (f: Uint8Array) => { try { controller.enqueue(f); } catch { /* closed */ } };
+            call = new LiveCall({
+              apiKey: options.openaiApiKey,
+              model,
+              voice: callVoice,
+              instructions: liveInstructions(displayName),
+              displayName,
+              agentUrl: selfUrl(req, options),
+              userHeaders: {
+                authorization: req.headers.get("authorization") ?? "",
+                bundle: req.headers.get("x-kybernesis-bundle") ?? "",
+              },
+              watch: {
+                audio: (bytes) => push(frame(0, bytes)),
+                event: (event) => push(frame(1, encoder.encode(JSON.stringify(event)))),
+                close: () => { httpCalls.delete(id); try { controller.close(); } catch { /* closed */ } },
+              },
+              log: (event) => console.log(`[voice-http] ${new Date().toISOString()} ${JSON.stringify({ call: id, ...event })}`),
+            });
+            httpCalls.set(id, call);
+            push(frame(1, encoder.encode(JSON.stringify({ type: "ready" }))));
+          },
+          cancel() {
+            httpCalls.delete(id);
+            call?.end("device closed downlink");
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "application/octet-stream", "cache-control": "no-store", "x-accel-buffering": "no" },
+        });
+      }),
+
+      /** The uplink: the microphone, streamed as it is captured. Ends the call when the body ends. */
+      POST(PREFIX + "/http/up/:call", async (req, { params }) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+        const id = String(params.call);
+        const reader = req.body?.getReader();
+        if (!reader) return Response.json({ ok: false, error: "no body stream" }, { status: 400 });
+        // The downlink may be a moment behind; wait briefly for the call to exist.
+        let call = httpCalls.get(id);
+        for (let i = 0; !call && i < 100; i++) { await new Promise((r) => setTimeout(r, 100)); call = httpCalls.get(id); }
+        if (!call) return Response.json({ ok: false, error: "no such call — open the downlink first" }, { status: 409 });
+        let bytes = 0;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          bytes += value.length;
+          call.audio(value);
+        }
+        call.end("uplink ended");
+        httpCalls.delete(id);
+        return Response.json({ ok: true, bytes });
       }),
     ],
   });
