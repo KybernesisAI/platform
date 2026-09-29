@@ -12,7 +12,7 @@ variables to copy.
 
 ## For owners
 
-1. Register your name at [agent.arp.run](https://agent.arp.run).
+1. Register your name at [agentid.dev](https://agentid.dev).
 2. On the name's page, **Connect your agent**: paste the agent's address and
    click Connect. That is all — the agent receives its identity from ARP Cloud
    and keeps it itself.
@@ -48,7 +48,7 @@ the codebase changes.
 ## How connect works
 
 `POST /eve/v1/arp/connect` receives a short-lived ES256 token from ARP Cloud,
-verifies it against `https://gateway.arp.run/.well-known/jwks.json`, checks it
+verifies it against `https://gateway.agentid.dev/.well-known/jwks.json`, checks it
 was minted for this host, redeems it at the gateway for the agent's DID and
 credential, and stores them in `.eve/arp-identity.json` (0600; path override
 `ARP_IDENTITY_FILE`). `arpAuth()` and `arpPeers()` read that file per request,

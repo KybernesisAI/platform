@@ -3,7 +3,7 @@ import { z } from "zod";
 import { resolveIdentity } from "./store.js";
 
 export interface ArpPeersOptions {
-  /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.arp.run. */
+  /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.agentid.dev. */
   issuer?: string;
   /** This agent's credential from "Attach runtime". Defaults to ARP_AGENT_CREDENTIAL. */
   credential?: string;

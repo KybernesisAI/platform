@@ -2,7 +2,7 @@ import { createLocalJWKSet, jwtVerify, type JWK } from "jose";
 import { DEFAULT_ISSUER, readIdentityFile, saveIdentity, storeKind } from "./store.js";
 
 export interface ConnectOptions {
-  /** Issuers this runtime accepts connect tokens from. Default: ARP_ISSUER or https://gateway.arp.run. */
+  /** Issuers this runtime accepts connect tokens from. Default: ARP_ISSUER or https://gateway.agentid.dev. */
   issuers?: string[];
   fetchImpl?: typeof fetch;
 }
