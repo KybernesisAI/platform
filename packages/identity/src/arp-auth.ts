@@ -3,7 +3,7 @@ import { UnauthenticatedError, extractBearerToken, type AuthFn } from "eve/chann
 import { resolveIdentity } from "./store.js";
 
 export interface ArpAuthOptions {
-  /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.arp.run. */
+  /** ARP Cloud gateway origin. Defaults to ARP_ISSUER, then https://gateway.agentid.dev. */
   issuer?: string;
   /** This agent's identity, e.g. `did:web:samantha.agent`. Defaults to ARP_AGENT_DID. */
   agentDid?: string;
