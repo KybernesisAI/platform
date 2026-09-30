@@ -1,6 +1,11 @@
-import { defineDynamic, defineTool } from "eve/tools";
+import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
 import { type McpServer, callMcpTool, listMcpTools } from "./mcp.js";
+
+/** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
 
 /**
  * Connector tools, resolved for whoever is actually talking.
@@ -316,7 +321,18 @@ async function runTool(
 }
 
 /** Tools for every service the current principal has connected. */
+/**
+ * The options of the live mount, for durable callbacks.
+ *
+ * A parked tool call replays in a fresh process with only its JSON closure.
+ * Options are not JSON (a credential is a secret, not a closure value), so the
+ * callback finds the mount again here — the authored tool file re-mounts on
+ * every cold start, before any replay can run.
+ */
+let mounted: ConnectorToolsOptions = {};
+
 export function connectorTools(options: ConnectorToolsOptions = {}) {
+  mounted = options;
   const resolve = async (_event: unknown, ctx: unknown) => {
     const user = principalOf(ctx);
     const { tools, accounts } = await fetchTools(options, user);
@@ -338,9 +354,15 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
           `${server.slug}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
           defineTool({
             description: `${tool.description ?? tool.name} — from ${server.name}.`,
-            inputSchema: z.object({}).passthrough(),
-            execute: (input: Record<string, unknown>) =>
-              callMcpTool(server, tool.name, input),
+            inputSchema: defineDurableSchema({
+              closure: {},
+              schema: () => z.object({}).passthrough(),
+            }),
+            execute: defineDurableCallback({
+              closure: { server: server as unknown as JsonObject, tool: tool.name },
+              callback: ({ server, tool }, input: Record<string, unknown>) =>
+                callMcpTool(server as unknown as McpServer, tool, input),
+            }),
           }),
         ]);
       }
@@ -375,9 +397,15 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
               (tool.description ??
                 `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`) +
               qualifier,
-            inputSchema: toolInputSchema(tool),
-            execute: (input: Record<string, unknown>) =>
-              runTool(options, tool.slug, input, user, named.account),
+            inputSchema: defineDurableSchema({
+              closure: { spec: (tool.inputSchema ?? null) as JsonObject | null },
+              schema: ({ spec }) => toolInputSchema({ inputSchema: (spec ?? undefined) as Record<string, unknown> | undefined }),
+            }),
+            execute: defineDurableCallback({
+              closure: { slug: tool.slug, user: user ?? null, account: named.account ?? null },
+              callback: ({ slug, user, account }, input: Record<string, unknown>) =>
+                runTool(mounted, slug, input, user ?? undefined, account ?? undefined),
+            }),
           }),
         ]);
       }

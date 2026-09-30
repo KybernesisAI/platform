@@ -12,7 +12,7 @@
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "eve": ">=0.51.0 <0.52.0"
+    "eve": ">=0.68.0 <0.69.0"
   },
   "dependencies": {
     "jose": "^5.9.6",
@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "^0.51.1",
+    "eve": "0.68.0",
     "typescript": "7.0.2"
   },
   "scripts": {

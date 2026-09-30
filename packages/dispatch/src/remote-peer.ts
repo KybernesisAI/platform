@@ -45,11 +45,6 @@ export interface RemotePeerOptions {
    * app itself (service identity) rather than from the human behind it.
    */
   forwardPrincipal?: boolean;
-  /**
-   * JSON Schema for task-mode structured output. When set, the peer returns
-   * one validated result object instead of free text.
-   */
-  outputSchema?: Parameters<typeof defineRemoteAgent>[0]["outputSchema"];
 }
 
 /**
@@ -83,7 +78,7 @@ export interface RemotePeerOptions {
  * refuses → dispatches 403 within the token TTL.
  */
 export function remotePeer(options: RemotePeerOptions) {
-  const { envVar, fallbackUrl, description, outputSchema, callee, governed } = options;
+  const { envVar, fallbackUrl, description, callee, governed } = options;
 
   if (governed && !callee) {
     throw new Error("remotePeer: governed mode requires `callee` (the peer's registered control-plane name).");
@@ -130,6 +125,5 @@ export function remotePeer(options: RemotePeerOptions) {
     description,
     auth,
     forwardPrincipal: options.forwardPrincipal ?? true,
-    ...(outputSchema !== undefined ? { outputSchema } : {}),
   });
 }

@@ -92,3 +92,55 @@ export function repairRemovedDefaultTools(cwd: string): RemovedDefaultToolsRepai
   }
   return { removed, optedIn };
 }
+
+/**
+ * eve 0.65 took `ask_question` out of the default tool set and made it an
+ * opt-in workflow tool (`eve add tool/ask_question`). An agent certified on an
+ * earlier line had it everywhere, and the notify hooks, the Buzz approval
+ * bridge and the Studio question cards all key on that tool name — so every
+ * scope that could ask keeps the tool, and a stale `disableTool()` file (a
+ * build error from 0.65) is removed.
+ */
+export const OPT_IN_TOOLS_SINCE = { ask_question: "0.65.0" } as const;
+
+function askQuestionSource(): string {
+  return [
+    "// eve 0.65 made ask_question an opt-in tool. This agent asked people questions",
+    "// on the certified earlier line, so it keeps the tool (kyb upgrade wrote this).",
+    'import { askQuestion } from "eve/tools/ask_question";',
+    "",
+    "export default askQuestion();",
+    "",
+  ].join("\n");
+}
+
+export function repairOptInTools(cwd: string, eveVersion: string): RemovedDefaultToolsRepair {
+  const removed: string[] = [];
+  const optedIn: string[] = [];
+  if (versionAtLeast(eveVersion, OPT_IN_TOOLS_SINCE.ask_question)) {
+    for (const scope of agentScopes(cwd)) {
+      const tools = join(scope, "tools");
+      const file = join(tools, "ask_question.ts");
+      if (existsSync(file)) {
+        if (isDisableToolFile(file)) {
+          unlinkSync(file);
+          removed.push(relative(cwd, file));
+        }
+        continue;
+      }
+      mkdirSync(tools, { recursive: true });
+      writeFileSync(file, askQuestionSource());
+      optedIn.push(relative(cwd, file));
+    }
+  }
+  return { removed, optedIn };
+}
+
+function versionAtLeast(version: string, floor: string): boolean {
+  const parse = (v: string) => v.replace(/^[^\d]*/, "").split("-")[0]!.split(".").map((n) => Number(n) || 0);
+  const a = parse(version), b = parse(floor);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return true;
+}

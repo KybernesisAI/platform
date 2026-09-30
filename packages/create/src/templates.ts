@@ -539,28 +539,26 @@ export interface EngineerPlan {
 function workshopSandbox(host: HostKind): string {
   if (host === "exe") {
     return `import { defineSandbox } from "eve/sandbox";
-import { docker } from "eve/sandbox/docker";
+import { DockerSandbox } from "eve/sandbox/docker";
 
 /**
  * The engineer workshop, self-hosted: pnpm + Playwright + Chromium baked into
- * the TEMPLATE so warm sessions run render→screenshot→vision in seconds.
+ * the ENVIRONMENT (prepared once at build, inherited by every session) so warm
+ * sessions run render→screenshot→vision in seconds.
  *
- * Docker rather than vercel(): the hosted backend needs Vercel OIDC, which does
- * not exist off-Vercel.
+ * Docker rather than Vercel Sandbox: the hosted provider needs Vercel OIDC,
+ * which does not exist off-Vercel.
  *
  * HOST PREREQUISITE: some images ship Docker disabled (exe.dev's exeuntu runs
  * \`systemctl disable docker.service\`). Run \`sudo systemctl enable --now docker\`
  * or every build fails with SandboxTemplateNotProvisionedError.
  *
  * NOTE: Docker sessions do not enforce a domain allowlist the way the hosted
- * backend does. Egress control is the HOST's responsibility here — a deliberate
+ * provider does. Egress control is the HOST's responsibility here — a deliberate
  * difference from the Vercel deployment, not an oversight.
  */
-export default defineSandbox({
-  backend: docker(),
-  revalidationKey: () => "kybernesis-workshop-v5-docker",
-  async bootstrap({ use }) {
-    const sandbox = await use();
+export const environment = DockerSandbox.environment({
+  prepare: async (sandbox) => {
     // Base image is Debian-family; refresh indexes before installing browser deps.
     await sandbox.run({ command: "apt-get update" });
     await sandbox.run({ command: "npm install -g pnpm" });
@@ -575,28 +573,49 @@ export default defineSandbox({
     });
   },
 });
+
+export default defineSandbox(() => environment.open());
 `;
   }
   return `import { defineSandbox } from "eve/sandbox";
-import { vercel } from "eve/sandbox/vercel";
+import { VercelSandbox } from "eve/sandbox/vercel";
 
 /**
  * The engineer workshop: a warm, safe cloud dev machine.
  *
- * TEMPLATE bootstrap (once, inherited by every session): pnpm + Playwright +
- * Chromium. Prewarm runs at deploy time, so a broken bootstrap fails the build
- * loudly and warm sessions run the full render→screenshot→vision loop in
- * seconds. Backend PINNED to Vercel Sandbox — hosted sandboxes even from local
- * dev (run \`vercel link\` + \`vercel env pull\` first), so evals exercise the
- * exact production backend. No Docker anywhere.
+ * ENVIRONMENT preparation (once at build, inherited by every session): pnpm +
+ * Playwright + Chromium. Preparation runs at deploy time, so a broken recipe
+ * fails the build loudly and warm sessions run the full render→screenshot→
+ * vision loop in seconds. Provider PINNED to Vercel Sandbox — hosted sandboxes
+ * even from local dev (run \`vercel link\` + \`vercel env pull\` first), so evals
+ * exercise the exact production provider. No Docker anywhere.
  *
  * All sessions run under a domain ALLOWLIST: an agent that installs arbitrary
  * npm packages must not have open egress. A blocked domain fails loudly;
  * treat every addition as a security decision.
  */
-export default defineSandbox({
-  backend: vercel({
-    resources: { vcpus: 4 },
+export const environment = VercelSandbox.environment({
+  resources: { vcpus: 4 },
+  prepare: async (sandbox) => {
+    // The egress proxy carries HTTPS only; apt defaults to http:// mirrors, so
+    // every index fetch silently fails. Rewrite to https first.
+    await sandbox.run({
+      command:
+        "find /etc/apt -type f \\\\( -name '*.list' -o -name '*.sources' \\\\) -exec sed -i 's|http://|https://|g' {} + && apt-get update",
+    });
+    await sandbox.run({ command: "npm install -g pnpm" });
+    await sandbox.run({
+      command:
+        "mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\"name\\":\\"kyb-shot\\",\\"private\\":true}' > package.json && npm install playwright",
+    });
+    await sandbox.run({
+      command: "cd /workspace/.shot && npx playwright install --with-deps chromium",
+    });
+  },
+});
+
+export default defineSandbox(() =>
+  environment.open({
     networkPolicy: {
       allow: [
         "registry.npmjs.org",
@@ -624,25 +643,7 @@ export default defineSandbox({
       ],
     },
   }),
-  revalidationKey: () => "kybernesis-workshop-v5",
-  async bootstrap({ use }) {
-    const sandbox = await use();
-    // The egress proxy carries HTTPS only; apt defaults to http:// mirrors, so
-    // every index fetch silently fails. Rewrite to https first.
-    await sandbox.run({
-      command:
-        "find /etc/apt -type f \\\\( -name '*.list' -o -name '*.sources' \\\\) -exec sed -i 's|http://|https://|g' {} + && apt-get update",
-    });
-    await sandbox.run({ command: "npm install -g pnpm" });
-    await sandbox.run({
-      command:
-        "mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\"name\\":\\"kyb-shot\\",\\"private\\":true}' > package.json && npm install playwright",
-    });
-    await sandbox.run({
-      command: "cd /workspace/.shot && npx playwright install --with-deps chromium",
-    });
-  },
-});
+);
 `;
 }
 
@@ -760,7 +761,8 @@ export default defineEvalConfig({
   // Verified against the exe integration rather than assumed: it validates model
   // names and refuses one it does not carry, so a stale default here fails the
   // whole suite at the judge rather than at anything the agent did.
-  judge: { model: exe(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-5") },
+  // eve ≥0.62 grades with an EVALUATION model, not a language model instance.
+  judge: { model: exe.evaluationModel(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-5") },
   // Real model and real memory on every turn: generous timeout, gentle concurrency.
   timeoutMs: 300_000,
   maxConcurrency: 1,
@@ -840,13 +842,15 @@ export { default } from "@kybernesis/notify/extension";
  */
 export function reasoningSandboxLibTs(): string {
   return `import { defineSandbox } from "eve/sandbox";
-import { justbash } from "eve/sandbox/just-bash";
+import { JustBashSandbox } from "eve/sandbox/just-bash";
 
 // The sandbox for a reasoning-only specialist: an instant virtual filesystem,
 // no Docker container. See agent/subagents/<id>/sandbox.ts, which re-export
-// this. Only subagents that do real build/git/network work keep a docker()
+// this. Only subagents that do real build/git/network work keep a Docker
 // sandbox of their own.
-export default defineSandbox({ backend: justbash() });
+export const environment = JustBashSandbox.environment();
+
+export default defineSandbox(() => environment.open());
 `;
 }
 

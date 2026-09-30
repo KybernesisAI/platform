@@ -11,7 +11,7 @@ import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
 import { newestOnLine, type Candidate } from "./on-line-version.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
-import { repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
+import { repairOptInTools, repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
@@ -353,7 +353,14 @@ function repairRemovedDefaultTools(cwd: string): void {
   for (const file of optedIn) {
     console.log(`  ${green("+")} wrote ${file} ${dim("(keeps the tool this scope had on eve 0.38)")}`);
   }
-  if (removed.length || optedIn.length) console.log();
+  const optIn = repairOptInTools(cwd, EVE_VERSION);
+  for (const file of optIn.removed) {
+    console.log(`  ${green("-")} removed ${file} ${dim("(disabled a tool eve no longer provides by default; a compile error from eve 0.65)")}`);
+  }
+  for (const file of optIn.optedIn) {
+    console.log(`  ${green("+")} wrote ${file} ${dim("(ask_question is opt-in from eve 0.65; this scope keeps it)")}`);
+  }
+  if (removed.length || optedIn.length || optIn.removed.length || optIn.optedIn.length) console.log();
 }
 
 function repairSandboxCleanupHooks(cwd: string, deps: Record<string, string>): void {
@@ -633,7 +640,7 @@ function exeJudgeUrl(cwd: string, env: Record<string, string>): string | null | 
   const path = paths.find((candidate) => existsSync(candidate));
   if (!path) return null;
   const source = readFileSync(path, "utf8");
-  const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*\(/.exec(source)?.[1];
+  const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*(?:\.evaluationModel\s*)?\(/.exec(source)?.[1];
   if (!judgeProvider) return null;
   const escaped = judgeProvider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const providerBody = new RegExp(`(?:const|let)\\s+${escaped}\\s*=\\s*create[A-Za-z]+\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*\\)`).exec(source)?.[1];

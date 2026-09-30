@@ -1,5 +1,10 @@
-import { defineDynamic, defineTool } from "eve/tools";
+import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
+
+/** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
 
 /**
  * Local execution: let a deployed agent work on the user's own machine.
@@ -440,7 +445,15 @@ async function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
   }
 }
 
+/**
+ * The options of the live mount, for durable callbacks: a parked call replays
+ * in a fresh process with only its JSON closure, and options hold a guard
+ * function and a credential, neither of which belongs in one.
+ */
+let mounted: LocalToolsOptions = {};
+
 export function localMcpTools(options: LocalToolsOptions = {}) {
+  mounted = options;
   const resolve = async (_event: unknown, ctx: unknown) => {
     // The same context the effect tools get, so a guard sees discovery too:
     // in a shared channel these tools should not merely refuse when called,
@@ -515,14 +528,20 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
           defineTool({
             description:
               `${tool.description ?? tool.name} — runs on the user's own computer via ${server.name}.`,
-            inputSchema: mcpInputSchema(tool.inputSchema),
-            execute: (input: Record<string, unknown>) =>
-              call(
-                options,
-                "local-mcp",
-                { server: server.id, method: "tools/call", params: { name: tool.name, arguments: input } },
-                toolCtx,
-              ),
+            inputSchema: defineDurableSchema({
+              closure: { spec: (tool.inputSchema ?? null) as JsonObject | null },
+              schema: ({ spec }) => mcpInputSchema((spec ?? undefined) as Record<string, unknown> | undefined),
+            }),
+            execute: defineDurableCallback({
+              closure: { server: server.id, tool: tool.name },
+              callback: ({ server, tool }, input: Record<string, unknown>, ctx?: LocalToolContext) =>
+                call(
+                  mounted,
+                  "local-mcp",
+                  { server, method: "tools/call", params: { name: tool, arguments: input } },
+                  ctx,
+                ),
+            }),
           }),
         ]);
       }

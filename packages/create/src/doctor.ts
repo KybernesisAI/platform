@@ -346,7 +346,7 @@ export async function doctor(): Promise<void> {
     const selfHostedAgent =
       Boolean(deps["@kybernesis/exe"]) ||
       (existsSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts")) &&
-        readFileSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts"), "utf8").includes("docker("));
+        /docker\(|DockerSandbox/.test(readFileSync(join(cwd, "agent/subagents/builder/sandbox/sandbox.ts"), "utf8")));
     if (selfHostedAgent && !existsSync(vercelConn)) {
       add(
         "pass",
@@ -426,7 +426,7 @@ export async function doctor(): Promise<void> {
   const selfHosted =
     Boolean(deps["@kybernesis/exe"]) ||
     existsSync(join(cwd, "agent/sandbox/sandbox.ts")) &&
-      readFileSync(join(cwd, "agent/sandbox/sandbox.ts"), "utf8").includes("docker(");
+      /docker\(|DockerSandbox/.test(readFileSync(join(cwd, "agent/sandbox/sandbox.ts"), "utf8"));
   const templateInspection = await inspectDockerTemplatesViaExe(cwd);
   for (const check of templateInspection ? dockerTemplateDoctorChecks(templateInspection) : []) {
     add(check.verdict, check.label, check.detail);

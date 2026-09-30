@@ -7,7 +7,7 @@ import {
   type MessageResult,
   type MessageStreamEvent,
   type SendTurnInput,
-} from "eve/client";
+ type CreatedClientSession } from "eve/client";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
 import { SessionStore } from "./sessions.js";
 
@@ -459,7 +459,9 @@ export async function answerTurn(
   const watchdog = silenceWatchdog(intervalMs);
   watchdog.arm("create acknowledgement");
   try {
-    let created: Awaited<ReturnType<Client["sessions"]["create"]>>;
+    // `sessions.create` is overloaded (message → first turn; none → idle) and
+    // ReturnType picks the last overload, so the first-turn shape is named.
+    let created: CreatedClientSession;
     try {
       created = await client.sessions.create({
         message,

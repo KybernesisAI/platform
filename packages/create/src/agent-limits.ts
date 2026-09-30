@@ -35,7 +35,10 @@ export function parseEveInfoInspection(
 ): EveInfoInspection {
   let info: EveInfoJson;
   try {
-    info = JSON.parse(output) as EveInfoJson;
+    // eve ≥0.62 prints its terminal header ("☰eve  v0.68.0 …") ahead of the
+    // JSON even with --json, so parse from the first object literal.
+    const start = output.indexOf("{");
+    info = JSON.parse(start > 0 ? output.slice(start) : output) as EveInfoJson;
   } catch (error) {
     return unresolved(`eve info --json was not valid JSON: ${(error as Error).message}`);
   }

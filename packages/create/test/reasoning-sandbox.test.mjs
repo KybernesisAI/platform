@@ -68,6 +68,6 @@ test("writing is idempotent and never overwrites an existing sandbox.ts", () => 
 
 test("the re-export points at the shared lib the upgrade writes", () => {
   assert.match(reasoningSandboxReexportTs(), /from "\.\.\/\.\.\/lib\/reasoning-sandbox"/);
-  assert.match(reasoningSandboxLibTs(), /justbash/);
+  assert.match(reasoningSandboxLibTs(), /JustBashSandbox|justbash/);
   assert.match(reasoningSandboxLibTs(), /eve\/sandbox\/just-bash/);
 });
