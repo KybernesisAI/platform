@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/notify",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Tell a person's phone when their agent needs them: a hook that reports parked prompts and finished turns to the Kybernesis control plane.",
   "license": "Apache-2.0",
   "type": "module",
