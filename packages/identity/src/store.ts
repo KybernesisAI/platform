@@ -18,7 +18,7 @@ export interface Identity {
   source: "options" | "env" | "file" | "none";
 }
 
-export const DEFAULT_ISSUER = "https://gateway.arp.run";
+export const DEFAULT_ISSUER = "https://gateway.agentid.dev";
 
 export function identityFilePath(): string {
   return process.env.ARP_IDENTITY_FILE ?? join(process.cwd(), ".eve", "arp-identity.json");
