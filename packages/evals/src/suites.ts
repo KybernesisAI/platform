@@ -202,7 +202,14 @@ export function routingSuite(entries: Array<{ subagent: string; prompt?: string 
       async test(t) {
         await t.send(resolved);
         t.succeeded();
-        t.calledSubagent(subagent);
+        // eve ≥0.63 runs every declared subagent as a durable BACKGROUND task:
+        // the call returns a working receipt, the root's turn settles, and the
+        // specialist's result wakes the root in a later turn. `t.send` resolves
+        // at the first boundary, so the delegation is observed as `working`
+        // (a blocking call on an older line would read `completed`). The
+        // question this eval asks — was the right specialist chosen — is
+        // answered either way.
+        t.calledSubagent(subagent, { status: "working" });
       },
     });
   });
