@@ -858,6 +858,6 @@ export default defineSandbox(() => environment.open());
 export function reasoningSandboxReexportTs(): string {
   return `// Reasoning-only specialist: no real filesystem, so no Docker container.
 // See agent/lib/reasoning-sandbox for why this exists and what it replaces.
-export { default } from "../../lib/reasoning-sandbox";
+export { default, environment } from "../../lib/reasoning-sandbox";
 `;
 }
