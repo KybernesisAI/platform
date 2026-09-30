@@ -139,11 +139,17 @@ case "${1:-}" in
       # anyone who finds it. claudeSubscription() refuses a non-loopback URL
       # for the same reason.
       IMAGE="$(pick_image)"
+      # Anthropic gates new models on the Claude Code version a client presents
+      # (Opus 5.5 needs >=2.1.280). The image bakes in the version of the CLI it
+      # downloaded at build time, so an older image is refused for a newer model
+      # with "Claude Code X does not support this model". CLAUDE_PROXY_CLI_VERSION
+      # overrides what the proxy presents without rebuilding the image.
       docker run -d \
         --name "$NAME" \
         --restart unless-stopped \
         -v "${VOLUME}:/home/nonroot" \
         -p "127.0.0.1:${PORT}:3000" \
+        ${CLAUDE_PROXY_CLI_VERSION:+-e "ANTHROPIC_CLI_VERSION=${CLAUDE_PROXY_CLI_VERSION}"} \
         "$IMAGE" >/dev/null
       echo "  ✓ ${NAME} created from ${IMAGE}"
       if [ "$IMAGE" = "$STOCK_IMAGE" ]; then
@@ -290,6 +296,21 @@ case "${1:-}" in
     git -C "$SRC" checkout -q -- .
     echo "  ✓ built ${TAG} (patched: provider-defined tool names preserved)"
     echo "    Use it:  CLAUDE_PROXY_IMAGE=${TAG} bash scripts/claude-subscription.sh up"
+    ;;
+
+  recreate)
+    # Same image, same credential volume, fresh container — for a changed
+    # CLAUDE_PROXY_CLI_VERSION (or port). The sign-in lives in the volume, so
+    # no browser is needed afterwards.
+    require_docker
+    if [ -n "$(docker ps -aq -f "name=^${NAME}$")" ]; then
+      IMAGE="$(docker inspect -f '{{.Config.Image}}' "$NAME")"
+      docker rm -f "$NAME" >/dev/null
+      echo "  ✓ removed ${NAME} (credentials kept in ${VOLUME})"
+      CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE:-$IMAGE}" "$0" up
+    else
+      "$0" up
+    fi
     ;;
 
   down)
