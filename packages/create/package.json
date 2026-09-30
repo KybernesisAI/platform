@@ -24,7 +24,8 @@
     "NOTICE"
   ],
   "bin": {
-    "kyb": "./dist/cli.js"
+    "kyb": "./dist/cli.js",
+    "kyb-eval": "./dist/eval-cli.js"
   },
   "exports": {
     "./package.json": "./package.json"

@@ -97,7 +97,7 @@ Before an eve version change, upgrade reads `.eve/.workflow-data/runs`, prints
 sessions when available, and requires explicit confirmation. Noninteractive
 runs fail closed unless `--yes` (or `-y`) is supplied. The warning is still printed with
 `--yes` and is not bypassed by `--skip-eval`. Existing direct `eve eval` scripts
-are migrated to `kyb-eval`; custom scripts are left untouched with a manual fix.
+are migrated to `kyb-eval` (shipped as a binary of this package from 0.17); custom scripts are left untouched with a manual fix.
 The wrapper counts corruption diagnostics beside the eval result and turns a
 nominally green eve exit into a failure when condemned durable state was seen.
 It also identifies failures from `judge.autoevals.*` assertions as judge
