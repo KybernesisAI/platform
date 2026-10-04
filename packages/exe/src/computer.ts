@@ -300,3 +300,70 @@ function targetFiles(resources: SandboxProviderResources): SandboxProviderTarget
     tree === undefined ? [] : tree.files.map((file) => ({ content: file.content, path: `${tree.targetPath}/${file.relativePath}` })),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Chrome on the computer. eve's computer-use stack installs Firefox ESR and its
+// `launch` action knows only Firefox and xterm; the browser people actually
+// live in is Chrome, with its own profile, passkeys and extensions. So the
+// computer installs Google Chrome, REMOVES Firefox (so nothing can fall back
+// to it), and the agent opens pages with the `open_browser` tool below, which
+// keeps one Chrome window on the shared display with a profile that persists
+// under /workspace.
+// ---------------------------------------------------------------------------
+
+export const CHROME_PROFILE = `${WORKSPACE}/computer-use/chrome-profile`;
+
+/** Run after `installComputerUse` in the environment's `prepare`. */
+export async function installChrome(sandbox: SandboxSession): Promise<void> {
+  const script = [
+    "set -euo pipefail",
+    "export DEBIAN_FRONTEND=noninteractive",
+    "if ! command -v google-chrome-stable >/dev/null; then",
+    "  curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb",
+    "  apt-get update && apt-get install -y --no-install-recommends /tmp/chrome.deb fonts-liberation xdg-utils",
+    "  rm -f /tmp/chrome.deb",
+    "fi",
+    // Firefox goes: a browser the person never wants must not be the one a
+    // tool reaches for by habit.
+    "apt-get remove -y firefox-esr >/dev/null 2>&1 || true",
+    "apt-get clean && rm -rf /var/lib/apt/lists/*",
+    // Everything that opens a URL from the desktop opens it in Chrome.
+    `cat > ${WORKSPACE}/.eve-code/managed-browser/xdg-open <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+url="\${1:-}"
+[[ "\${url}" =~ ^https?:// ]] || { echo "managed xdg-open accepts HTTP(S) URLs only" >&2; exit 2; }
+exec ${WORKSPACE}/.eve-code/managed-browser/open-chrome "\${url}"
+EOS`,
+    `cat > ${WORKSPACE}/.eve-code/managed-browser/open-chrome <<'EOS'
+#!/usr/bin/env bash
+# Open a URL in the ONE Chrome window on the shared display. A running Chrome
+# gets a new tab (Chrome's remote dispatch), a cold start creates the window.
+set -euo pipefail
+url="\${1:-about:blank}"
+export DISPLAY=:99
+mkdir -p ${CHROME_PROFILE}
+setsid -f google-chrome-stable --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \\
+  --user-data-dir=${CHROME_PROFILE} --window-position=0,0 --start-maximized "\${url}" </dev/null >> ${WORKSPACE}/computer-use/chrome.log 2>&1
+for _ in $(seq 1 100); do
+  window=$(xdotool search --onlyvisible --class google-chrome 2>/dev/null | tail -n 1 || true)
+  [[ -n "\${window}" ]] && break
+  sleep 0.1
+done
+[[ -n "\${window:-}" ]] || { echo "Chrome did not open a window" >&2; exit 1; }
+xdotool windowactivate --sync "\${window}" >/dev/null 2>&1 || true
+echo "opened \${url}"
+EOS`,
+    `chmod 0755 ${WORKSPACE}/.eve-code/managed-browser/xdg-open ${WORKSPACE}/.eve-code/managed-browser/open-chrome`,
+    `chown -R ${USER}:${USER} ${WORKSPACE}/.eve-code/managed-browser`,
+  ].join("\n");
+  const path = `${WORKSPACE}/.eve-code/install-chrome.sh`;
+  await sandbox.writeTextFile({ path, content: script });
+  const result = await sandbox.run({ command: `sudo -n bash ${path}` });
+  if (result.exitCode !== 0) throw new Error(`Chrome installation failed (exit ${result.exitCode}): ${result.stderr.slice(-800)}`);
+}
+
+/** The shell command that opens a URL in the computer's Chrome (for tools and hooks). */
+export function openChromeCommand(url: string): string {
+  return `${WORKSPACE}/.eve-code/managed-browser/open-chrome ${shellQuote(url)}`;
+}
