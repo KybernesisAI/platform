@@ -65,7 +65,7 @@ function initOptions(rest: string[]): InitOptions {
   const subs = flag(rest, 'subagents');
   return {
     engineer: rest.includes('--engineer'),
-    computer: rest.includes('--computer'),
+    computer: rest.includes('--no-computer') ? false : rest.includes('--computer') ? true : undefined,
     studio: rest.includes('--studio'),
     channel: flag(rest, "channel") as InitOptions["channel"],
     host: flag(rest, "host") as InitOptions["host"],
@@ -109,7 +109,7 @@ function usage(command?: string): void {
       --model-reach=<reach> ${dim("claude-sub (exe only; default: host route)")}
       --subagents=a,b       ${dim("department subagents")}
       --engineer            ${dim("add the engineer layer")}
-      --computer            ${dim("the agent's own desktop + Chrome (exe only)")}
+      --no-computer         ${dim("skip the agent's own desktop + Chrome (on by default on exe)")}
       --studio              ${dim("wire KYBER Studio local/manage routes")}
       --yes, -y             ${dim("no prompts")}
 
@@ -236,7 +236,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --model=<id>      ${dim("provider/model-id; bare claude-opus-5 for claude-sub")}
       --model-reach=<r> ${dim("claude-sub (exe only); env: KYB_MODEL_REACH")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
-      --computer        ${dim("the agent's own computer: persistent desktop + Chrome you can watch (exe only)")}
+      --no-computer     ${dim("skip the agent's own computer (desktop + Chrome you can watch; on by default on exe hosts)")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}
   ${bold("kyb add channel <kind>")}

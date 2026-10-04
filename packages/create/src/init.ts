@@ -70,7 +70,11 @@ export function finalizeGithubToolsRegistryMount(cwd: string, registryAddSucceed
 
 export interface InitOptions {
   engineer?: boolean;
-  /** The agent's own computer: a persistent Docker desktop with Chrome (exe hosts only). */
+  /**
+   * The agent's own computer: a persistent Docker desktop with Chrome a person
+   * can watch and take over. Part of the core install on exe hosts (a Vercel
+   * function cannot keep a desktop alive); `false` opts out.
+   */
   computer?: boolean;
   /**
    * Wire this agent for KYBER Studio: local execution on the user's own machine,
@@ -107,7 +111,7 @@ export interface InitOptions {
 
 export async function init(rawName: string | undefined, options: InitOptions = {}): Promise<void> {
   const engineer = options.engineer === true;
-  const computer = options.computer === true;
+  const computer = options.computer !== false;
   const studio = options.studio === true;
   const nonInteractive = options.yes === true;
 
@@ -279,7 +283,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   }
 
   const compPlan = computer && host === "exe" ? computerPlan(name) : null;
-  if (computer && host !== "exe") {
+  if (options.computer === true && host !== "exe") {
     console.log(yellow("\n  ! --computer needs a Docker host (exe.dev); a Vercel function cannot keep a desktop alive. Skipped."));
   }
   if (compPlan) {

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineSource } from "./routine-source.js";
+import { computerRoutes, type ComputerOptions } from "./computer.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -141,6 +142,12 @@ export interface ManageOptions {
   agent?: string;
   /** Where the surfaces on this host declare themselves. Defaults to KYB_SURFACES_DIR, then ~/.kybernesis/surfaces. */
   surfacesDir?: string;
+  /**
+   * The agent's computer (@kybernesis/computer), for signed-in clients: a
+   * ticketed WebSocket relay to its screen under /eve/v1/kyb/computer. On by
+   * default; the routes report no computer when nothing listens on the port.
+   */
+  computer?: ComputerOptions | false;
 }
 
 /**
@@ -319,6 +326,9 @@ export function manageChannel(options: ManageOptions = {}) {
       return session;
     },
     routes: [
+      ...(options.computer === false
+        ? []
+        : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
       /**
        * The conversation this agent considers canonical.
        *
@@ -742,3 +752,5 @@ export function routineTools(options: ManageOptions = {}) {
     },
   };
 }
+
+export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
