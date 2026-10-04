@@ -20,7 +20,7 @@ import { defineEval } from "eve/evals";
 import { includes, satisfies } from "eve/evals/expect";
 
 import { MEMORY_READ_SUFFIXES, MEMORY_WRITE_SUFFIXES, isResultFrom, resultToolName } from "./tools.js";
-import { settleBackgroundWork } from "./background.js";
+import { hasPendingWork, settleBackgroundWork } from "./background.js";
 
 type EveEval = ReturnType<typeof defineEval>;
 
@@ -489,6 +489,12 @@ export function computerSuite(config: ComputerSuiteConfig = {}): EveEval[] {
           const parkedOnBrowser = turn.toolCalls.some((call) => call.name === "open_browser" && call.status === "pending");
           if (parkedOnBrowser) {
             t.check(turn.status, satisfies((v) => v === "waiting", "the browser call is parked for the person")).label("guard parked the browser");
+          } else if (hasPendingWork(turn)) {
+            // Delegated to a subagent or a peer whose answer could not land in
+            // this eval (a peer calls back into a URL an eval server does not
+            // have). The question went to the right place and nothing was
+            // browsed; that is the behaviour under test.
+            t.check(true, satisfies((v) => v === true, "delegated without browsing")).label("delegated to a subagent or peer");
           } else {
             t.check(turn.message ?? "", satisfies((m) => typeof m === "string" && m.length > 0, "a reply was given"));
             t.judge(

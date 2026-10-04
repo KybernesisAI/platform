@@ -12,12 +12,28 @@ import type { EveEvalContext, EveEvalTurn } from "eve/evals";
  * `subagent.completed` (declared subagents), or a tool result carrying
  * `status: "working"` (remote peers through @kybernesis/dispatch).
  */
-export async function settleBackgroundWork(t: EveEvalContext, turn: EveEvalTurn, maxHops = 3): Promise<EveEvalTurn> {
+export async function settleBackgroundWork(
+  t: EveEvalContext,
+  turn: EveEvalTurn,
+  options: { maxHops?: number; timeoutMs?: number } = {},
+): Promise<EveEvalTurn> {
+  const maxHops = options.maxHops ?? 3;
+  // A remote peer answers by calling BACK into the agent's URL. An eval server
+  // lives on a throwaway port no peer can reach, so that hop never lands;
+  // waiting the whole eval timeout for it reads as a hang. Give it a bounded
+  // wait and hand back the turn we have — the caller can see the work is
+  // still pending (hasPendingWork) and judge accordingly.
+  const timeoutMs = options.timeoutMs ?? 90_000;
   let current = turn;
   for (let hop = 0; hop < maxHops; hop++) {
     if (!hasPendingWork(current)) return current;
     const live = t.target.watchTurn(current.sessionId, { startIndex: current.session.state.streamIndex });
-    current = await live.result();
+    const next = await Promise.race([
+      live.result(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+    if (next === null) return current;
+    current = next;
   }
   return current;
 }
