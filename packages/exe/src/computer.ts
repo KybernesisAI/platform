@@ -343,7 +343,7 @@ set -euo pipefail
 url="\${1:-about:blank}"
 export DISPLAY=:99
 mkdir -p ${CHROME_PROFILE}
-setsid -f google-chrome-stable --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \\
+setsid -f google-chrome-stable --no-sandbox --test-type --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \\
   --user-data-dir=${CHROME_PROFILE} --window-position=0,0 --start-maximized "\${url}" </dev/null >> ${WORKSPACE}/computer-use/chrome.log 2>&1
 for _ in $(seq 1 100); do
   window=$(xdotool search --onlyvisible --class google-chrome 2>/dev/null | tail -n 1 || true)
