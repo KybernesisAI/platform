@@ -556,6 +556,8 @@ export async function doctor(): Promise<void> {
       ]);
       const diskCheck = diskUsageDoctorCheck(percent, dockerSummary);
       add(diskCheck.verdict, diskCheck.label, diskCheck.detail);
+      const computer = inspectComputer(cwd);
+      if (computer) for (const check of computerDoctorChecks(computer)) checks.push(check);
     }
 
     /**
@@ -762,4 +764,85 @@ export async function doctor(): Promise<void> {
   const warns = checks.filter((c) => c.verdict === "warn").length;
   console.log(`\n  ${fails ? red(`${fails} failing`) : green("0 failing")}, ${warns ? yellow(`${warns} warnings`) : "0 warnings"}\n`);
   process.exit(fails ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------
+// The agent's computer (@kybernesis/computer).
+
+export interface ComputerInspection {
+  /** agent/sandbox.ts imports @kybernesis/computer. */
+  configured: boolean;
+  /** COMPUTER_NAME from .env.local, or the default the sandbox file falls back to. */
+  name: string;
+  containerState: "running" | "stopped" | "missing" | "unknown";
+  /** The noVNC port is bound on loopback. */
+  screenBound: boolean | null;
+  vncPasswordSet: boolean;
+}
+
+/**
+ * A computer that is configured but not running is the quiet failure here:
+ * every session would try to start it and the first turn pays the whole boot,
+ * or fails if Docker is off. Missing before the first build is normal.
+ */
+export function computerDoctorChecks(c: ComputerInspection): Check[] {
+  if (!c.configured) return [];
+  const checks: Check[] = [];
+  switch (c.containerState) {
+    case "running":
+      checks.push({ verdict: "pass", label: `the agent's computer "${c.name}" is running` });
+      break;
+    case "stopped":
+      checks.push({
+        verdict: "warn",
+        label: `the agent's computer "${c.name}" exists but is stopped`,
+        detail: "the next session restarts it and pays the boot; `docker start " + c.name + "` brings it back now",
+      });
+      break;
+    case "missing":
+      checks.push({
+        verdict: "warn",
+        label: `the agent's computer "${c.name}" has not been built yet`,
+        detail: "`eve build` creates and prepares it (eve's desktop stack + Chrome, ~5 minutes)",
+      });
+      break;
+    default:
+      checks.push({ verdict: "warn", label: "could not inspect the agent's computer", detail: "is Docker running on this host?" });
+  }
+  if (c.containerState === "running" && c.screenBound === false) {
+    checks.push({
+      verdict: "fail",
+      label: "the computer is running but its screen is not published on :6080",
+      detail: "the container was created without the noVNC port mapping; `docker rm -f " + c.name + "` and `eve build` to recreate it (volumes keep the home and /workspace)",
+    });
+  }
+  if (!c.vncPasswordSet) {
+    checks.push({
+      verdict: "warn",
+      label: "the computer's screen has no VNC password",
+      detail: "exe's port-proxy sign-in is the only gate; set COMPUTER_VNC_PASSWORD in .env.local and `docker rm -f " + c.name + "` + `eve build` to apply",
+    });
+  }
+  return checks;
+}
+
+export function inspectComputer(cwd: string): ComputerInspection | null {
+  const sandboxPath = join(cwd, "agent/sandbox.ts");
+  if (!existsSync(sandboxPath) || !readFileSync(sandboxPath, "utf8").includes("@kybernesis/computer")) return null;
+  const envPath = join(cwd, ".env.local");
+  const env = existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {};
+  const sandboxSource = readFileSync(sandboxPath, "utf8");
+  const fallback = /COMPUTER_NAME \?\? "([^"]+)"/.exec(sandboxSource)?.[1] ?? "agent-computer";
+  const name = env.COMPUTER_NAME?.trim() || fallback;
+  const state = capture("docker", ["inspect", "-f", "{{.State.Running}}", name]);
+  const containerState: ComputerInspection["containerState"] =
+    state === null ? "unknown" : state.trim() === "true" ? "running" : state.trim() === "false" ? "stopped" : "missing";
+  const ports = containerState === "running" ? capture("docker", ["port", name, "6080"]) : null;
+  return {
+    configured: true,
+    name,
+    containerState,
+    screenBound: containerState === "running" ? Boolean(ports && ports.trim().length > 0) : null,
+    vncPasswordSet: Boolean(env.COMPUTER_VNC_PASSWORD?.trim()),
+  };
 }

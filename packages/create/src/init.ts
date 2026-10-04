@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -20,6 +20,7 @@ import {
   type ChannelKind,
   type HostKind,
   channelPlan,
+  computerPlan,
   engineerPlan,
   envExample,
   evalFileTs,
@@ -69,6 +70,8 @@ export function finalizeGithubToolsRegistryMount(cwd: string, registryAddSucceed
 
 export interface InitOptions {
   engineer?: boolean;
+  /** The agent's own computer: a persistent Docker desktop with Chrome (exe hosts only). */
+  computer?: boolean;
   /**
    * Wire this agent for KYBER Studio: local execution on the user's own machine,
    * and management routes so Studio can install capabilities and write routines.
@@ -104,6 +107,7 @@ export interface InitOptions {
 
 export async function init(rawName: string | undefined, options: InitOptions = {}): Promise<void> {
   const engineer = options.engineer === true;
+  const computer = options.computer === true;
   const studio = options.studio === true;
   const nonInteractive = options.yes === true;
 
@@ -272,6 +276,15 @@ export async function init(rawName: string | undefined, options: InitOptions = {
       if (item === "extension/github-tools") finalizeGithubToolsRegistryMount(dir, ok);
       if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
     }
+  }
+
+  const compPlan = computer && host === "exe" ? computerPlan(name) : null;
+  if (computer && host !== "exe") {
+    console.log(yellow("\n  ! --computer needs a Docker host (exe.dev); a Vercel function cannot keep a desktop alive. Skipped."));
+  }
+  if (compPlan) {
+    console.log(bold("\n2e   The agent's computer: persistent desktop + Chrome, sighted computer tool, browser guard …"));
+    run("npm", ["install", ...compPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
   }
 
   console.log(bold("\n2d   Seeding the FDE Claude Code skill suite (.claude/skills) …"));
@@ -467,9 +480,17 @@ export async function init(rawName: string | undefined, options: InitOptions = {
       writeFileSync(full, file.content);
     }
   }
+  if (compPlan) {
+    for (const file of compPlan.files) {
+      const full = join(dir, file.path);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, file.content);
+    }
+  }
 
   console.log(bold("\n5/6  Env template + hermetic eval script …"));
   writeFileSync(join(dir, ".env.example"), envExample(name, depts, issuer, plan.env, host, model));
+  if (compPlan) appendFileSync(join(dir, ".env.example"), compPlan.env);
   const pkgPath = join(dir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   pkg.scripts = { ...pkg.scripts, eval: evalScript(name, depts) };
@@ -493,6 +514,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     model.reach === "claude-sub" ? "Claude subscription reach" : null,
     studio ? "KYBER Studio (local execution + management routes)" : null,
     engineer ? "engineer subagent (workshop + vision loop)" : null,
+    compPlan ? "its own computer (desktop + Chrome, watch and take over)" : null,
     depts.length ? `${depts.length} dept subagent(s)` : null,
   ].filter(Boolean);
 
@@ -501,6 +523,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     ...hostSteps(host, name, model),
     ...plan.steps,
     ...(engPlan?.steps ?? []),
+    ...(compPlan?.steps ?? []),
     `Control plane: register agent "${name}" at ${issuer}/agents + grant the pilot cohort`,
     `npm run eval → green → deploy → live smoke + the revoke demo`,
   ];

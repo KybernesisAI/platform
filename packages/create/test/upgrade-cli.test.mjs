@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "../dist/templates.js";
+import { EVE_VERSION } from "../dist/util.js";
 import { diskUsageDoctorCheck } from "../dist/doctor.js";
 import { dockerPruneCronArtifact, registeredDockerPruneAppDirs } from "../dist/docker-prune-cron.js";
 
@@ -673,7 +674,8 @@ test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tr
     assert.equal(upgraded.status, 0, upgraded.stdout + upgraded.stderr);
     const tree = spawnSync("npm", ["ls", "eve"], { cwd: dir, encoding: "utf8" });
     assert.equal(tree.status, 0, tree.stdout + tree.stderr);
-    assert.match(tree.stdout, /eve@0\.51\.1/);
+    // The certified pin moves with every eve certification; the test follows it.
+    assert.ok(tree.stdout.includes(`eve@${EVE_VERSION}`), tree.stdout);
   } finally {
     // A real eve install leaves read-only directories behind (the baked
     // sandbox tree); rmSync alone hit EACCES on CI and failed a test whose

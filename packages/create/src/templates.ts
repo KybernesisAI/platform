@@ -861,3 +861,114 @@ export function reasoningSandboxReexportTs(): string {
 export { default, environment } from "../../lib/reasoning-sandbox";
 `;
 }
+
+// ---------------------------------------------------------------------------
+// The agent's own computer (`kyb init --computer`, exe.dev hosts only).
+
+export interface ComputerPlan {
+  files: Array<{ path: string; content: string }>;
+  deps: string[];
+  steps: string[];
+  /** Lines appended to .env.example. */
+  env: string;
+}
+
+/**
+ * A persistent Docker desktop with Chrome that the person can watch and take
+ * over, as the agent's ROOT sandbox, plus the sighted computer tool, the
+ * guarded open_browser, and the surface ladder in instructions. The engineer
+ * workshop (a subagent sandbox) is untouched. Needs Docker, so it is an exe
+ * host feature: a Vercel function has no daemon to keep a container alive.
+ */
+export function computerPlan(name: string): ComputerPlan {
+  const files: ComputerPlan["files"] = [
+    {
+      path: "agent/sandbox.ts",
+      content: `import { defineSandbox } from "eve/sandbox";
+import { DockerComputer, prepareComputer, startComputer } from "@kybernesis/computer";
+
+// The agent's own computer: ONE persistent container (home and /workspace are
+// volumes, so Chrome's logins survive sessions) with its screen shared over
+// VNC/noVNC on this host's loopback :6080 — reachable only through exe.dev's
+// signed-in port proxy or an SSH tunnel. A person watching can take over.
+// This is the ROOT sandbox; the builder subagent keeps its own workshop.
+export const environment = DockerComputer.environment({
+  name: process.env.COMPUTER_NAME ?? "${name}-computer",
+  vncPassword: process.env.COMPUTER_VNC_PASSWORD,
+  prepare: prepareComputer, // eve's desktop stack + Chrome + the launcher bar, once at \`eve build\`
+});
+
+export default defineSandbox(async () => {
+  const sandbox = await environment.open();
+  await startComputer(sandbox);
+  return sandbox;
+});
+`,
+    },
+    {
+      path: "agent/tools/computer.ts",
+      content: `import { computerTool } from "@kybernesis/computer";
+
+// eve's computer_use with eyes: every action returns the screenshot as an
+// image the model can see, not just a path.
+export default computerTool();
+`,
+    },
+    {
+      path: "agent/tools/open_browser.ts",
+      content: `import { openBrowserTool } from "@kybernesis/computer";
+
+// Open a site in the computer's Chrome. Guarded: a site that has a connector
+// parks for the person's approval unless the call states a legitimate
+// override — connector first, browser only when there isn't one.
+export default openBrowserTool();
+`,
+    },
+    {
+      path: "agent/tools/close_tabs.ts",
+      content: `import { closeTabsTool } from "@kybernesis/computer";
+
+// The computer shares memory with the agent host; stale tabs are the spender.
+export default closeTabsTool();
+`,
+    },
+    {
+      path: "agent/instructions/computer.ts",
+      content: `import { defineInstructions } from "eve/instructions";
+import { COMPUTER_INSTRUCTIONS } from "@kybernesis/computer";
+
+// The "which surface" rule: connected app, then a tool, then the agent's
+// browser, then the person's machine. One source for every agent.
+export default defineInstructions({ content: COMPUTER_INSTRUCTIONS });
+`,
+    },
+    {
+      path: "evals/computer.eval.ts",
+      content: `import { computerSuite } from "@kybernesis/evals";
+
+// Screen reading, file and cookie persistence across sessions, and the guard:
+// a Gmail question is not answered by browsing mail.google.com. Add
+// \`connected\` / \`disconnected\` once this agent has connectors to prove the
+// order on — see the computerSuite docs.
+export default computerSuite();
+`,
+    },
+  ];
+  return {
+    files,
+    deps: ["@kybernesis/computer"],
+    steps: [
+      "Enable Docker on the host (some images ship it disabled): sudo systemctl enable --now docker",
+      "Set COMPUTER_VNC_PASSWORD in .env.local (the second gate on the shared screen; exe's port-proxy sign-in is the first)",
+      "Watch the screen: https://<vm>.exe.xyz:6080/vnc.html (account-gated), or ssh -N -L 6080:localhost:6080 <vm> and open http://localhost:6080/vnc.html",
+      "First `eve build` prepares the computer (eve's desktop stack + Chrome): allow ~5 minutes and ~2 GB of memory for the container",
+    ],
+    env: `
+# The agent's own computer (@kybernesis/computer): a persistent Docker desktop
+# with Chrome whose screen is shared on this host's loopback :6080 (noVNC),
+# behind exe.dev's port-proxy sign-in. The VNC password is the second gate.
+COMPUTER_NAME="${name}-computer"
+COMPUTER_VNC_PASSWORD="..."
+`,
+  };
+}
