@@ -149,7 +149,9 @@ function createSession(input: { container: string; env: Readonly<Record<string, 
   const execArgs = (options: { command: string; workingDirectory?: string; env?: Record<string, string> }, interactive = false): string[] => {
     const args = ["exec", ...(interactive ? ["-i"] : []), "-u", USER, "-w", options.workingDirectory ? resolvePath(options.workingDirectory) : WORKSPACE];
     for (const [k, v] of Object.entries({ HOME, DISPLAY, ...env, ...(options.env ?? {}) })) args.push("-e", `${k}=${v}`);
-    return [...args, container, "bash", "-lc", options.command];
+    // A plain shell, never a login shell: a login shell runs ~/.bash_logout on exit, whose
+    // clear_console fails without a TTY and turns every successful command into exit 1.
+    return [...args, container, "bash", "-c", options.command];
   };
 
   return {
