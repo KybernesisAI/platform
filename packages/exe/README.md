@@ -170,43 +170,9 @@ window under a running session.
 
 Every call through `claudeSubscription()` carries `maxOutputTokens: 16000` unless the call sets its own. Without it the provider asks for the model's maximum (`max_tokens: 128000` on claude-opus-5) on every request, and because a subscription is a shared per-minute output budget, the subscription agent is the first thing to fail under load. Change it per agent with `maxOutputTokens: 32000`, or disable it with `maxOutputTokens: false`. The constant is exported as `CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS`.
 
-## The agent's computer — `@kybernesis/exe/computer`
+## The agent's computer
 
-`DockerComputer` is an eve sandbox provider that gives an agent ONE persistent,
-isolated computer: a Docker container that outlives every session, with `/workspace`
-and the agent user's home on volumes (so files, the Firefox profile and its logins
-survive), and its display shared from inside the container over VNC + noVNC on the
-host's loopback (`127.0.0.1:6080`). On an exe.dev VM that port is reachable through
-exe's signed-in port proxy (`https://<vm>.exe.xyz:6080/vnc.html`) or an SSH tunnel —
-nothing is exposed otherwise; the VNC password is a second gate.
+Moved to its own package: `@kybernesis/computer` (the `DockerComputer` provider,
+Chrome, the launcher bar, the `open_browser` guard and the connector-first rule).
+Install it with `eve add @kybernesis/computer`.
 
-```ts
-// agent/sandbox.ts
-import { installComputerUse, startComputerUse } from "eve/computer-use/sandbox";
-import { defineSandbox } from "eve/sandbox";
-import { DockerComputer } from "@kybernesis/exe/computer";
-
-export const environment = DockerComputer.environment({
-  name: "kyber-computer",            // one container per agent
-  vncPassword: process.env.COMPUTER_VNC_PASSWORD,
-  prepare: installComputerUse,       // xfce + Firefox ESR + the cua driver, once at `eve build`
-});
-
-export default defineSandbox(async () => {
-  const sandbox = await environment.open();
-  await startComputerUse(sandbox);   // display :99 + driver, if not already up
-  return sandbox;
-});
-```
-
-Mount `eve/computer-use` as an extension (`agent/extensions/computer-use.ts`) and the
-model gets `computer_use` (screenshot / click / type / launch firefox|xterm) on that
-desktop. A person watching over noVNC can take the mouse and keyboard at any time —
-that is the take-over flow for passwords, codes and CAPTCHAs, and what they type there
-never passes through the model.
-
-Facts that cost time: run commands through a plain `bash -c` — a login shell runs
-`~/.bash_logout`, whose `clear_console` fails without a TTY and turns exit 0 into 1.
-The Firefox profile is `/workspace/computer-use/firefox-profile`. `eve eval` against
-this agent must run in the foreground (a detached `setsid nohup` run is not recognised
-as a dev environment and every route answers 401).

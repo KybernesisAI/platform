@@ -3,7 +3,7 @@
 # Human-run: npm asks for the browser 2FA on each publish. DRY_RUN=1 to rehearse.
 set -euo pipefail
 cd "$(dirname "$0")"
-ORDER=(identity exe enterprise arcana evals dispatch connectors local manage notify voice multiplayer engineer buzz create)
+ORDER=(identity exe computer enterprise arcana evals dispatch connectors local manage notify voice multiplayer engineer buzz create)
 node scripts/check-eve-line.mjs
 for p in "${ORDER[@]}"; do
   v=$(node -p "require('./packages/$p/package.json').version")

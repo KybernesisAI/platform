@@ -1,0 +1,22 @@
+{
+  "name": "@kybernesis/computer",
+  "version": "0.1.0",
+  "description": "A persistent, isolated computer for an eve agent — a Docker desktop with Chrome that a person can watch and take over — plus the rule for when an agent uses it instead of a connector, a tool, or the person's own machine.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/KybernesisAI/platform.git", "directory": "packages/computer" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "peerDependencies": { "eve": ">=0.68.0 <0.69.0", "zod": "^4" },
+  "devDependencies": { "eve": "0.68.0", "zod": "^4.0.0", "typescript": "^5.9.0", "@types/node": "^24.0.0" }
+}

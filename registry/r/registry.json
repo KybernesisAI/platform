@@ -329,6 +329,46 @@
           "target": "agent/tools/arp-peers.ts"
         }
       ]
+    },
+    {
+      "name": "computer",
+      "type": "registry:item",
+      "title": "Kybernesis Computer",
+      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, eve computer-use, and the connector-first rule for when the agent uses it.",
+      "dependencies": [
+        "@kybernesis/computer"
+      ],
+      "envVars": {
+        "COMPUTER_NAME": "",
+        "COMPUTER_VNC_PASSWORD": ""
+      },
+      "files": [
+        {
+          "path": "registry/computer-sandbox.ts",
+          "type": "registry:file",
+          "target": "agent/sandbox.ts"
+        },
+        {
+          "path": "registry/computer-extension.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/computer-use.ts"
+        },
+        {
+          "path": "registry/computer-open-browser.ts",
+          "type": "registry:file",
+          "target": "agent/tools/open_browser.ts"
+        },
+        {
+          "path": "registry/computer-close-tabs.ts",
+          "type": "registry:file",
+          "target": "agent/tools/close_tabs.ts"
+        },
+        {
+          "path": "registry/computer-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/computer.ts"
+        }
+      ]
     }
   ]
 }

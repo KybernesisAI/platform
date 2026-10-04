@@ -1,4 +1,6 @@
 export {
+  computerSuite,
+  type ComputerSuiteConfig,
   engineerSuite,
   safetySuite,
   kybernesisBaseline,

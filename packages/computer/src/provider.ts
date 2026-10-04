@@ -45,6 +45,8 @@ export interface DockerComputerEnvironmentOptions {
   image?: string;
   /** Host port (loopback) for noVNC. Default 6080; `0` publishes nothing. */
   novncPort?: number;
+  /** Docker memory limit for the computer (Chrome is the spender). Default `3g`; `""` for none. */
+  memoryLimit?: string;
   /** VNC password handed to x11vnc inside the computer (a second gate behind the port proxy). */
   vncPassword?: string;
   /** Screen size for the shared display. */
@@ -242,7 +244,9 @@ async function ensureComputer(options: Required<Pick<DockerComputerEnvironmentOp
   const state = await containerState(options.name);
   if (state === "missing") {
     log?.(`creating the computer ${options.name}`);
+    const memory = options.memoryLimit ?? "3g";
     const args = ["run", "-d", "--name", options.name, "--restart", "unless-stopped", "--shm-size=1g",
+      ...(memory ? ["--memory", memory] : []),
       "-v", `${options.name}-home:${HOME}`, "-v", `${options.name}-workspace:${WORKSPACE}`,
       "-e", `VNC_PASSWORD=${options.vncPassword ?? ""}`];
     if (options.novncPort > 0) args.push("-p", `127.0.0.1:${options.novncPort}:6080`);

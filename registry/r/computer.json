@@ -1,0 +1,45 @@
+{
+  "name": "computer",
+  "type": "registry:item",
+  "title": "Kybernesis Computer",
+  "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, eve computer-use, and the connector-first rule for when the agent uses it.",
+  "dependencies": [
+    "@kybernesis/computer"
+  ],
+  "envVars": {
+    "COMPUTER_NAME": "",
+    "COMPUTER_VNC_PASSWORD": ""
+  },
+  "files": [
+    {
+      "path": "registry/computer-sandbox.ts",
+      "type": "registry:file",
+      "target": "agent/sandbox.ts",
+      "content": "import { defineSandbox } from \"eve/sandbox\";\nimport { DockerComputer, prepareComputer, startComputer } from \"@kybernesis/computer\";\n\n// The agent's own computer: ONE persistent container (home and /workspace are\n// volumes, so Chrome's logins survive sessions) with its screen shared over\n// VNC/noVNC on this host's loopback :6080 \u2014 reachable only through exe.dev's\n// signed-in port proxy or an SSH tunnel. A person watching can take over.\nexport const environment = DockerComputer.environment({\n  name: process.env.COMPUTER_NAME ?? \"agent-computer\",\n  vncPassword: process.env.COMPUTER_VNC_PASSWORD,\n  prepare: prepareComputer, // eve's desktop stack + Chrome + the launcher bar, once at `eve build`\n});\n\nexport default defineSandbox(async () => {\n  const sandbox = await environment.open();\n  await startComputer(sandbox);\n  return sandbox;\n});\n"
+    },
+    {
+      "path": "registry/computer-extension.ts",
+      "type": "registry:file",
+      "target": "agent/extensions/computer-use.ts",
+      "content": "// eve's computer-use extension: screenshot / click / type on the computer's display.\nexport { default } from \"eve/computer-use\";\n"
+    },
+    {
+      "path": "registry/computer-open-browser.ts",
+      "type": "registry:file",
+      "target": "agent/tools/open_browser.ts",
+      "content": "import { openBrowserTool } from \"@kybernesis/computer\";\n\n// Open a site in the computer's Chrome. Guarded: a site that has a connector\n// parks for the person's approval unless the model states a legitimate\n// override \u2014 connector first, browser only when there isn't one.\nexport default openBrowserTool();\n"
+    },
+    {
+      "path": "registry/computer-close-tabs.ts",
+      "type": "registry:file",
+      "target": "agent/tools/close_tabs.ts",
+      "content": "import { closeTabsTool } from \"@kybernesis/computer\";\n\n// The computer shares memory with the agent host; stale tabs are the spender.\nexport default closeTabsTool();\n"
+    },
+    {
+      "path": "registry/computer-instructions.ts",
+      "type": "registry:file",
+      "target": "agent/instructions/computer.ts",
+      "content": "import { defineInstructions } from \"eve/instructions\";\nimport { COMPUTER_INSTRUCTIONS } from \"@kybernesis/computer\";\n\n// The \"which surface\" rule: connected app, then a tool, then the agent's\n// browser, then the person's machine. One source for every agent.\nexport default defineInstructions({ content: COMPUTER_INSTRUCTIONS });\n"
+    }
+  ]
+}
