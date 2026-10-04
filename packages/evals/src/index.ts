@@ -15,4 +15,4 @@ export {
   isResultFrom,
   resultToolName,
 } from "./tools.js";
-export { settleBackgroundWork } from "./background.js";
+export { hasPendingWork, settleBackgroundWork } from "./background.js";
