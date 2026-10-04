@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import type { ApprovalContext } from "eve/tools/approval";
 import { z } from "zod";
 import { BROWSER_OVERRIDES, type BrowserOverride, decideBrowserUse } from "./policy.js";
-import { CHROME_PROFILE, openChromeCommand } from "./provider.js";
+import { CHROME_DEBUG_PORT, openChromeCommand } from "./provider.js";
 
 export interface OpenBrowserOptions {
   /** Hosts covered by a connector, by service slug. Defaults to the Kybernesis catalogue. */
@@ -51,7 +51,13 @@ export function openBrowserTool(options: OpenBrowserOptions = {}) {
   });
 }
 
-/** Close every Chrome tab but the active one — the computer shares memory with the agent host. */
+/**
+ * Close every Chrome tab but one. The computer shares memory with the agent
+ * host and stale tabs are the spender. Through Chrome's DevTools port rather
+ * than keystrokes: a keystroke loop once closed the LAST tab too, Chrome quit,
+ * and a session cookie set a minute earlier was gone. One tab always stays,
+ * so Chrome and its session state outlive the clean-up.
+ */
 export function closeTabsTool() {
   return defineTool({
     description: "Close all Chrome tabs on your computer except the one you are using. Do this when you are done with a site.",
@@ -60,15 +66,13 @@ export function closeTabsTool() {
       const sandbox = await ctx.getSandbox();
       const result = await sandbox.run({
         command: [
-          "export DISPLAY=:99",
-          `window=$(xdotool search --onlyvisible --class google-chrome | tail -n 1)`,
-          `[ -n "$window" ] || { echo "Chrome is not open"; exit 0; }`,
-          `xdotool windowactivate --sync "$window"`,
-          // Chrome: close other tabs via the keyboard — Ctrl+1 to the first tab,
-          // then Ctrl+W on every tab after it from the end.
-          `n=$(ls -1 ${CHROME_PROFILE}/Default/Sessions 2>/dev/null | wc -l)`,
-          `for _ in $(seq 1 30); do xdotool key --clearmodifiers ctrl+9; sleep 0.05; xdotool key --clearmodifiers ctrl+w; sleep 0.1; done`,
-          `echo closed`,
+          `set -e`,
+          `list=$(curl -s --max-time 3 http://127.0.0.1:${CHROME_DEBUG_PORT}/json/list || true)`,
+          `[ -n "$list" ] || { echo "Chrome is not open"; exit 0; }`,
+          // Pages only (not workers/extensions), oldest first; keep the newest.
+          `ids=$(printf '%s' "$list" | python3 -c 'import json,sys; pages=[t for t in json.load(sys.stdin) if t.get("type")=="page"]; print("\n".join(t["id"] for t in pages[1:]))')`,
+          `n=0; for id in $ids; do curl -s --max-time 3 "http://127.0.0.1:${CHROME_DEBUG_PORT}/json/close/$id" >/dev/null && n=$((n+1)); done`,
+          `echo "closed $n tab(s); 1 left open"`,
         ].join("\n"),
       });
       return { ok: result.exitCode === 0, detail: (result.stdout || result.stderr).trim() };

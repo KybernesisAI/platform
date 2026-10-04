@@ -361,6 +361,8 @@ function targetFiles(resources: SandboxProviderResources): SandboxProviderTarget
 // ---------------------------------------------------------------------------
 
 export const CHROME_PROFILE = `${WORKSPACE}/computer-use/chrome-profile`;
+/** Chrome's DevTools port, loopback inside the container: how close_tabs sees tabs without guessing at keystrokes. */
+export const CHROME_DEBUG_PORT = 9222;
 
 /** Run after `installComputerUse` in the environment's `prepare`. */
 export async function installChrome(sandbox: SandboxSession): Promise<void> {
@@ -398,7 +400,7 @@ mkdir -p ${CHROME_PROFILE}
 # means every lock is stale.
 pgrep -x chrome >/dev/null 2>&1 || rm -f ${CHROME_PROFILE}/SingletonLock ${CHROME_PROFILE}/SingletonSocket ${CHROME_PROFILE}/SingletonCookie
 setsid -f google-chrome-stable --no-sandbox --test-type --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \\
-  --user-data-dir=${CHROME_PROFILE} --window-position=0,0 --start-maximized "\${url}" </dev/null >> ${WORKSPACE}/computer-use/chrome.log 2>&1
+  --remote-debugging-port=${CHROME_DEBUG_PORT} --user-data-dir=${CHROME_PROFILE} --window-position=0,0 --start-maximized "\${url}" </dev/null >> ${WORKSPACE}/computer-use/chrome.log 2>&1
 for _ in $(seq 1 100); do
   window=$(xdotool search --onlyvisible --class google-chrome 2>/dev/null | tail -n 1 || true)
   [[ -n "\${window}" ]] && break

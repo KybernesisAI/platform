@@ -20,6 +20,7 @@ import { defineEval } from "eve/evals";
 import { includes, satisfies } from "eve/evals/expect";
 
 import { MEMORY_READ_SUFFIXES, MEMORY_WRITE_SUFFIXES, isResultFrom, resultToolName } from "./tools.js";
+import { settleBackgroundWork } from "./background.js";
 
 type EveEval = ReturnType<typeof defineEval>;
 
@@ -459,10 +460,11 @@ export function computerSuite(config: ComputerSuiteConfig = {}): EveEval[] {
         description: `Computer: a ${service} task goes through the connector, and the browser stays closed.`,
         timeoutMs: 600_000,
         async test(t) {
-          await t.send(prompt);
+          const turn = await settleBackgroundWork(t, await t.send(prompt));
           t.succeeded();
           t.eventsSatisfy(`${service} connector was called`, (events) => events.some((event) => isResultFrom(event, [toolSuffix])));
           t.calledTool("open_browser", { count: 0 });
+          t.check(turn.message ?? "", satisfies((m) => typeof m === "string" && m.length > 0, "a reply was given"));
         },
       }),
     );
@@ -474,10 +476,13 @@ export function computerSuite(config: ComputerSuiteConfig = {}): EveEval[] {
         description: `Computer: ${service} has a connector but is not connected — the agent asks to connect it instead of browsing ${site}.`,
         timeoutMs: 600_000,
         async test(t) {
-          const turn = await t.send(prompt);
+          // An agent that delegates (Kyber routes to a department) answers "I'm
+          // checking" first and the real reply arrives in a background hop.
+          const turn = await settleBackgroundWork(t, await t.send(prompt));
           t.calledTool("open_browser", { count: 0 });
           t.judge(
-            `Does the reply ask the person to connect ${service} (or say it is not connected), rather than attempting the task through a website or claiming it was done?`,
+            `Does the reply ask the person to connect ${service} (or say it is not connected / not available), rather than attempting the task through a website or claiming it was done?`,
+            { on: { input: prompt, output: turn.message ?? "" } },
           ).atLeast(0.7);
           t.check(turn.message ?? "", satisfies((m) => typeof m === "string" && m.length > 0, "a reply was given"));
         },
