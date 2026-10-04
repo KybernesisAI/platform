@@ -367,3 +367,80 @@ EOS`,
 export function openChromeCommand(url: string): string {
   return `${WORKSPACE}/.eve-code/managed-browser/open-chrome ${shellQuote(url)}`;
 }
+
+// ---------------------------------------------------------------------------
+// A desktop shell for the PERSON. eve's display command starts a window manager
+// on a black root — right for a model that only takes screenshots, useless for
+// someone watching over VNC who wants to open a browser or a terminal. The
+// computer adds the XFCE panel (Applications menu + launchers for Chrome,
+// Terminal and Files) and the desktop, seeded so the panel's first-run dialog
+// never appears. The launchers open Chrome with the SAME persistent profile the
+// agent uses, so a login made by hand is a login the agent has.
+// ---------------------------------------------------------------------------
+
+const PANEL_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=8;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="size" type="uint" value="36"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/><value type="int" value="2"/><value type="int" value="3"/><value type="int" value="4"/><value type="int" value="5"/><value type="int" value="6"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="applicationsmenu"/>
+    <property name="plugin-2" type="string" value="launcher">
+      <property name="items" type="array"><value type="string" value="chrome.desktop"/></property>
+    </property>
+    <property name="plugin-3" type="string" value="launcher">
+      <property name="items" type="array"><value type="string" value="terminal.desktop"/></property>
+    </property>
+    <property name="plugin-4" type="string" value="launcher">
+      <property name="items" type="array"><value type="string" value="files.desktop"/></property>
+    </property>
+    <property name="plugin-5" type="string" value="tasklist"/>
+    <property name="plugin-6" type="string" value="clock"/>
+  </property>
+</channel>
+`;
+
+function desktopEntry(name: string, exec: string, icon: string, comment: string): string {
+  return `[Desktop Entry]\nType=Application\nVersion=1.0\nName=${name}\nComment=${comment}\nExec=${exec}\nIcon=${icon}\nTerminal=false\nCategories=Utility;\n`;
+}
+
+/** Seed the panel layout and the launcher entries. Run in `prepare` (after `installChrome`). */
+export async function installDesktopShell(sandbox: SandboxSession): Promise<void> {
+  const openChrome = `${WORKSPACE}/.eve-code/managed-browser/open-chrome`;
+  const files: Record<string, string> = {
+    [`${HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml`]: PANEL_XML,
+    [`${HOME}/.config/xfce4/panel/launcher-2/chrome.desktop`]: desktopEntry("Chrome", `${openChrome} %U`, "google-chrome", "Chrome, with the computer's persistent profile"),
+    [`${HOME}/.config/xfce4/panel/launcher-3/terminal.desktop`]: desktopEntry("Terminal", "xterm -fa 'GeistMono Nerd Font' -fs 14 -bg '#0A0A0A' -fg '#bbbbbb'", "utilities-terminal", "A shell on the computer"),
+    [`${HOME}/.config/xfce4/panel/launcher-4/files.desktop`]: desktopEntry("Files", "thunar /workspace", "system-file-manager", "The computer's files"),
+    // The Applications menu and xdg-open must reach the SAME Chrome profile:
+    // override the stock Chrome entries for this user.
+    [`${HOME}/.local/share/applications/google-chrome.desktop`]: desktopEntry("Google Chrome", `${openChrome} %U`, "google-chrome", "Chrome, with the computer's persistent profile") + "MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;\n",
+    [`${HOME}/.local/share/applications/com.google.Chrome.desktop`]: "[Desktop Entry]\nType=Application\nName=Google Chrome (stock)\nNoDisplay=true\nHidden=true\n",
+  };
+  for (const [path, content] of Object.entries(files)) await sandbox.writeTextFile({ path, content });
+  await sandbox.run({ command: `xdg-settings set default-web-browser google-chrome.desktop >/dev/null 2>&1 || true` });
+}
+
+/** Start the panel and the desktop on display :99 if they are not running. Call after `startComputerUse`. */
+export async function startDesktopShell(sandbox: SandboxSession): Promise<void> {
+  const command = [
+    "set -u",
+    `export DISPLAY=${DISPLAY}`,
+    `[ -f ${WORKSPACE}/computer-use/dbus-session-address ] && export DBUS_SESSION_BUS_ADDRESS="$(cat ${WORKSPACE}/computer-use/dbus-session-address)"`,
+    `pgrep -x xfce4-panel >/dev/null || setsid -f xfce4-panel --disable-wm-check </dev/null > ${WORKSPACE}/computer-use/panel.log 2>&1`,
+    `pgrep -x xfdesktop >/dev/null || setsid -f xfdesktop --disable-wm-check </dev/null > ${WORKSPACE}/computer-use/xfdesktop.log 2>&1`,
+    "exit 0",
+  ].join("\n");
+  const result = await sandbox.run({ command });
+  if (result.exitCode !== 0) throw new Error(`desktop shell did not start: ${(result.stderr || result.stdout).slice(-400)}`);
+}
