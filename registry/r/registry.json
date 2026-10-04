@@ -334,7 +334,7 @@
       "name": "computer",
       "type": "registry:item",
       "title": "Kybernesis Computer",
-      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, eve computer-use, and the connector-first rule for when the agent uses it.",
+      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, and the connector-first rule for when the agent uses it.",
       "dependencies": [
         "@kybernesis/computer"
       ],
@@ -349,9 +349,9 @@
           "target": "agent/sandbox.ts"
         },
         {
-          "path": "registry/computer-extension.ts",
+          "path": "registry/computer-tool.ts",
           "type": "registry:file",
-          "target": "agent/extensions/computer-use.ts"
+          "target": "agent/tools/computer.ts"
         },
         {
           "path": "registry/computer-open-browser.ts",

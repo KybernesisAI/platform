@@ -2,7 +2,7 @@
   "name": "computer",
   "type": "registry:item",
   "title": "Kybernesis Computer",
-  "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, eve computer-use, and the connector-first rule for when the agent uses it.",
+  "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, and the connector-first rule for when the agent uses it.",
   "dependencies": [
     "@kybernesis/computer"
   ],
@@ -18,10 +18,10 @@
       "content": "import { defineSandbox } from \"eve/sandbox\";\nimport { DockerComputer, prepareComputer, startComputer } from \"@kybernesis/computer\";\n\n// The agent's own computer: ONE persistent container (home and /workspace are\n// volumes, so Chrome's logins survive sessions) with its screen shared over\n// VNC/noVNC on this host's loopback :6080 \u2014 reachable only through exe.dev's\n// signed-in port proxy or an SSH tunnel. A person watching can take over.\nexport const environment = DockerComputer.environment({\n  name: process.env.COMPUTER_NAME ?? \"agent-computer\",\n  vncPassword: process.env.COMPUTER_VNC_PASSWORD,\n  prepare: prepareComputer, // eve's desktop stack + Chrome + the launcher bar, once at `eve build`\n});\n\nexport default defineSandbox(async () => {\n  const sandbox = await environment.open();\n  await startComputer(sandbox);\n  return sandbox;\n});\n"
     },
     {
-      "path": "registry/computer-extension.ts",
+      "path": "registry/computer-tool.ts",
       "type": "registry:file",
-      "target": "agent/extensions/computer-use.ts",
-      "content": "// eve's computer-use extension: screenshot / click / type on the computer's display.\nexport { default } from \"eve/computer-use\";\n"
+      "target": "agent/tools/computer.ts",
+      "content": "import { computerTool } from \"@kybernesis/computer\";\n\n// eve's computer_use with eyes: every action returns the screenshot as an\n// image the model can see, not just a path. Replaces mounting eve/computer-use.\nexport default computerTool();\n"
     },
     {
       "path": "registry/computer-open-browser.ts",
