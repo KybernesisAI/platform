@@ -105,6 +105,7 @@ COPY <<'EOS' /usr/local/bin/computer-view
 # opening noVNC before that saw "Failed to connect to server".
 export DISPLAY=:99
 mkdir -p "$HOME/.vnc"
+rm -f ${WORKSPACE}/computer-use/chrome-profile/Singleton{Lock,Socket,Cookie} 2>/dev/null || true
 if [ -n "\${VNC_PASSWORD:-}" ]; then x11vnc -storepasswd "\$VNC_PASSWORD" "$HOME/.vnc/passwd" >/dev/null 2>&1; AUTH="-rfbauth $HOME/.vnc/passwd"; else AUTH="-nopw"; fi
 websockify --web /usr/share/novnc 0.0.0.0:6080 localhost:5900 >/tmp/websockify.log 2>&1 &
 while true; do
@@ -391,6 +392,11 @@ set -euo pipefail
 url="\${1:-about:blank}"
 export DISPLAY=:99
 mkdir -p ${CHROME_PROFILE}
+# The profile lives on a volume and outlives the container. A Chrome that died
+# with the old container leaves Singleton* files behind, and the next Chrome
+# shows a "profile in use" dialog instead of the page. No Chrome running here
+# means every lock is stale.
+pgrep -x chrome >/dev/null 2>&1 || rm -f ${CHROME_PROFILE}/SingletonLock ${CHROME_PROFILE}/SingletonSocket ${CHROME_PROFILE}/SingletonCookie
 setsid -f google-chrome-stable --no-sandbox --test-type --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \\
   --user-data-dir=${CHROME_PROFILE} --window-position=0,0 --start-maximized "\${url}" </dev/null >> ${WORKSPACE}/computer-use/chrome.log 2>&1
 for _ in $(seq 1 100); do
