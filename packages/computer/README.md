@@ -10,7 +10,10 @@ watch the agent work, and take the mouse and keyboard — to sign in to a site o
 to finish something themselves. Secrets a person types on that screen never pass
 through the model.
 
-eve's `computer-use` extension gives the model the screen: screenshot, click, type.
+`computerTool()` gives the model the screen: it is eve's `computer_use` (screenshot, click,
+type, scroll, keypress, launch a terminal) with one change — every result carries the
+screenshot **as an image**. eve's own tool returns only a path and window text, and its
+`read_file` reads PNGs as text, so an agent on eve's tool alone is blind.
 
 ## Install
 
@@ -19,7 +22,7 @@ eve add @kybernesis/computer
 ```
 
 That writes `agent/sandbox.ts` (the computer as the agent's sandbox),
-`agent/extensions/computer-use.ts`, `agent/tools/open_browser.ts`,
+`agent/tools/computer.ts`, `agent/tools/open_browser.ts`,
 `agent/tools/close_tabs.ts` and `agent/instructions/computer.ts`, and asks for:
 
 | env | meaning |
@@ -66,7 +69,7 @@ Deployments extend the host list: `openBrowserTool({ connectorHosts: { ...CONNEC
 - `DockerComputer.environment({ name, vncPassword?, prepare?, memoryLimit? })` → `environment.open()`
 - `prepareComputer(sandbox)` / `startComputer(sandbox)` — the build-time and per-session steps
 - `installChrome`, `installDesktopShell`, `startDesktopShell`, `openChromeCommand(url)`
-- `openBrowserTool(options?)`, `closeTabsTool()`
+- `computerTool({ vision? })`, `openBrowserTool(options?)`, `closeTabsTool()`
 - `COMPUTER_INSTRUCTIONS`, `CONNECTOR_HOSTS`, `decideBrowserUse`, `serviceForUrl`
 
 ## Evals

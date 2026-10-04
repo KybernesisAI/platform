@@ -19,7 +19,7 @@ export function openBrowserTool(options: OpenBrowserOptions = {}) {
   return defineTool({
     description:
       "Open a URL in Chrome on your own computer's screen (the person may be watching). " +
-      "Use it only for sites with NO connector, or with a stated override. Then use computer_use to work in the page.",
+      "Use it only for sites with NO connector, or with a stated override. Then use the computer tool to work in the page.",
     inputSchema: z.object({
       url: z.string().url().describe("The http(s) URL to open."),
       override: z
@@ -44,7 +44,7 @@ export function openBrowserTool(options: OpenBrowserOptions = {}) {
         ok: true,
         url,
         note:
-          "Chrome is open on the screen. Take a screenshot to see it." +
+          "Chrome is open on the screen. Take a screenshot with the computer tool to see it." +
           (decision.kind === "ask" ? ` (The person approved opening ${decision.service} in the browser.)` : ""),
       };
     },
