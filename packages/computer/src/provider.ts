@@ -28,6 +28,7 @@
  * `installComputerUse` is the intended payload); `open()` returns the running
  * computer; the session hooks never delete it.
  */
+import { createHash } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { Readable } from "node:stream";
 import type { SandboxSession } from "eve/sandbox";
@@ -88,7 +89,7 @@ export const COMPUTER_DOCKERFILE = `FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \\
       sudo ca-certificates curl gnupg bash coreutils procps \\
-      xvfb x11vnc novnc websockify python3 \\
+      xvfb x11-utils x11vnc novnc websockify python3 \\
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \\
     && apt-get install -y --no-install-recommends nodejs \\
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -97,13 +98,19 @@ RUN useradd -m -s /bin/bash -u 1001 ${USER} \\
     && mkdir -p ${WORKSPACE} && chown ${USER}:${USER} ${WORKSPACE}
 COPY <<'EOS' /usr/local/bin/computer-view
 #!/bin/bash
-# Share display :99 (started by eve's computer-use) over VNC + noVNC. Waits for
-# the display and keeps sharing across display restarts.
+# The computer's screen, from the moment the container starts: display :99
+# (the same one eve's computer-use uses — its start script checks for an
+# existing display first) shared over VNC + noVNC. Without this the screen
+# only existed once an agent session had opened the sandbox, and a person
+# opening noVNC before that saw "Failed to connect to server".
 export DISPLAY=:99
 mkdir -p "$HOME/.vnc"
 if [ -n "\${VNC_PASSWORD:-}" ]; then x11vnc -storepasswd "\$VNC_PASSWORD" "$HOME/.vnc/passwd" >/dev/null 2>&1; AUTH="-rfbauth $HOME/.vnc/passwd"; else AUTH="-nopw"; fi
 websockify --web /usr/share/novnc 0.0.0.0:6080 localhost:5900 >/tmp/websockify.log 2>&1 &
 while true; do
+  if ! xdpyinfo -display :99 >/dev/null 2>&1 && command -v Xvfb >/dev/null; then
+    setsid -f Xvfb :99 -screen 0 1920x1080x24 -ac +extension RANDR >/tmp/xvfb.log 2>&1
+  fi
   until xdpyinfo -display :99 >/dev/null 2>&1; do sleep 2; done
   x11vnc -display :99 \$AUTH -forever -shared -rfbport 5900 -noxdamage -quiet >/tmp/x11vnc.log 2>&1
   sleep 2
@@ -115,6 +122,10 @@ WORKDIR ${WORKSPACE}
 ENV HOME=${HOME} DISPLAY=${DISPLAY}
 CMD ["/usr/local/bin/computer-view"]
 `;
+
+function recipeHash(): string {
+  return createHash("sha256").update(COMPUTER_DOCKERFILE).digest("hex").slice(0, 10);
+}
 
 function docker(args: string[], options: { input?: string | Uint8Array; env?: Record<string, string> } = {}) {
   return new Promise<{ exitCode: number; stdout: Buffer; stderr: string }>((resolveRun, reject) => {
@@ -233,7 +244,10 @@ async function containerState(name: string): Promise<"running" | "stopped" | "mi
 
 /** Bring the one computer up: build the base image if needed, create or start the container. */
 async function ensureComputer(options: Required<Pick<DockerComputerEnvironmentOptions, "name" | "novncPort">> & DockerComputerEnvironmentOptions, log?: (m: string) => void): Promise<string> {
-  const image = options.image ?? `kybernesis/agent-computer:${options.name}`;
+  // The tag carries a hash of the recipe, so a changed Dockerfile builds a new
+  // image and the container is recreated from it; the home and /workspace
+  // volumes carry everything that matters across that.
+  const image = options.image ?? `kybernesis/agent-computer:${options.name}-${recipeHash()}`;
   if (!options.image) {
     const have = await docker(["image", "inspect", image]);
     if (have.exitCode !== 0) {
@@ -241,7 +255,15 @@ async function ensureComputer(options: Required<Pick<DockerComputerEnvironmentOp
       await dockerOk(["build", "-t", image, "-f", "-", "."], "image build", COMPUTER_DOCKERFILE);
     }
   }
-  const state = await containerState(options.name);
+  let state = await containerState(options.name);
+  if (state !== "missing") {
+    const current = await docker(["inspect", "-f", "{{.Config.Image}}", options.name]);
+    if (current.exitCode === 0 && current.stdout.toString().trim() !== image) {
+      log?.(`recreating the computer from ${image} (its recipe changed; home and /workspace are kept)`);
+      await dockerOk(["rm", "-f", options.name], "container remove");
+      state = "missing";
+    }
+  }
   if (state === "missing") {
     log?.(`creating the computer ${options.name}`);
     const memory = options.memoryLimit ?? "3g";
