@@ -123,6 +123,24 @@ ENV HOME=${HOME} DISPLAY=${DISPLAY}
 CMD ["/usr/local/bin/computer-view"]
 `;
 
+/** Marker on the container's own filesystem (not a volume): a recreated container has no marker and prepares itself. */
+const PREPARED_MARKER_DIR = "/usr/local/share/kybernesis-computer";
+const PREPARED_MARKER = `${PREPARED_MARKER_DIR}/prepared`;
+
+/**
+ * A container recreated from the image (recipe change, `docker rm`) has lost
+ * everything `prepare` installed into its filesystem layer. eve only re-runs
+ * `prepare` when it decides the template changed, so the session would run
+ * on a computer with no Chrome and no driver. Check the marker and prepare here.
+ */
+async function ensurePrepared(session: SandboxSession, prepare: DockerComputerEnvironmentOptions["prepare"]): Promise<void> {
+  if (!prepare) return;
+  const marker = await session.run({ command: `test -f ${PREPARED_MARKER}` });
+  if (marker.exitCode === 0) return;
+  await prepare(session);
+  await session.run({ command: `sudo -n mkdir -p ${PREPARED_MARKER_DIR} && sudo -n touch ${PREPARED_MARKER}` });
+}
+
 function recipeHash(): string {
   return createHash("sha256").update(COMPUTER_DOCKERFILE).digest("hex").slice(0, 10);
 }
@@ -306,16 +324,20 @@ export const DockerComputer = defineSandboxProvider<
           context.log?.("preparing the computer");
           await options.prepare(session);
         }
+        await session.run({ command: `sudo -n mkdir -p ${PREPARED_MARKER_DIR} && sudo -n touch ${PREPARED_MARKER}` });
         return { container: name, image, version: 1 };
       },
       async start(_context, open, artifact) {
         await ensureComputer({ ...options, name: artifact.container, novncPort }, undefined);
         const session = createSession({ container: artifact.container, env: { ...env, ...(open?.env ?? {}) } });
+        await ensurePrepared(session, options?.prepare);
         return { handle: handleFor(session), state: { container: artifact.container, version: 1 } };
       },
       async resume(_context, artifact, state) {
         await ensureComputer({ ...options, name: state.container ?? artifact.container, novncPort }, undefined);
-        return handleFor(createSession({ container: state.container, env }));
+        const session = createSession({ container: state.container, env });
+        await ensurePrepared(session, options?.prepare);
+        return handleFor(session);
       },
     };
   },
