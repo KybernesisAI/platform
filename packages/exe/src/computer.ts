@@ -352,6 +352,8 @@ for _ in $(seq 1 100); do
 done
 [[ -n "\${window:-}" ]] || { echo "Chrome did not open a window" >&2; exit 1; }
 xdotool windowactivate --sync "\${window}" >/dev/null 2>&1 || true
+# Fill the screen (minus the panel): a half-width window wastes the shared display.
+xdotool windowmove "\${window}" 0 0 windowsize "\${window}" 100% 96% >/dev/null 2>&1 || true
 echo "opened \${url}"
 EOS`,
     `chmod 0755 ${WORKSPACE}/.eve-code/managed-browser/xdg-open ${WORKSPACE}/.eve-code/managed-browser/open-chrome`,
