@@ -80,3 +80,42 @@ test("a 400 on send still keeps the session", async () => {
   await assert.rejects(() => answerTurn(client, store, "channel", "hey", "relay"), (e) => e instanceof ClientError && e.status === 400);
   assert.equal(store.get("relay", "channel").id, "session-alive");
 });
+
+/**
+ * A stored run that died under a runtime upgrade answers nothing when its
+ * backlog is read — no events, no error, no end. Found on Kyber on 2026-10-05
+ * after the eve 0.68 cutover: every message in #general sat at "typing"
+ * because the drain waited on a stream that never finished and never
+ * reached the agent. The backlog read has its own short bound; when it
+ * trips, the conversation is replaced like a 404 would be.
+ */
+test("a backlog that never finishes is skipped; the dead run's own answer replaces the session", async () => {
+  const store = storeWith("session-zombie");
+  const logs = [];
+  let created = 0;
+  const client = {
+    sessions: {
+      attach(id) {
+        return {
+          state: { sessionId: id, streamIndex: 3 },
+          stream: async function* ({ signal }) {
+            await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+          },
+          // eve answers a dead run's send the way it answers an ended one.
+          send: async () => { throw new ClientError(409, JSON.stringify({ code: "session_not_active", error: "The session is no longer active.", ok: false })); },
+        };
+      },
+      async create() {
+        created += 1;
+        return { response: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
+      },
+    },
+  };
+  const started = Date.now();
+  const result = await answerTurn(client, store, "channel", "hey", "relay", (m) => logs.push(m), 5 * 60_000, 60 * 60_000, 200);
+  assert.ok(Date.now() - started < 5_000, "gave up on the backlog quickly");
+  assert.equal(created, 1, "a fresh session was created");
+  assert.equal(result.message, "fresh answer");
+  assert.equal(store.get("relay", "channel")?.id, "session-new");
+  assert.ok(logs.some((m) => /did not finish reading in 200ms/.test(m)), logs.join("\n"));
+});
