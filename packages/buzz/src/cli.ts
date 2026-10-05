@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { buzzBridge } from "./bridge.js";
 import { asHexPubkey, loadKey, loadOrCreateKey, npubEncode } from "./keys.js";
 import * as profile from "./profile.js";
+import { nameFromDid, syncProfileFromName, type SyncOutcome } from "./agentid.js";
 
 /**
  * Setup and operation for an agent that lives in a workspace.
@@ -52,8 +53,9 @@ function flag(name: string): string | undefined {
 }
 
 
-/** The `.agent` identity this directory's agent was connected to, if any. */
-function identityDidFromFile(): string | null {
+/** The `.agent` identity this agent was connected to, if any: `ARP_AGENT_DID`, else the directory's identity file. */
+function identityDid(): string | null {
+  if (process.env.ARP_AGENT_DID?.startsWith("did:web:")) return process.env.ARP_AGENT_DID;
   const file = process.env.ARP_IDENTITY_FILE ?? join(process.cwd(), ".eve", "arp-identity.json");
   if (!existsSync(file)) return null;
   try {
@@ -62,21 +64,6 @@ function identityDidFromFile(): string | null {
   } catch {
     return null;
   }
-}
-
-type AgentIdProfile = { name: string; description: string; picture: string | null; nip05: string | null };
-
-/** The name's public profile document, served from the name's own address. */
-async function fetchAgentIdProfile(sld: string): Promise<AgentIdProfile> {
-  const suffix = process.env.AGENTID_MIRROR_SUFFIX ?? ".agent.arp.run";
-  const url = `https://${sld}${suffix.startsWith(".") ? suffix : `.${suffix}`}/.well-known/agent-profile.json`;
-  const res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) {
-    console.error(`\n  ${sld}.agent has no profile document yet (${res.status} from ${url}).\n`);
-    process.exit(1);
-  }
-  const doc = (await res.json()) as Partial<AgentIdProfile>;
-  return { name: doc.name ?? sld, description: doc.description ?? "", picture: doc.picture ?? null, nip05: doc.nip05 ?? null };
 }
 
 /**
@@ -105,33 +92,31 @@ async function setProfile(): Promise<void> {
   // the NIP-05 handle that nostr clients verify against the name itself. The
   // Buzz key never leaves this host; ARP Cloud only publishes the document.
   if (process.argv.includes("--from-agentid")) {
-    const did = flag("from-agentid") && !flag("from-agentid")!.startsWith("--") ? flag("from-agentid")! : identityDidFromFile();
+    const did = flag("from-agentid") && !flag("from-agentid")!.startsWith("--") ? flag("from-agentid")! : identityDid();
     if (!did) {
       console.error("\n  Which name? kybernesis-buzz profile --from-agentid <name>.agent\n  (or run it from the agent's directory, where .eve/arp-identity.json says who it is)\n");
       process.exit(1);
     }
-    const sld = did.replace(/^did:web:/, "").replace(/\.agent$/, "").toLowerCase();
-    const doc = await fetchAgentIdProfile(sld);
-    const wanted: profile.Profile = {
-      name: sld,
-      display_name: doc.name,
-      ...(doc.description ? { about: doc.description } : {}),
-      ...(doc.picture ? { picture: doc.picture } : {}),
-      ...(doc.nip05 ? { nip05: doc.nip05 } : {}),
-      bot: true,
-    };
-    let published = 0;
-    for (const url of urls) {
-      try {
-        await profile.write(url, key, wanted);
-        console.log(`  ✓ ${url}`);
-        published += 1;
-      } catch (error) {
-        const why = (error as Error).message;
-        console.log(why.includes("not a relay member") ? `  · ${url} — not a member yet, so nothing to be known as there` : `  ✕ ${url} — ${why}`);
-      }
+    const name = nameFromDid(did);
+    if (!name) {
+      console.error(`\n  ${did} is not a .agent name.\n`);
+      process.exit(1);
     }
-    console.log(published > 0 ? `\n  ${doc.name} (${sld}.agent) is ${key.npub.slice(0, 20)}… — profile taken from the name.\n` : "\n  Nothing published — invite this key to a community first.\n");
+    let outcomes: SyncOutcome[];
+    try {
+      outcomes = await syncProfileFromName({ name, relays: urls, key });
+    } catch (error) {
+      console.error(`\n  ${(error as Error).message}\n`);
+      process.exit(1);
+    }
+    for (const { relay, outcome, detail } of outcomes) {
+      if (outcome === "updated") console.log(`  ✓ ${relay}`);
+      else if (outcome === "unchanged") console.log(`  ✓ ${relay} — already matches the name`);
+      else if (outcome === "not-member") console.log(`  · ${relay} — not a member yet, so nothing to be known as there`);
+      else console.log(`  ✕ ${relay} — ${detail}`);
+    }
+    const reached = outcomes.filter((o) => o.outcome === "updated" || o.outcome === "unchanged").length;
+    console.log(reached > 0 ? `\n  ${name}.agent is ${key.npub.slice(0, 20)}… — profile taken from the name.\n` : "\n  Nothing published — invite this key to a community first.\n");
     return;
   }
 
@@ -224,8 +209,32 @@ function run(): void {
       : {}),
   });
 
+  // How the agent presents itself follows its `.agent` name: checked on start and then every
+  // BUZZ_PROFILE_SYNC_MS (default six hours, 0 turns it off), and written only where a
+  // community's copy differs. A new picture or a moved address needs no command on this host.
+  const did = identityDid();
+  const name = did ? nameFromDid(did) : null;
+  const every = Number(process.env.BUZZ_PROFILE_SYNC_MS ?? 6 * 60 * 60 * 1000);
+  const timers: NodeJS.Timeout[] = [];
+  if (name && every > 0) {
+    const log = (message: string) => console.log(new Date().toISOString().slice(11, 19), message);
+    const sync = () =>
+      syncProfileFromName({ name, relays: relayList(), key: loadKey(KEY_FILE) })
+        .then((outcomes) => {
+          for (const { relay, outcome, detail } of outcomes) {
+            if (outcome === "updated") log(`profile: ${relay} updated from ${name}.agent`);
+            if (outcome === "failed") log(`profile: ${relay} not updated — ${detail}`);
+          }
+        })
+        .catch((error: Error) => log(`profile: ${error.message}`));
+    // A moment after start, so the bridge's own connections come first.
+    timers.push(setTimeout(sync, 5_000), setInterval(sync, every));
+    for (const timer of timers) timer.unref();
+  }
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
+      for (const timer of timers) clearTimeout(timer);
       bridge.stop();
       setTimeout(() => process.exit(0), 400);
     });
@@ -390,6 +399,8 @@ else if (command === "id") {
     BUZZ_SESSIONS_FILE             channel-to-session continuity store
     BUZZ_AGENT_SILENCE_TIMEOUT_MS   maximum silence before a turn is acknowledged (default 300000ms)
     BUZZ_AGENT_WORK_TIMEOUT_MS      ceiling on a turn once acknowledged (default 3600000ms)
+    BUZZ_PROFILE_SYNC_MS           how often the profile is re-checked against the .agent name
+                                   (default 21600000ms, six hours; 0 turns it off)
     KYBERNESIS_ISSUER              the control plane
     KYBERNESIS_AGENT_CREDENTIAL    this agent's credential
 `);
