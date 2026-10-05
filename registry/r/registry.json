@@ -307,12 +307,12 @@
       "name": "identity",
       "type": "registry:item",
       "title": "Kybernesis Identity",
-      "description": "Your agent's .agent name: verify ARP Cloud deliveries, serve the attach verification document, and reach paired agents as ask_<name> tools. No daemon, no socket, no key in the bundle.",
+      "description": "Your agent's .agent name: verify AgentID deliveries, serve the attach verification document, and reach paired agents as ask_<name> tools. No daemon, no socket, no key in the bundle.",
       "dependencies": [
         "@kybernesis/identity"
       ],
       "envVars": {
-        "ARP_ISSUER": "https://gateway.arp.run",
+        "ARP_ISSUER": "https://gateway.agentid.dev",
         "ARP_AGENT_DID": "",
         "ARP_AGENT_CREDENTIAL": "",
         "AGENTID_CHALLENGE": ""

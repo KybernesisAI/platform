@@ -1,9 +1,9 @@
 import { identityChannel } from "@kybernesis/identity";
 
-// Your agent's .agent identity documents: the verification document ARP Cloud
+// Your agent's .agent identity documents: the verification document AgentID
 // checks when you attach this runtime to a name, plus a health probe.
 //
-// Attach in the ARP console (cloud.arp.run/names/<name> → Runtime) with the URL
+// Attach in the AgentID console (cloud.agentid.dev/names/<name> → Runtime) with the URL
 // https://<this-agent-host>/eve/v1/arp, then set the four variables it shows:
 // ARP_ISSUER, ARP_AGENT_DID, ARP_AGENT_CREDENTIAL, AGENTID_CHALLENGE.
 //

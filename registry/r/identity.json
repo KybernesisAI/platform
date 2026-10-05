@@ -3,12 +3,12 @@
   "name": "identity",
   "type": "registry:item",
   "title": "Kybernesis Identity",
-  "description": "Your agent's .agent name: verify ARP Cloud deliveries, serve the attach verification document, and reach paired agents as ask_<name> tools. No daemon, no socket, no key in the bundle.",
+  "description": "Your agent's .agent name: verify AgentID deliveries, serve the attach verification document, and reach paired agents as ask_<name> tools. No daemon, no socket, no key in the bundle.",
   "dependencies": [
     "@kybernesis/identity"
   ],
   "envVars": {
-    "ARP_ISSUER": "https://gateway.arp.run",
+    "ARP_ISSUER": "https://gateway.agentid.dev",
     "ARP_AGENT_DID": "",
     "ARP_AGENT_CREDENTIAL": "",
     "AGENTID_CHALLENGE": ""
@@ -18,13 +18,13 @@
       "path": "registry/identity-channel.ts",
       "type": "registry:file",
       "target": "agent/channels/arp.ts",
-      "content": "import { identityChannel } from \"@kybernesis/identity\";\n\n// Your agent's .agent identity documents: the verification document ARP Cloud\n// checks when you attach this runtime to a name, plus a health probe.\n//\n// Attach in the ARP console (cloud.arp.run/names/<name> \u2192 Runtime) with the URL\n// https://<this-agent-host>/eve/v1/arp, then set the four variables it shows:\n// ARP_ISSUER, ARP_AGENT_DID, ARP_AGENT_CREDENTIAL, AGENTID_CHALLENGE.\n//\n// Deliveries from paired agents arrive on your eve channel \u2014 add arpAuth() to\n// its auth walk (agent/channels/eve.ts):\n//   import { arpAuth } from \"@kybernesis/identity\";\n//   export default eveChannel({ auth: [arpAuth(), localDev()] });\nexport default identityChannel();\n"
+      "content": "import { identityChannel } from \"@kybernesis/identity\";\n\n// Your agent's .agent identity documents: the verification document AgentID\n// checks when you attach this runtime to a name, plus a health probe.\n//\n// Attach in the AgentID console (cloud.agentid.dev/names/<name> \u2192 Runtime) with the URL\n// https://<this-agent-host>/eve/v1/arp, then set the four variables it shows:\n// ARP_ISSUER, ARP_AGENT_DID, ARP_AGENT_CREDENTIAL, AGENTID_CHALLENGE.\n//\n// Deliveries from paired agents arrive on your eve channel \u2014 add arpAuth() to\n// its auth walk (agent/channels/eve.ts):\n//   import { arpAuth } from \"@kybernesis/identity\";\n//   export default eveChannel({ auth: [arpAuth(), localDev()] });\nexport default identityChannel();\n"
     },
     {
       "path": "registry/identity-peers.ts",
       "type": "registry:file",
       "target": "agent/tools/arp-peers.ts",
-      "content": "import { arpPeers } from \"@kybernesis/identity\";\n\n// Every agent this one is PAIRED with on the agent network, as tools \u2014 resolved\n// from ARP Cloud at the start of each turn.\n//\n// Pairing in the console is the whole job: the ask_<name>_agent tool appears on the\n// next turn and disappears when the connection is revoked. Each message is\n// checked against the permissions the other owner granted and logged for both\n// sides before it is delivered.\nexport default arpPeers();\n"
+      "content": "import { arpPeers } from \"@kybernesis/identity\";\n\n// Every agent this one is PAIRED with on the agent network, as tools \u2014 resolved\n// from AgentID at the start of each turn.\n//\n// Pairing in the console is the whole job: the ask_<name>_agent tool appears on the\n// next turn and disappears when the connection is revoked. Each message is\n// checked against the permissions the other owner granted and logged for both\n// sides before it is delivered.\nexport default arpPeers();\n"
     }
   ]
 }
