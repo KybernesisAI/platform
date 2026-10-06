@@ -24,6 +24,24 @@ Package: [`@kybernesis/arcana`](https://www.npmjs.com/package/@kybernesis/arcana
 [source](https://github.com/KybernesisAI/platform/tree/master/packages/arcana) ·
 [Arcana](https://kybernesis.ai/arcana)
 
+### computer — the agent's own computer
+
+One persistent Docker desktop per agent — Chrome, a terminal, a durable
+`/workspace` — whose screen a person can watch and take over, in KYBER Studio or
+over noVNC. The `computer` tool is eve's `computer_use` with every screenshot
+attached as an image; `open_browser` is guarded so a site that has a connector
+parks for the person's approval unless the agent states why the browser is
+right; the instructions carry the rule: connected app, then a tool, then the
+agent's browser, then the person's machine. Becomes the agent's root sandbox.
+exe.dev hosts only (needs Docker).
+
+```bash
+eve add @kybernesis/computer
+```
+
+Package: [`@kybernesis/computer`](https://www.npmjs.com/package/@kybernesis/computer) ·
+[source](https://github.com/KybernesisAI/platform/tree/master/packages/computer)
+
 ### enterprise — control-plane governance
 
 Offline verification of Kybernesis control-plane identity tokens + policy
