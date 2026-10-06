@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { SandboxSession } from "eve/sandbox";
 import { CHROME_DEBUG_PORT } from "./provider.js";
 
@@ -9,7 +10,7 @@ import { CHROME_DEBUG_PORT } from "./provider.js";
  *
  * Transport is Chrome's own DevTools protocol on the container's loopback
  * (`--remote-debugging-port`): a small Node script runs INSIDE the computer,
- * receives the values on stdin (never argv or env, which `ps` would show),
+ * receives the values on stdin from a per-call file inside the sandbox (never argv or env, which `ps` would show),
  * finds the page by origin, and sets each field through the element's native
  * value setter plus the input/change events frameworks listen for. It reports
  * which selectors it filled and which it could not find — never what it typed.
@@ -41,11 +42,15 @@ export interface FillResult {
 
 /** Fill a form in the computer's Chrome. Resolves even when fields are missing; throws only when Chrome or the page cannot be reached. */
 export async function fillOnComputer(sandbox: SandboxSession, request: FillRequest): Promise<FillResult> {
+  // eve's sandbox `run` has no stdin, and argv/env are visible to `ps` inside
+  // the container. So the values go into a private file inside the sandbox for
+  // the lifetime of one command, which reads it on stdin and removes it on every
+  // exit path. Nothing about the values ever appears in a command line.
+  const file = `/tmp/.fill-${randomBytes(12).toString("hex")}.json`;
+  await sandbox.writeTextFile({ path: file, content: JSON.stringify({ port: CHROME_DEBUG_PORT, ...request }) });
   const result = await sandbox.run({
-    command: `node --input-type=module -e ${shellQuote(FILL_SCRIPT)}`,
-    // The values travel on stdin and nowhere else.
-    stdin: JSON.stringify({ port: CHROME_DEBUG_PORT, ...request }),
-  } as Parameters<SandboxSession["run"]>[0]);
+    command: `sh -c 'node --input-type=module -e ${shellQuote(FILL_SCRIPT)} < "$0"; s=$?; rm -f -- "$0"; exit $s' ${shellQuote(file)}`,
+  });
   const out = (result.stdout ?? "").toString().trim();
   if (result.exitCode !== 0) {
     throw new Error(`could not fill the page: ${(result.stderr || out || "no output").toString().trim().slice(0, 400)}`);

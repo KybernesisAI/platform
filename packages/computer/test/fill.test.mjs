@@ -14,12 +14,15 @@ test("the fill script is valid JavaScript (it runs inside the container, where a
 });
 
 test("values travel on stdin, never on the command line; the result carries selectors, not values", async () => {
-  const seen = { command: "", stdin: "" };
+  const seen = { command: "", stdin: "", path: "" };
   const sandbox = {
+    async writeTextFile({ path, content }) {
+      seen.path = path;
+      seen.stdin = content;
+    },
     async run(options) {
       const command = options.command;
       seen.command = command;
-      seen.stdin = options?.stdin ?? "";
       return { exitCode: 0, stdout: JSON.stringify({ ok: true, filled: ["#u", "#p"], missing: [], page: "https://example.com" }), stderr: "" };
     },
   };
@@ -33,6 +36,7 @@ test("values travel on stdin, never on the command line; the result carries sele
   assert.equal(result.ok, true);
   assert.deepEqual(result.filled, ["#u", "#p"]);
   assert.ok(!seen.command.includes("hunter2-secret"), "the secret must not be on the command line");
-  assert.ok(seen.stdin.includes("hunter2-secret"), "the secret travels on stdin");
+  assert.ok(seen.stdin.includes("hunter2-secret"), "the secret travels through the sandbox file, read on stdin");
+  assert.ok(seen.command.includes(seen.path) && seen.command.includes("rm -f"), "the command reads the file and removes it");
   assert.ok(!JSON.stringify(result).includes("hunter2-secret"), "the result never echoes a value");
 });
