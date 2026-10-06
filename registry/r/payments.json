@@ -2,18 +2,12 @@
   "name": "payments",
   "type": "registry:item",
   "title": "Kybernesis Payments",
-  "description": "A Link wallet for the agent on its owner's behalf: Stripe's Link tools behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and a one-time card typed into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
+  "description": "pay_on_computer: types the one-time card of an APPROVED Stripe Link spend request into a checkout on the agent's own computer, with the owner's link-cli sign-in as the wallet credential. Spend-request tools follow in the next version: Stripe's own eve extension does not mount on eve 0.68.",
   "dependencies": [
     "@kybernesis/payments"
   ],
   "envVars": {},
   "files": [
-    {
-      "path": "registry/payments-extension.ts",
-      "type": "registry:file",
-      "target": "agent/extensions/link.ts",
-      "content": "import { linkWallet } from \"@kybernesis/payments\";\n\n// Stripe Link as the agent's wallet, behind the OWNER's link-cli sign-in on\n// this host (`npx link-cli auth login --client-name <agent>`; the owner\n// approves in the Link app). Tools: link__create_spend_request and friends.\n// Every purchase is approved by the person in Link before a card exists.\nexport default linkWallet();\n"
-    },
     {
       "path": "registry/payments-pay-on-computer.ts",
       "type": "registry:file",
