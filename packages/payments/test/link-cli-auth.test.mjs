@@ -42,3 +42,13 @@ test("card material never reaches the model: sanitizeLinkOutput strips it at any
   const tool = linkTool("retrieve_spend_request", { authFile: "/nonexistent.json", cliPath: "/nonexistent/link-cli" });
   assert.ok(tool, "a tool definition is produced without touching the network");
 });
+
+test("the approval prompt carries a card a client can draw, and a sentence with the link for everyone else", async () => {
+  const { spendRequestPrompt, parseSpendRequestPrompt, approveSpendRequestTool } = await import("../dist/index.js");
+  const prompt = spendRequestPrompt({ id: "lsrq_1", amount: 100, currency: "usd", merchant: "Wikimedia Foundation", approval_url: "https://app.link.com/a/x", status: "pending_approval" });
+  const parsed = parseSpendRequestPrompt(prompt);
+  assert.equal(parsed.ask.id, "lsrq_1");
+  assert.match(parsed.text, /A purchase of 1\.00 USD at Wikimedia Foundation is waiting/);
+  assert.match(parsed.text, /https:\/\/app\.link\.com\/a\/x/);
+  assert.ok(approveSpendRequestTool({ authFile: "/nonexistent.json" }));
+});

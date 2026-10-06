@@ -57,6 +57,12 @@
       "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `create_report`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"create_report\");\n"
     },
     {
+      "path": "registry/payments-approve_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/approve_spend_request.ts",
+      "content": "import { approveSpendRequestTool } from \"@kybernesis/payments\";\n\n// The approval moment as one durable call: shows the purchase (merchant, total,\n// Approve-in-Link button), waits for the person, returns Link's real status.\nexport default approveSpendRequestTool();\n"
+    },
+    {
       "path": "registry/payments-pay-on-computer.ts",
       "type": "registry:file",
       "target": "agent/tools/pay_on_computer.ts",

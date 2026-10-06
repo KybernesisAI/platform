@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/payments",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Stripe Link as an eve agent's wallet, on its owner's behalf: Link's tool catalog mounted as eve tools behind the owner's link-cli sign-in, the person's approval on every purchase, and a one-time card typed into a checkout on the agent's own computer without the model ever seeing it.",
   "license": "Apache-2.0",
   "type": "module",
