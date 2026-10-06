@@ -50,6 +50,11 @@ import { MODEL_REACH_ENV, resolveModelScaffold, type ModelScaffoldConfig } from 
 // `identity` gives the agent its .agent name surface: the owner connects it
 // from the ARP console with one click and never touches this repo again.
 const CORE_ITEMS = ["enterprise", "arcana", "evals", "identity"] as const;
+// Core on every exe host, not elective (Ian, 2026-10-07): the agent's own
+// computer, and its own per-person vault that fills logins and cards on it. A
+// Vercel function cannot keep a desktop alive, so there — and only there —
+// both are skipped, and init says so out loud.
+const CORE_EXE_ITEMS = ["vault"] as const;
 // Official eve-registry limbs installed with the engineer subagent.
 // connection/vercel is Vercel-Connect-backed, so it is VERCEL-HOST ONLY: on a
 // self-hosted agent it cannot get an OIDC token and the agent fails to boot.
@@ -71,9 +76,8 @@ export function finalizeGithubToolsRegistryMount(cwd: string, registryAddSucceed
 export interface InitOptions {
   engineer?: boolean;
   /**
-   * The agent's own computer: a persistent Docker desktop with Chrome a person
-   * can watch and take over. Part of the core install on exe hosts (a Vercel
-   * function cannot keep a desktop alive); `false` opts out.
+   * @deprecated The agent's computer is core on exe hosts and cannot be opted
+   * out of; the flag is accepted and ignored so old scripts keep working.
    */
   computer?: boolean;
   /**
@@ -111,7 +115,9 @@ export interface InitOptions {
 
 export async function init(rawName: string | undefined, options: InitOptions = {}): Promise<void> {
   const engineer = options.engineer === true;
-  const computer = options.computer !== false;
+  if (options.computer === false) {
+    console.log(yellow("  ! --no-computer is ignored: the agent's computer and vault are core on exe hosts."));
+  }
   const studio = options.studio === true;
   const nonInteractive = options.yes === true;
 
@@ -282,13 +288,17 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
   }
 
-  const compPlan = computer && host === "exe" ? computerPlan(name) : null;
-  if (options.computer === true && host !== "exe") {
-    console.log(yellow("\n  ! --computer needs a Docker host (exe.dev); a Vercel function cannot keep a desktop alive. Skipped."));
+  const compPlan = host === "exe" ? computerPlan(name) : null;
+  if (host !== "exe") {
+    console.log(yellow("\n  ! No computer and no vault on a Vercel host: a function cannot keep a desktop alive, and the vault fills on the computer. Use --host=exe for the full agent."));
   }
   if (compPlan) {
-    console.log(bold("\n2e   The agent's computer: persistent desktop + Chrome, sighted computer tool, browser guard …"));
+    console.log(bold("\n2e   Core on exe: the agent's computer (desktop + Chrome, sighted tool, browser guard) and its vault …"));
     run("npm", ["install", ...compPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
+    for (const item of CORE_EXE_ITEMS) {
+      const ok = run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir, allowFail: true });
+      if (!ok) console.log(yellow(`  ! @kybernesis/${item} did not install cleanly — re-run: npx eve add @kybernesis/${item}`));
+    }
   }
 
   console.log(bold("\n2d   Seeding the FDE Claude Code skill suite (.claude/skills) …"));
@@ -519,6 +529,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     studio ? "KYBER Studio (local execution + management routes)" : null,
     engineer ? "engineer subagent (workshop + vision loop)" : null,
     compPlan ? "its own computer (desktop + Chrome, watch and take over)" : null,
+    compPlan ? "its own vault (logins and cards it fills without seeing)" : null,
     depts.length ? `${depts.length} dept subagent(s)` : null,
   ].filter(Boolean);
 

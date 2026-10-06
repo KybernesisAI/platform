@@ -10,6 +10,10 @@ npm create @kybernesis acme-atlas
 npx @kybernesis/create init acme-atlas
 ```
 
+## Core on exe hosts
+
+`kyb init --host=exe` always installs the agent's computer (`@kybernesis/computer`: a persistent desktop with Chrome a person can watch and take over) and its vault (`@kybernesis/vault`: per-agent, per-person logins and cards it fills on that computer without seeing them). They are not options. A Vercel host gets neither, because a function cannot keep a desktop alive, and init says so.
+
 ## `kyb init [name]`
 
 Scaffolds the full Kybernesis stack:
