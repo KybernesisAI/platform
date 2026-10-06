@@ -15,7 +15,17 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./ask": {
+      "types": "./dist/approve-ask.d.ts",
+      "import": "./dist/approve-ask.js",
+      "default": "./dist/approve-ask.js"
+    },
+    "./steps": {
+      "types": "./dist/approve-steps.d.ts",
+      "import": "./dist/approve-steps.js",
+      "default": "./dist/approve-steps.js"
+    }
   },
   "files": [
     "dist",

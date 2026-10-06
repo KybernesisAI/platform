@@ -1,14 +1,9 @@
 import { defineWorkflowTool } from "eve/tools";
 import { z } from "zod";
-import {
-  APPROVE_SPEND_REQUEST_DESCRIPTION,
-  cancelSpendRequest,
-  spendRequestApprovalLink,
-  spendRequestAsk,
-  spendRequestSettledStatus,
-  spendRequestSnapshot,
-  type SpendRequestSnapshot,
-} from "@kybernesis/payments";
+// The driver body may only import pure modules (eve bundles it without Node);
+// the Link calls come from the steps entry and are reached only inside "use step".
+import { APPROVE_SPEND_REQUEST_DESCRIPTION, spendRequestAsk, type SpendRequestSnapshot } from "@kybernesis/payments/ask";
+import { cancelSpendRequest, spendRequestApprovalLink, spendRequestSettledStatus, spendRequestSnapshot } from "@kybernesis/payments/steps";
 
 // The approval moment as one durable call: shows the purchase (merchant, total,
 // Approve-in-Link button), waits for the person, returns Link's real status.
