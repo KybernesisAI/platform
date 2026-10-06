@@ -1,5 +1,3 @@
-import { defineWorkflowTool, type WorkflowToolDefinition } from "eve/tools";
-import { z } from "zod";
 import type { LinkCliAuthOptions } from "./link-cli-auth.js";
 import { linkClient } from "./link-tools.js";
 
@@ -43,7 +41,7 @@ export function parseSpendRequestPrompt(prompt: string): { ask: SpendRequestAsk;
   }
 }
 
-interface Snapshot {
+export interface SpendRequestSnapshot {
   id: string;
   status: string;
   amount: number;
@@ -53,16 +51,14 @@ interface Snapshot {
   approval_url?: string;
 }
 
-async function snapshot(id: string, options: LinkCliAuthOptions): Promise<Snapshot | null> {
-  "use step";
+export async function spendRequestSnapshot(id: string, options: LinkCliAuthOptions = {}): Promise<SpendRequestSnapshot | null> {
   const link = linkClient(options);
-  const r = (await link.spendRequests.retrieve(id)) as (Snapshot & { merchant_name?: string }) | null;
+  const r = (await link.spendRequests.retrieve(id)) as (SpendRequestSnapshot & { merchant_name?: string }) | null;
   if (!r) return null;
   return { id: r.id, status: r.status, amount: r.amount, currency: r.currency, merchant: r.merchant_name ?? r.merchant, merchant_url: r.merchant_url, approval_url: r.approval_url };
 }
 
-async function approvalLink(id: string, options: LinkCliAuthOptions): Promise<string | undefined> {
-  "use step";
+export async function spendRequestApprovalLink(id: string, options: LinkCliAuthOptions = {}): Promise<string | undefined> {
   const link = linkClient(options);
   try {
     const r = await link.spendRequests.requestApproval(id);
@@ -73,8 +69,7 @@ async function approvalLink(id: string, options: LinkCliAuthOptions): Promise<st
 }
 
 /** Link settles a moment after the tap; look a few times before giving up. */
-async function settledStatus(id: string, options: LinkCliAuthOptions): Promise<string> {
-  "use step";
+export async function spendRequestSettledStatus(id: string, options: LinkCliAuthOptions = {}): Promise<string> {
   const link = linkClient(options);
   for (let i = 0; i < 6; i++) {
     const r = await link.spendRequests.retrieve(id);
@@ -85,8 +80,7 @@ async function settledStatus(id: string, options: LinkCliAuthOptions): Promise<s
   return r?.status ?? "unknown";
 }
 
-async function cancelRequest(id: string, options: LinkCliAuthOptions): Promise<void> {
-  "use step";
+export async function cancelSpendRequest(id: string, options: LinkCliAuthOptions = {}): Promise<void> {
   try {
     await linkClient(options).spendRequests.cancel(id);
   } catch {
@@ -94,33 +88,17 @@ async function cancelRequest(id: string, options: LinkCliAuthOptions): Promise<v
   }
 }
 
-export function approveSpendRequestTool(options: LinkCliAuthOptions = {}): WorkflowToolDefinition<Record<string, unknown>, unknown> {
-  return defineWorkflowTool({
-    description:
-      "Put a spend request in front of the person for approval and wait for their answer. Call this right after create_spend_request. It shows them the merchant, the total and the Link approval button, pauses until they confirm or cancel, then returns the request's real status from Link. Only proceed to pay_on_computer when it returns approved.",
-    inputSchema: z.object({ spend_request_id: z.string().min(1).max(200) }),
-    async execute(input, ctx) {
-      "use workflow";
-      const current = await snapshot(input.spend_request_id, options);
-      if (!current) return { status: "not_found", note: "That spend request does not exist." };
-      if (current.status === "approved") return { status: "approved", note: "Already approved. Proceed to pay_on_computer." };
-      if (current.status !== "pending_approval" && current.status !== "created") return { status: current.status, note: `This request is ${current.status}; create a new one if the purchase should still happen.` };
-      const approval_url = current.approval_url ?? (await approvalLink(current.id, options));
-      const answer = await ctx.ask({
-        prompt: spendRequestPrompt({ ...current, approval_url }),
-        display: "confirmation",
-        options: [
-          { id: "approved", label: "I approved it in Link", style: "primary" },
-          { id: "cancel", label: "Cancel this purchase", style: "danger" },
-        ],
-      });
-      if (answer.status !== "answered" || answer.optionId === "cancel") {
-        await cancelRequest(current.id, options);
-        return { status: "canceled", note: "The person cancelled. Do not buy this." };
-      }
-      const status = await settledStatus(current.id, options);
-      if (status === "approved") return { status, note: "Approved in Link. Call pay_on_computer with this spend request id." };
-      return { status, note: `Link reports ${status}. If it is still pending, the person may not have finished in the Link app; ask once, do not create another request.` };
-    },
-  }) as unknown as WorkflowToolDefinition<Record<string, unknown>, unknown>;
+/** What the agent's tool file passes to `ctx.ask` once it has a snapshot. The tool itself is authored in `agent/tools/` — eve compiles `"use workflow"` from source. */
+export function spendRequestAsk(current: SpendRequestSnapshot) {
+  return {
+    prompt: spendRequestPrompt(current),
+    display: "confirmation" as const,
+    options: [
+      { id: "approved", label: "I approved it in Link", style: "primary" as const },
+      { id: "cancel", label: "Cancel this purchase", style: "danger" as const },
+    ],
+  };
 }
+
+export const APPROVE_SPEND_REQUEST_DESCRIPTION =
+  "Put a spend request in front of the person for approval and wait for their answer. Call this right after create_spend_request. It shows them the merchant, the total and the Link approval button, pauses until they confirm or cancel, then returns the request's real status from Link. Only proceed to pay_on_computer when it returns approved.";

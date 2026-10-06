@@ -1,5 +1,3 @@
-import { defineWorkflowTool, type WorkflowToolDefinition } from "eve/tools";
-import { z } from "zod";
 import type { VaultKind } from "./client.js";
 
 /**
@@ -55,44 +53,31 @@ export type VaultRequestOutcome =
   | { status: "cancelled"; note: string }
   | { status: "unavailable"; note: string };
 
-/**
- * Ask the person for a vault item the agent could not find, durably.
- *
- * The turn parks until they answer — in Studio with a form that saves to the
- * vault and returns the new item's id, elsewhere with "I'll type it myself"
- * or "Cancel". The tool never sees a secret either way.
- */
-export function requestVaultItemTool(): WorkflowToolDefinition<Record<string, unknown>, unknown> {
-  return defineWorkflowTool({
-    description:
-      "Ask the person for a login, card, address or contact you need but could not find in their vault (use list_vault first). The turn pauses until they answer. They can add it to the vault (you get an item id to use with fill_from_vault), take over your screen to type it themselves, or cancel. Never ask for secrets in chat; use this.",
-    inputSchema: z.object({
-      kind: z.enum(["login", "card", "address", "contact"]),
-      site: z.string().url().optional().describe("The site the item is for, as shown in the browser."),
-      label: z.string().max(80).optional().describe("A suggested label, e.g. the service name."),
-      reason: z.string().max(200).optional().describe("One sentence on what you are trying to do."),
-      fields: z.array(z.string()).max(12).optional().describe("The field names the page needs, if you can tell."),
-    }),
-    async execute(input, ctx): Promise<VaultRequestOutcome> {
-      "use workflow";
-      const answer = await ctx.ask({
-        prompt: vaultItemPrompt(input),
-        display: "select",
-        allowFreeform: true,
-        options: [
-          { id: "manual", label: "I'll type it myself on your screen" },
-          { id: "cancel", label: "Cancel", style: "danger" },
-        ],
-      });
-      if (answer.status === "unavailable") return { status: "unavailable", note: "No one can answer here (an unattended run). Stop and say what you need." };
-      if (answer.status === "dismissed" || answer.optionId === "cancel") return { status: "cancelled", note: "The person cancelled. Do not try another way to get these details." };
-      if (answer.optionId === "manual") return { status: "manual", note: "The person will type it on your screen. Take a screenshot every ~20 seconds until the form is filled or the page changes, then continue; do not touch the fields." };
-      const text = (answer.text ?? "").trim();
-      if (text.startsWith(SAVED_PREFIX)) {
-        const id = text.slice(SAVED_PREFIX.length).trim();
-        return { status: "saved", item_id: id, note: `Saved to the vault as ${id}. Call fill_from_vault with this id and the field selectors.` };
-      }
-      return { status: "cancelled", note: text ? `The person replied: ${text.slice(0, 200)}` : "No usable answer." };
-    },
-  }) as unknown as WorkflowToolDefinition<Record<string, unknown>, unknown>;
+/** What the agent's tool file passes to `ctx.ask`. The tool itself must be authored in `agent/tools/` — eve compiles `"use workflow"` from source, so a package cannot ship it. */
+export function vaultItemAsk(input: VaultItemAsk) {
+  return {
+    prompt: vaultItemPrompt(input),
+    display: "select" as const,
+    allowFreeform: true,
+    options: [
+      { id: "manual", label: "I'll type it myself on your screen" },
+      { id: "cancel", label: "Cancel", style: "danger" as const },
+    ],
+  };
 }
+
+/** Turn the person's answer into the tool's result. */
+export function interpretVaultAnswer(answer: { status: string; optionId?: string; text?: string }): VaultRequestOutcome {
+  if (answer.status === "unavailable") return { status: "unavailable", note: "No one can answer here (an unattended run). Stop and say what you need." };
+  if (answer.status === "dismissed" || answer.optionId === "cancel") return { status: "cancelled", note: "The person cancelled. Do not try another way to get these details." };
+  if (answer.optionId === "manual") return { status: "manual", note: "The person will type it on your screen. Take a screenshot every ~20 seconds until the form is filled or the page changes, then continue; do not touch the fields." };
+  const text = (answer.text ?? "").trim();
+  if (text.startsWith(SAVED_PREFIX)) {
+    const id = text.slice(SAVED_PREFIX.length).trim();
+    return { status: "saved", item_id: id, note: `Saved to the vault as ${id}. Call fill_from_vault with this id and the field selectors.` };
+  }
+  return { status: "cancelled", note: text ? `The person replied: ${text.slice(0, 200)}` : "No usable answer." };
+}
+
+export const REQUEST_VAULT_ITEM_DESCRIPTION =
+  "Ask the person for a login, card, address or contact you need but could not find in their vault (use list_vault first). The turn pauses until they answer. They can add it to the vault (you get an item id to use with fill_from_vault), take over your screen to type it themselves, or cancel. Never ask for secrets in chat; use this.";

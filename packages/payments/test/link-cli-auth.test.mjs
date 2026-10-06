@@ -44,11 +44,11 @@ test("card material never reaches the model: sanitizeLinkOutput strips it at any
 });
 
 test("the approval prompt carries a card a client can draw, and a sentence with the link for everyone else", async () => {
-  const { spendRequestPrompt, parseSpendRequestPrompt, approveSpendRequestTool } = await import("../dist/index.js");
+  const { spendRequestPrompt, parseSpendRequestPrompt, spendRequestAsk } = await import("../dist/index.js");
   const prompt = spendRequestPrompt({ id: "lsrq_1", amount: 100, currency: "usd", merchant: "Wikimedia Foundation", approval_url: "https://app.link.com/a/x", status: "pending_approval" });
   const parsed = parseSpendRequestPrompt(prompt);
   assert.equal(parsed.ask.id, "lsrq_1");
   assert.match(parsed.text, /A purchase of 1\.00 USD at Wikimedia Foundation is waiting/);
   assert.match(parsed.text, /https:\/\/app\.link\.com\/a\/x/);
-  assert.ok(approveSpendRequestTool({ authFile: "/nonexistent.json" }));
+  assert.equal(spendRequestAsk({ id: "lsrq_1", status: "pending_approval", amount: 100, currency: "usd" }).options[0].id, "approved");
 });
