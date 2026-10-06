@@ -521,8 +521,11 @@ export function manageChannel(options: ManageOptions = {}) {
         if (!writable.ok) return Response.json({ ok: false, error: writable.reason }, { status: 409 });
 
         // `eve add` owns the whole recipe — files, deps, env keys — so a client
-        // never has to reimplement it and drift from what the CLI does.
-        const install = await run(`npx --yes eve add ${JSON.stringify(body.item)} --yes`, appRoot);
+        // never has to reimplement it and drift from what the CLI does. The
+        // catalog names items bare ("vault"); eve resolves a bare name against
+        // ITS registry and answers with a listing of ours, which Studio then
+        // showed as the error (Kyber, 2026-10-07). Scope it here.
+        const install = await run(`npx --yes eve add ${JSON.stringify(registryItemRef(body.item))} --yes`, appRoot);
         if (!install.ok) {
           return Response.json({ ok: false, step: "install", output: install.output }, { status: 500 });
         }
@@ -814,5 +817,11 @@ export function routineTools(options: ManageOptions = {}) {
 }
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
+
+/** The name `eve add` needs: bare catalog names belong to the Kybernesis registry. */
+export function registryItemRef(item: string): string {
+  const name = item.trim();
+  return name.includes("/") ? name : `@kybernesis/${name}`;
+}
 
 export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";
