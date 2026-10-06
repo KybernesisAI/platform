@@ -64,7 +64,12 @@ function canonicalSessionFile(appRoot: string): string {
  * id, and a client asking later must get the same answer without starting a
  * turn of its own to find out.
  */
-function rememberCanonicalSession(appRoot: string, sessionId: string, routine: string): void {
+export function rememberCanonicalSession(appRoot: string, sessionId: string, routine: string): void {
+  // An eval run delivers routines too, into throwaway sessions. Recording one
+  // of those as THE conversation pointed every Studio at an eval probe's
+  // thread (Kyber, 2026-10-06: "PROBE OK." from a September eval). kyb-eval
+  // sets this; nothing in production does.
+  if (process.env.KYB_CANONICAL_SESSION === "off") return;
   try {
     const file = canonicalSessionFile(appRoot);
     mkdirSync(dirname(file), { recursive: true });
@@ -77,19 +82,55 @@ function rememberCanonicalSession(appRoot: string, sessionId: string, routine: s
   }
 }
 
-/** The canonical session id, or undefined before any routine has delivered. */
-function readCanonicalSession(appRoot: string): { sessionId: string; lastRoutine?: string; at?: string } | undefined {
+/**
+ * The canonical session id, or undefined before any routine has delivered —
+ * or after the run behind it died.
+ *
+ * A pointer at a dead run is worse than none: the client adopts it on every
+ * refresh, the adopted thread cannot take a turn, the client starts a fresh
+ * one, and the next refresh adopts the dead one again. That is the "answers,
+ * then flips to an old conversation" Kyber showed after the eve 0.68 restart
+ * replayed and failed a run from September. The run store says whether a run
+ * is still alive; a failed or missing one retires the pointer here.
+ */
+export function readCanonicalSession(appRoot: string): { sessionId: string; lastRoutine?: string; at?: string } | undefined {
+  let raw: Record<string, unknown>;
   try {
-    const raw = JSON.parse(readFileSync(canonicalSessionFile(appRoot), "utf8")) as Record<string, unknown>;
-    return typeof raw.sessionId === "string" && raw.sessionId !== ""
-      ? {
-          sessionId: raw.sessionId,
-          ...(typeof raw.lastRoutine === "string" ? { lastRoutine: raw.lastRoutine } : {}),
-          ...(typeof raw.at === "string" ? { at: raw.at } : {}),
-        }
-      : undefined;
+    raw = JSON.parse(readFileSync(canonicalSessionFile(appRoot), "utf8")) as Record<string, unknown>;
   } catch {
     return undefined;
+  }
+  if (typeof raw.sessionId !== "string" || raw.sessionId === "") return undefined;
+  if (!runIsAlive(appRoot, raw.sessionId)) {
+    try {
+      renameSync(canonicalSessionFile(appRoot), `${canonicalSessionFile(appRoot)}.retired`);
+    } catch {
+      /* nothing to retire, or read-only: the undefined below is the point */
+    }
+    return undefined;
+  }
+  return {
+    sessionId: raw.sessionId,
+    ...(typeof raw.lastRoutine === "string" ? { lastRoutine: raw.lastRoutine } : {}),
+    ...(typeof raw.at === "string" ? { at: raw.at } : {}),
+  };
+}
+
+/**
+ * Whether eve's local run store still considers a durable run continuable.
+ * No store (a hosted deployment keeps runs elsewhere) means "assume alive":
+ * only a record that SAYS the run ended is evidence.
+ */
+export function runIsAlive(appRoot: string, sessionId: string): boolean {
+  const runsDir = join(appRoot, ".eve", ".workflow-data", "runs");
+  if (!existsSync(runsDir)) return true;
+  const file = join(runsDir, `${sessionId}.json`);
+  if (!existsSync(file)) return false;
+  try {
+    const run = JSON.parse(readFileSync(file, "utf8")) as { status?: unknown };
+    return run.status !== "failed" && run.status !== "completed" && run.status !== "cancelled";
+  } catch {
+    return true;
   }
 }
 

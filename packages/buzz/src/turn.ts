@@ -390,6 +390,16 @@ async function sendExisting(
   }
 }
 
+/**
+ * How long reading the backlog of a conversation on record may take before the
+ * conversation is treated as gone. An idle session's unread events arrive in
+ * well under a second; a session whose durable run died under a runtime
+ * upgrade never finishes. On 2026-10-05 a Buzz channel's stored run had failed
+ * replay after the eve 0.68 cutover, and every message in that channel sat at
+ * "typing" with nothing reaching the agent, for as long as anyone waited.
+ */
+export const DEFAULT_UNREAD_DRAIN_TIMEOUT_MS = 20_000;
+
 /** Continue a channel's existing conversation, replacing it only when it is explicitly stale. */
 export async function answerTurn(
   client: Client,
@@ -400,11 +410,14 @@ export async function answerTurn(
   log: (message: string) => void = () => {},
   agentSilenceTimeoutMs = DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   agentWorkTimeoutMs = DEFAULT_AGENT_WORK_TIMEOUT_MS,
+  unreadDrainTimeoutMs = DEFAULT_UNREAD_DRAIN_TIMEOUT_MS,
 ): Promise<TurnOutcome> {
   const intervalMs: AgentTimeouts = {
     silenceMs: validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs),
     workMs: validateAgentSilenceTimeoutMs(agentWorkTimeoutMs),
   };
+  // Never longer than the silence bound, so a caller that tightened silence tightened this too.
+  const drainMs = Math.min(validateAgentSilenceTimeoutMs(unreadDrainTimeoutMs), intervalMs.silenceMs);
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
@@ -417,11 +430,25 @@ export async function answerTurn(
        * `send()` opens its response stream at the position the handle already
        * holds and stops at the FIRST turn boundary it meets. Draining first
        * repairs any cursor that was left behind by a prior disconnected reader.
+       * Bounded on its own, tightly: this read is of a backlog, not of work.
+       * A backlog that does not finish is not proof of anything by itself —
+       * the run behind it may be dead (eve 0.68 cutover, 2026-10-05: a stored
+       * run that failed replay streamed nothing, and the channel sat at
+       * "typing" for good) or the transport may be having a moment. So the
+       * stall is logged and the send goes ahead: the agent's answer to the
+       * send decides. 404 / "no longer active" replaces the session below; a
+       * real reply continues it; a transport failure preserves it.
        */
-      const unread = await drainUnread(
-        (signal) => session.stream({ follow: false, startIndex: existing.streamIndex, signal }),
-        intervalMs,
-      );
+      let unread = 0;
+      try {
+        unread = await drainUnread(
+          (signal) => session.stream({ follow: false, startIndex: existing.streamIndex, signal }),
+          { silenceMs: drainMs, workMs: drainMs },
+        );
+      } catch (error) {
+        if (!(error instanceof AgentSilenceTimeoutError)) throw error;
+        log(`backlog of ${channel.slice(0, 8)} (${existing.id}) did not finish reading in ${drainMs}ms; asking the agent directly`);
+      }
       if (unread > 0) {
         log(`caught up on ${unread} unread event(s) in ${channel.slice(0, 8)} before answering`);
       }
@@ -446,7 +473,7 @@ export async function answerTurn(
       // prove the durable server conversation is stale. Preserve its mapping.
       if (!isSessionGone(error)) throw error;
 
-      log(`session for ${channel.slice(0, 8)} could not continue (${(error as ClientError).message}); starting a new one`);
+      log(`session for ${channel.slice(0, 8)} could not continue (${(error as Error).message}); starting a new one`);
       sessions.delete(community, channel);
     }
   }

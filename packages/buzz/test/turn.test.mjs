@@ -135,11 +135,12 @@ test("a successful image turn and following text turn keep the same session", as
   assert.equal(logs.some((message) => message.includes("starting a new one")), false);
 });
 
-test("an unread drain stall times out and preserves the existing mapping", async (t) => {
+test("an unread drain stall does not block the turn: the send goes ahead and the mapping is kept", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const store = storeWith();
   let sent = false;
   let created = false;
+  const logs = [];
   const client = {
     sessions: {
       attach(id) {
@@ -152,16 +153,16 @@ test("an unread drain stall times out and preserves the existing mapping", async
     },
   };
 
-  const turn = answerTurn(client, store, "channel", "hello", "relay", undefined, 1_000);
+  const turn = answerTurn(client, store, "channel", "hello", "relay", (m) => logs.push(m), 1_000);
   await Promise.resolve();
   t.mock.timers.tick(1_000);
 
-  await assert.rejects(turn, (error) =>
-    error instanceof AgentSilenceTimeoutError && error.phase === "unread drain");
+  const result = await turn;
+  assert.equal(result.message, "ok");
   assert.equal(store.get("relay", "channel").id, "session-original");
-  assert.equal(store.get("relay", "channel").streamIndex, 4);
-  assert.equal(sent, false);
+  assert.equal(sent, true, "the stall did not stop the send");
   assert.equal(created, false);
+  assert.ok(logs.some((m) => /did not finish reading in 1000ms/.test(m)), logs.join("\n"));
 });
 
 test("a send acknowledgement stall is bounded with the same response signal", async (t) => {
