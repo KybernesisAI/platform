@@ -21,6 +21,12 @@
       "content": "import { fillFromVaultTool } from \"@kybernesis/vault\";\n\n// Type a saved login, card or address into the page on the agent's computer.\n// A login only fills on its own site; a card asks the person every time.\nexport default fillFromVaultTool();\n"
     },
     {
+      "path": "registry/vault-request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/request_vault_item.ts",
+      "content": "import { requestVaultItemTool } from \"@kybernesis/vault\";\n\n// Ask the person for a login, card or address that is not in their vault.\n// Parks durably; Studio shows a form that saves to the vault and hands back an\n// item id, other surfaces offer \"I'll type it myself\" or \"Cancel\". No secret\n// ever passes through the agent.\nexport default requestVaultItemTool();\n"
+    },
+    {
       "path": "registry/vault-instructions.ts",
       "type": "registry:file",
       "target": "agent/instructions/vault.ts",

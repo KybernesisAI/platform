@@ -2,3 +2,4 @@ export { linkCliAuth, linkCliAuthFile, readStoredAuth, NOT_SIGNED_IN, type LinkC
 export { payOnComputerTool } from "./pay-on-computer.js";
 export { PAYMENTS_INSTRUCTIONS } from "./instructions.js";
 export { linkTool, linkClient, sanitizeLinkOutput, LINK_TOOL_NAMES, type LinkToolName } from "./link-tools.js";
+export { approveSpendRequestTool, spendRequestPrompt, parseSpendRequestPrompt, SPEND_REQUEST_MARKER, type SpendRequestAsk } from "./approve.js";
