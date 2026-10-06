@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseVaultItemPrompt, savedAnswer, vaultItemPrompt, requestVaultItemTool } from "../dist/index.js";
+import { parseVaultItemPrompt, savedAnswer, vaultItemPrompt, vaultItemAsk, interpretVaultAnswer } from "../dist/index.js";
 
 test("the prompt carries a marker a client can parse and a sentence every other surface can read", () => {
   const prompt = vaultItemPrompt({ kind: "login", site: "https://github.com", label: "GitHub", reason: "to open your pull requests", fields: ["username", "password"] });
@@ -14,8 +14,12 @@ test("the prompt carries a marker a client can parse and a sentence every other 
   assert.equal(savedAnswer("abc-123"), "vault:abc-123");
 });
 
-test("the tool is a workflow tool (it must park durably while the person answers)", () => {
-  const tool = requestVaultItemTool();
-  assert.ok(tool);
-  assert.match(tool.description, /vault/i);
+test("answers map to outcomes: a saved id, typing it yourself, or a cancel; nothing else counts as consent", () => {
+  assert.equal(vaultItemAsk({ kind: "card" }).options.length, 2);
+  assert.deepEqual(interpretVaultAnswer({ status: "answered", text: "vault:abc" }).item_id, "abc");
+  assert.equal(interpretVaultAnswer({ status: "answered", optionId: "manual" }).status, "manual");
+  assert.equal(interpretVaultAnswer({ status: "answered", optionId: "cancel" }).status, "cancelled");
+  assert.equal(interpretVaultAnswer({ status: "dismissed" }).status, "cancelled");
+  assert.equal(interpretVaultAnswer({ status: "unavailable" }).status, "unavailable");
+  assert.equal(interpretVaultAnswer({ status: "answered", text: "here it is: hunter2" }).status, "cancelled");
 });
