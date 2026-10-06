@@ -4,7 +4,8 @@
   "title": "Kybernesis Payments",
   "description": "A Link wallet for the agent on its owner's behalf: Stripe Link's tools (spend requests, approval links, reports) mounted behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and pay_on_computer, which types the approved one-time card into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
   "dependencies": [
-    "@kybernesis/payments"
+    "@kybernesis/payments",
+    "@kybernesis/computer"
   ],
   "envVars": {},
   "files": [

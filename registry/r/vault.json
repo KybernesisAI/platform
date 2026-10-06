@@ -4,7 +4,8 @@
   "title": "Kybernesis Vault",
   "description": "The person's logins, cards and addresses from KYBER Studio, sealed in the control plane: the agent lists labels and handles and types an item into a page on its own computer; it never reads a secret. A login only fills on its own site; a card asks the person. Requires the computer and enterprise items.",
   "dependencies": [
-    "@kybernesis/vault"
+    "@kybernesis/vault",
+    "@kybernesis/computer"
   ],
   "envVars": {},
   "files": [
