@@ -33,3 +33,12 @@ test("near expiry it asks the CLI to refresh and re-reads; a failed refresh stil
   const result = await provider.getToken({ principal: { type: "app", id: "app" }, connection: { url: "" } });
   assert.equal(result.token, "tok_old");
 });
+
+test("card material never reaches the model: sanitizeLinkOutput strips it at any depth", async () => {
+  const { sanitizeLinkOutput, LINK_TOOL_NAMES, linkTool } = await import("../dist/index.js");
+  const out = sanitizeLinkOutput({ id: "sr_1", status: "approved", card: { number: "4242" }, nested: [{ credential: "x", amount: 5, number: "1" }] });
+  assert.deepEqual(out, { id: "sr_1", status: "approved", nested: [{ amount: 5 }] });
+  assert.ok(LINK_TOOL_NAMES.includes("create_spend_request"));
+  const tool = linkTool("retrieve_spend_request", { authFile: "/nonexistent.json", cliPath: "/nonexistent/link-cli" });
+  assert.ok(tool, "a tool definition is produced without touching the network");
+});

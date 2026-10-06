@@ -374,12 +374,52 @@
       "name": "payments",
       "type": "registry:item",
       "title": "Kybernesis Payments",
-      "description": "pay_on_computer: types the one-time card of an APPROVED Stripe Link spend request into a checkout on the agent's own computer, with the owner's link-cli sign-in as the wallet credential. Spend-request tools follow in the next version: Stripe's own eve extension does not mount on eve 0.68.",
+      "description": "A Link wallet for the agent on its owner's behalf: Stripe Link's tools (spend requests, approval links, reports) mounted behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and pay_on_computer, which types the approved one-time card into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
       "dependencies": [
         "@kybernesis/payments"
       ],
       "envVars": {},
       "files": [
+        {
+          "path": "registry/payments-retrieve_user_info.ts",
+          "type": "registry:file",
+          "target": "agent/tools/retrieve_user_info.ts"
+        },
+        {
+          "path": "registry/payments-list_payment_methods.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_payment_methods.ts"
+        },
+        {
+          "path": "registry/payments-list_spend_requests.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_spend_requests.ts"
+        },
+        {
+          "path": "registry/payments-create_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-cancel_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/cancel_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-request_spend_approval.ts",
+          "type": "registry:file",
+          "target": "agent/tools/request_spend_approval.ts"
+        },
+        {
+          "path": "registry/payments-retrieve_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/retrieve_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-create_report.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_report.ts"
+        },
         {
           "path": "registry/payments-pay-on-computer.ts",
           "type": "registry:file",

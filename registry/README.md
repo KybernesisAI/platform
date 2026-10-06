@@ -126,7 +126,7 @@ Package: [`@kybernesis/notify`](https://www.npmjs.com/package/@kybernesis/notify
 ### payments — a Link wallet, on the owner's behalf
 
 `eve add @kybernesis/payments` (after `computer`). Mounts Stripe's Link tools
-(`link__create_spend_request`, `link__retrieve_spend_request`, `link__create_report`)
+(`create_spend_request`, `request_spend_approval`, `retrieve_spend_request`, `create_report`, …)
 behind the OWNER's `link-cli` sign-in on the agent's host — one wallet per agent,
 the owner approving each purchase in the Link app — plus `pay_on_computer`, which
 types the approved one-time card into the checkout open in the agent's browser.
