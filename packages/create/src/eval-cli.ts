@@ -22,7 +22,10 @@ const JUDGE_FAILURE = /judge[^\n]*(unreachable|ECONNREFUSED|fetch failed|HTTP \d
 
 function main(): void {
   const args = process.argv.slice(2);
-  const child = spawn("npx", ["eve", "eval", ...args], { stdio: ["inherit", "pipe", "pipe"], env: process.env });
+  // An eval's routine deliveries land in throwaway sessions; they must never
+  // become the agent's canonical conversation (see @kybernesis/manage).
+  const env = { ...process.env, KYB_CANONICAL_SESSION: "off" };
+  const child = spawn("npx", ["eve", "eval", ...args], { stdio: ["inherit", "pipe", "pipe"], env });
   let condemned = 0;
   let judgeFailures = 0;
   const scan = (chunk: Buffer, out: NodeJS.WriteStream): void => {
