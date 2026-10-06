@@ -109,7 +109,6 @@ function usage(command?: string): void {
       --model-reach=<reach> ${dim("claude-sub (exe only; default: host route)")}
       --subagents=a,b       ${dim("department subagents")}
       --engineer            ${dim("add the engineer layer")}
-      --no-computer         ${dim("skip the agent's own desktop + Chrome (on by default on exe)")}
       --studio              ${dim("wire KYBER Studio local/manage routes")}
       --yes, -y             ${dim("no prompts")}
 
@@ -236,7 +235,6 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --model=<id>      ${dim("provider/model-id; bare claude-opus-5 for claude-sub")}
       --model-reach=<r> ${dim("claude-sub (exe only); env: KYB_MODEL_REACH")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
-      --no-computer     ${dim("skip the agent's own computer (desktop + Chrome you can watch; on by default on exe hosts)")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}
       --yes             ${dim("no prompts; take flags and defaults")}
   ${bold("kyb add channel <kind>")}

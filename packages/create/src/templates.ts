@@ -863,7 +863,7 @@ export { default, environment } from "../../lib/reasoning-sandbox";
 }
 
 // ---------------------------------------------------------------------------
-// The agent's own computer (`kyb init --computer`, exe.dev hosts only).
+// The agent's own computer: core on every exe.dev host (a Vercel function cannot keep a desktop alive).
 
 export interface ComputerPlan {
   files: Array<{ path: string; content: string }>;
