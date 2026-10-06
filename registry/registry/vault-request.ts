@@ -1,6 +1,6 @@
 import { defineWorkflowTool } from "eve/tools";
 import { z } from "zod";
-import { REQUEST_VAULT_ITEM_DESCRIPTION, interpretVaultAnswer, vaultItemAsk } from "@kybernesis/vault";
+import { REQUEST_VAULT_ITEM_DESCRIPTION, interpretVaultAnswer, vaultItemAsk } from "@kybernesis/vault/ask";
 
 // Ask the person for a login, card or address that is not in their vault.
 // Parks durably; Studio shows a form that saves to the vault and hands back an

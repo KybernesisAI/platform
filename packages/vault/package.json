@@ -15,7 +15,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./ask": {
+      "types": "./dist/request.d.ts",
+      "import": "./dist/request.js",
+      "default": "./dist/request.js"
+    }
   },
   "files": [
     "dist",
