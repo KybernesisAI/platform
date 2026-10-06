@@ -369,6 +369,60 @@
           "target": "agent/instructions/computer.ts"
         }
       ]
+    },
+    {
+      "name": "payments",
+      "type": "registry:item",
+      "title": "Kybernesis Payments",
+      "description": "A Link wallet for the agent on its owner's behalf: Stripe's Link tools behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and a one-time card typed into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
+      "dependencies": [
+        "@kybernesis/payments"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/payments-extension.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/link.ts"
+        },
+        {
+          "path": "registry/payments-pay-on-computer.ts",
+          "type": "registry:file",
+          "target": "agent/tools/pay_on_computer.ts"
+        },
+        {
+          "path": "registry/payments-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/payments.ts"
+        }
+      ]
+    },
+    {
+      "name": "vault",
+      "type": "registry:item",
+      "title": "Kybernesis Vault",
+      "description": "The person's logins, cards and addresses from KYBER Studio, sealed in the control plane: the agent lists labels and handles and types an item into a page on its own computer; it never reads a secret. A login only fills on its own site; a card asks the person. Requires the computer and enterprise items.",
+      "dependencies": [
+        "@kybernesis/vault"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/vault-list.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_vault.ts"
+        },
+        {
+          "path": "registry/vault-fill.ts",
+          "type": "registry:file",
+          "target": "agent/tools/fill_from_vault.ts"
+        },
+        {
+          "path": "registry/vault-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/vault.ts"
+        }
+      ]
     }
   ]
 }

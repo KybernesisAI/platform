@@ -105,6 +105,26 @@ eve add @kybernesis/notify
 
 Package: [`@kybernesis/notify`](https://www.npmjs.com/package/@kybernesis/notify)
 
+### payments — a Link wallet, on the owner's behalf
+
+`eve add @kybernesis/payments` (after `computer`). Mounts Stripe's Link tools
+(`link__create_spend_request`, `link__retrieve_spend_request`, `link__create_report`)
+behind the OWNER's `link-cli` sign-in on the agent's host — one wallet per agent,
+the owner approving each purchase in the Link app — plus `pay_on_computer`, which
+types the approved one-time card into the checkout open in the agent's browser.
+The card number goes Link → page and is never a tool result.
+
+Owner, once, on the host: `npx link-cli auth login --client-name <agent>`.
+
+### vault — the person's passwords and cards, never read by the model
+
+`eve add @kybernesis/vault` (after `computer` and `enterprise`). People save
+logins, cards and addresses in KYBER Studio (Settings → Vault); they are sealed in
+the control plane. `list_vault` shows an agent what applies to the site it is on
+(labels, usernames, brand and last four), `fill_from_vault` types an item into
+the page on the agent's own computer. A login only fills on the site it was
+saved for; a card asks the person each time; every materialization is audited.
+
 ## The full install (a governed, remembering, multiplayer, self-testing agent)
 
 ```bash

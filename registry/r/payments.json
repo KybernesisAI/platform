@@ -1,0 +1,30 @@
+{
+  "name": "payments",
+  "type": "registry:item",
+  "title": "Kybernesis Payments",
+  "description": "A Link wallet for the agent on its owner's behalf: Stripe's Link tools behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and a one-time card typed into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
+  "dependencies": [
+    "@kybernesis/payments"
+  ],
+  "envVars": {},
+  "files": [
+    {
+      "path": "registry/payments-extension.ts",
+      "type": "registry:file",
+      "target": "agent/extensions/link.ts",
+      "content": "import { linkWallet } from \"@kybernesis/payments\";\n\n// Stripe Link as the agent's wallet, behind the OWNER's link-cli sign-in on\n// this host (`npx link-cli auth login --client-name <agent>`; the owner\n// approves in the Link app). Tools: link__create_spend_request and friends.\n// Every purchase is approved by the person in Link before a card exists.\nexport default linkWallet();\n"
+    },
+    {
+      "path": "registry/payments-pay-on-computer.ts",
+      "type": "registry:file",
+      "target": "agent/tools/pay_on_computer.ts",
+      "content": "import { payOnComputerTool } from \"@kybernesis/payments\";\n\n// Types the one-time card of an APPROVED spend request into the checkout open\n// in the agent's own browser. The card goes Link \u2192 page; the model only learns\n// which fields were filled.\nexport default payOnComputerTool();\n"
+    },
+    {
+      "path": "registry/payments-instructions.ts",
+      "type": "registry:file",
+      "target": "agent/instructions/payments.ts",
+      "content": "import { defineInstructions } from \"eve/instructions\";\nimport { PAYMENTS_INSTRUCTIONS } from \"@kybernesis/payments\";\n\n// Agree the exact total first, ask (spend request), wait for Link's approval,\n// fill the card without seeing it, screenshot, submit, report.\nexport default defineInstructions({ content: PAYMENTS_INSTRUCTIONS });\n"
+    }
+  ]
+}

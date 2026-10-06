@@ -1,0 +1,27 @@
+{
+  "name": "@kybernesis/payments",
+  "version": "0.1.0",
+  "description": "A Link wallet for an eve agent on its owner's behalf: Stripe's Link tools behind the owner's link-cli sign-in, approval on every purchase, and a one-time card typed into a checkout on the agent's own computer without the model ever seeing it.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/KybernesisAI/platform.git", "directory": "packages/payments" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@stripe/link-cli": "^0.26.0",
+    "@stripe/link-integrations-eve": "^0.2.4",
+    "@stripe/link-sdk": "^0.11.0"
+  },
+  "peerDependencies": { "@kybernesis/computer": ">=0.2.0 <0.3.0", "eve": ">=0.68.0 <0.69.0", "zod": "^4" },
+  "devDependencies": { "@kybernesis/computer": "*", "eve": "0.68.0", "zod": "^4.0.0", "typescript": "^5.9.0", "@types/node": "^24.0.0" }
+}
