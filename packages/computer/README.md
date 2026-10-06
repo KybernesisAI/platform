@@ -72,6 +72,17 @@ Deployments extend the host list: `openBrowserTool({ connectorHosts: { ...CONNEC
 - `computerTool({ vision? })`, `openBrowserTool(options?)`, `closeTabsTool()`
 - `COMPUTER_INSTRUCTIONS`, `CONNECTOR_HOSTS`, `decideBrowserUse`, `serviceForUrl`
 
+## Filling a form without the model seeing the values
+
+`fillOnComputer(sandbox, { pageOrigin, fields: [{ selector, value, frameUrl? }], submit? })`
+types values into the page open in the computer's Chrome over DevTools
+(`--remote-debugging-port`), using the native value setters so React and Vue
+forms notice. It runs inside the container; the values travel on stdin and the
+result names only the selectors that were filled or missing. This is the
+primitive `@kybernesis/vault` (passwords, cards) and `@kybernesis/payments`
+(Link's one-time card) build on: the secret goes from its store to the page and
+is never a tool result, so it is never in the transcript.
+
 ## Evals
 
 `computerSuite()` in `@kybernesis/evals`: screen reading, file and cookie persistence

@@ -1,0 +1,30 @@
+{
+  "name": "vault",
+  "type": "registry:item",
+  "title": "Kybernesis Vault",
+  "description": "The person's logins, cards and addresses from KYBER Studio, sealed in the control plane: the agent lists labels and handles and types an item into a page on its own computer; it never reads a secret. A login only fills on its own site; a card asks the person. Requires the computer and enterprise items.",
+  "dependencies": [
+    "@kybernesis/vault"
+  ],
+  "envVars": {},
+  "files": [
+    {
+      "path": "registry/vault-list.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_vault.ts",
+      "content": "import { listVaultTool } from \"@kybernesis/vault\";\n\n// What the signed-in person has saved for a site: labels and handles, never\n// the secrets. Nothing for an unattended turn \u2014 a vault is someone's.\nexport default listVaultTool();\n"
+    },
+    {
+      "path": "registry/vault-fill.ts",
+      "type": "registry:file",
+      "target": "agent/tools/fill_from_vault.ts",
+      "content": "import { fillFromVaultTool } from \"@kybernesis/vault\";\n\n// Type a saved login, card or address into the page on the agent's computer.\n// A login only fills on its own site; a card asks the person every time.\nexport default fillFromVaultTool();\n"
+    },
+    {
+      "path": "registry/vault-instructions.ts",
+      "type": "registry:file",
+      "target": "agent/instructions/vault.ts",
+      "content": "import { defineInstructions } from \"eve/instructions\";\nimport { VAULT_INSTRUCTIONS } from \"@kybernesis/vault\";\n\nexport default defineInstructions({ content: VAULT_INSTRUCTIONS });\n"
+    }
+  ]
+}
