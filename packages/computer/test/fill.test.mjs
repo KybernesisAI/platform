@@ -17,8 +17,10 @@ test("values travel on stdin, never on the command line; the result carries sele
   const seen = { command: "", stdin: "", path: "" };
   const sandbox = {
     async writeTextFile({ path, content }) {
-      seen.path = path;
-      seen.stdin = content;
+      if (path.endsWith(".json")) {
+        seen.path = path;
+        seen.stdin = content;
+      }
     },
     async run(options) {
       const command = options.command;
@@ -39,4 +41,29 @@ test("values travel on stdin, never on the command line; the result carries sele
   assert.ok(seen.stdin.includes("hunter2-secret"), "the secret travels through the sandbox file, read on stdin");
   assert.ok(seen.command.includes(seen.path) && seen.command.includes("rm -f"), "the command reads the file and removes it");
   assert.ok(!JSON.stringify(result).includes("hunter2-secret"), "the result never echoes a value");
+});
+
+test("the generated command really runs: a local sandbox executes it, the script reads its values and fails only on reaching Chrome", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { writeFileSync, existsSync } = await import("node:fs");
+  const written = [];
+  const sandbox = {
+    async writeTextFile({ path, content }) {
+      writeFileSync(path, content);
+      written.push(path);
+    },
+    async run({ command }) {
+      const r = spawnSync("sh", ["-c", command], { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } });
+      return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+    },
+  };
+  await assert.rejects(
+    () => fillOnComputer(sandbox, { pageOrigin: "https://example.com", fields: [{ selector: "#u", value: "v" }] }),
+    (error) => {
+      assert.ok(!/requires an argument|syntax error|Unexpected end of JSON/.test(error.message), `shell or stdin problem: ${error.message}`);
+      return true;
+    },
+  );
+  assert.equal(written.length, 2);
+  for (const path of written) assert.ok(!existsSync(path), `${path} must be removed after the run`);
 });

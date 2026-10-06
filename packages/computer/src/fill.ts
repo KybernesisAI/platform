@@ -46,10 +46,16 @@ export async function fillOnComputer(sandbox: SandboxSession, request: FillReque
   // the container. So the values go into a private file inside the sandbox for
   // the lifetime of one command, which reads it on stdin and removes it on every
   // exit path. Nothing about the values ever appears in a command line.
-  const file = `/tmp/.fill-${randomBytes(12).toString("hex")}.json`;
-  await sandbox.writeTextFile({ path: file, content: JSON.stringify({ port: CHROME_DEBUG_PORT, ...request }) });
+  const id = randomBytes(12).toString("hex");
+  const script = `/tmp/.fill-${id}.mjs`;
+  const data = `/tmp/.fill-${id}.json`;
+  await sandbox.writeTextFile({ path: script, content: FILL_SCRIPT });
+  await sandbox.writeTextFile({ path: data, content: JSON.stringify({ port: CHROME_DEBUG_PORT, ...request }) });
+  // The script is a file too, so the command carries nothing but two plain
+  // paths: no nested quoting (the first version put a single-quoted script
+  // inside a single-quoted sh -c and node saw an empty -e).
   const result = await sandbox.run({
-    command: `sh -c 'node --input-type=module -e ${shellQuote(FILL_SCRIPT)} < "$0"; s=$?; rm -f -- "$0"; exit $s' ${shellQuote(file)}`,
+    command: `sh -c 'node "$0" < "$1"; s=$?; rm -f -- "$0" "$1"; exit $s' ${script} ${data}`,
   });
   const out = (result.stdout ?? "").toString().trim();
   if (result.exitCode !== 0) {
