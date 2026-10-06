@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineSource } from "./routine-source.js";
+import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 
 /**
@@ -387,6 +388,24 @@ export function manageChannel(options: ManageOptions = {}) {
         if (denied) return denied;
         const canonical = readCanonicalSession(appRoot);
         return Response.json({ session: canonical ?? null });
+      }),
+
+      /**
+       * Every conversation this agent has had, most recent first, with the
+       * surface it came from and whether it can still take a turn. The list a
+       * person never had: Studio adopted one session, the phone knew the one a
+       * notification named, and iMessage threads, Buzz rooms and old chats sat
+       * on disk unlisted. `?limit=` (default 50), `?alive=1` for live ones only.
+       */
+      GET(PREFIX + "/sessions", async (req) => {
+        const denied = await authorize(req, options);
+        if (denied) return denied;
+        const url = new URL(req.url);
+        const limit = Number(url.searchParams.get("limit") ?? "50") || 50;
+        const aliveOnly = url.searchParams.get("alive") === "1";
+        const canonical = readCanonicalSession(appRoot);
+        const sessions = listSessions(appRoot, { canonicalId: canonical?.sessionId, limit, includeEnded: !aliveOnly });
+        return Response.json({ sessions, routines: canonical?.sessionId ?? null });
       }),
 
       // The ways to reach this agent that eve does not list: workspace bridges on this host.
@@ -795,3 +814,5 @@ export function routineTools(options: ManageOptions = {}) {
 }
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
+
+export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";
