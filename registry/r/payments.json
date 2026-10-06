@@ -2,12 +2,60 @@
   "name": "payments",
   "type": "registry:item",
   "title": "Kybernesis Payments",
-  "description": "pay_on_computer: types the one-time card of an APPROVED Stripe Link spend request into a checkout on the agent's own computer, with the owner's link-cli sign-in as the wallet credential. Spend-request tools follow in the next version: Stripe's own eve extension does not mount on eve 0.68.",
+  "description": "A Link wallet for the agent on its owner's behalf: Stripe Link's tools (spend requests, approval links, reports) mounted behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and pay_on_computer, which types the approved one-time card into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
   "dependencies": [
     "@kybernesis/payments"
   ],
   "envVars": {},
   "files": [
+    {
+      "path": "registry/payments-retrieve_user_info.ts",
+      "type": "registry:file",
+      "target": "agent/tools/retrieve_user_info.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `retrieve_user_info`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"retrieve_user_info\");\n"
+    },
+    {
+      "path": "registry/payments-list_payment_methods.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_payment_methods.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `list_payment_methods`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"list_payment_methods\");\n"
+    },
+    {
+      "path": "registry/payments-list_spend_requests.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_spend_requests.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `list_spend_requests`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"list_spend_requests\");\n"
+    },
+    {
+      "path": "registry/payments-create_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/create_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `create_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"create_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-cancel_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/cancel_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `cancel_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"cancel_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-request_spend_approval.ts",
+      "type": "registry:file",
+      "target": "agent/tools/request_spend_approval.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `request_spend_approval`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"request_spend_approval\");\n"
+    },
+    {
+      "path": "registry/payments-retrieve_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/retrieve_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `retrieve_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"retrieve_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-create_report.ts",
+      "type": "registry:file",
+      "target": "agent/tools/create_report.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `create_report`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"create_report\");\n"
+    },
     {
       "path": "registry/payments-pay-on-computer.ts",
       "type": "registry:file",

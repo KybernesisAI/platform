@@ -7,6 +7,7 @@ friends: the agent names a merchant and a total, the person approves it in the
 Link app, and Link issues a one-time card for exactly that purchase. This
 package adds the two pieces that make it usable by a Kybernesis agent:
 
+- **`linkTool(name)`** — Link's tool catalog (`@stripe/link-sdk/tools`) as eve tools, one per file. `create_spend_request` asks the person in eve before Link asks them again; every result is stripped of card fields.
 - **`linkCliAuth()`** — the owner's `link-cli` sign-in as the agent's wallet
   credential. The owner runs `npx link-cli auth login --client-name <agent>` on
   the agent's host once (a device-code flow approved in the Link app); the CLI
@@ -18,9 +19,9 @@ package adds the two pieces that make it usable by a Kybernesis agent:
   own browser via `@kybernesis/computer`'s fill primitive. The model supplies CSS
   selectors; the card goes Link → page and comes back only as brand + last four.
 
-```ts title="agent/extensions/link.ts"
-import { linkWallet } from "@kybernesis/payments";
-export default linkWallet();
+```ts title="agent/tools/create_spend_request.ts"
+import { linkTool } from "@kybernesis/payments";
+export default linkTool("create_spend_request"); // one file per Link tool; see LINK_TOOL_NAMES
 ```
 
 ```ts title="agent/tools/pay_on_computer.ts"
@@ -42,9 +43,7 @@ approval link, wait, fill, screenshot, submit, report with `link__create_report`
 
 ## Gotchas
 
-- `@stripe/link-integrations-eve` is built against an older eve; the tools mount
-  as a plain extension and have been exercised on eve 0.68, but a Link API change
-  shows up there first.
+- Stripe's own eve extension (`@stripe/link-integrations-eve`, built with eve 0.66) does not mount on eve 0.68 — that is why the tools are wrapped here from the SDK instead.
 - Link may require 3-D Secure or a verification step the agent cannot complete.
   The instructions tell it to stop and describe the screen; the person can take
   over the computer.

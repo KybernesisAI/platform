@@ -1,9 +1,9 @@
-import { Link } from "@stripe/link-sdk";
 import { fillOnComputer, type FillField } from "@kybernesis/computer";
 import { defineTool } from "eve/tools";
 import { never } from "eve/tools/approval";
 import { z } from "zod";
-import { linkCliAuth, type LinkCliAuthOptions } from "./link-cli-auth.js";
+import type { LinkCliAuthOptions } from "./link-cli-auth.js";
+import { linkClient } from "./link-tools.js";
 
 const fieldSchema = z.object({
   field: z.enum(["name", "number", "exp_month", "exp_year", "expiration", "cvc", "postal_code"]),
@@ -24,7 +24,7 @@ const fieldSchema = z.object({
  * a request that is not approved is refused.
  */
 export function payOnComputerTool(options: LinkCliAuthOptions = {}) {
-  const auth = linkCliAuth(options);
+  const link = linkClient(options);
   return defineTool({
     description:
       "Type the one-time card from an APPROVED Link spend request into the checkout form open in your own browser. Give the CSS selector of each card field you can see (name, number, expiration or exp_month/exp_year, cvc, postal code). The card details never come back to you; the result says which fields were filled. Open the checkout with open_browser first and look at it.",
@@ -35,8 +35,6 @@ export function payOnComputerTool(options: LinkCliAuthOptions = {}) {
     }),
     approval: never(),
     async execute(input, ctx) {
-      const { token } = await (auth as { getToken(o: unknown): Promise<{ token: string }> }).getToken({});
-      const link = new Link({ accessToken: token });
       const request = await link.spendRequests.retrieve(input.spend_request_id, { include: ["card"] });
       if (!request) throw new Error("That spend request does not exist.");
       if (request.status !== "approved") {
