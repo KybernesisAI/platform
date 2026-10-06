@@ -4,12 +4,23 @@
   "description": "The person's password and card vault, usable by their eve agent on its own computer: the agent sees labels and handles, the control plane holds the secrets, and a fill tool types them into the page so they are never in the transcript.",
   "license": "Apache-2.0",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/KybernesisAI/platform.git", "directory": "packages/vault" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/vault"
+  },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
@@ -17,6 +28,19 @@
     "prepublishOnly": "node ../../scripts/prepublish.mjs",
     "test": "node --test \"test/**/*.test.mjs\""
   },
-  "peerDependencies": { "@kybernesis/computer": ">=0.2.0 <0.3.0", "eve": ">=0.68.0 <0.69.0", "zod": "^4" },
-  "devDependencies": { "@kybernesis/computer": "*", "eve": "0.68.0", "zod": "^4.0.0", "typescript": "^5.9.0", "@types/node": "^24.0.0" }
+  "peerDependencies": {
+    "@kybernesis/computer": ">=0.2.0 <0.3.0",
+    "eve": ">=0.68.0 <0.69.0",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@kybernesis/computer": "*",
+    "eve": "0.68.0",
+    "zod": "^4.0.0",
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }
