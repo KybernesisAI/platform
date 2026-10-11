@@ -1,13 +1,10 @@
 import { defineSandbox } from "eve/sandbox";
-import { docker } from "eve/sandbox/docker";
+import { DockerSandbox } from "eve/sandbox/docker";
 
 // The workshop's warm-start claim, exercised for real: Playwright + Chromium
-// baked into the TEMPLATE (once), inherited by every session.
-export default defineSandbox({
-  backend: docker(),
-  revalidationKey: () => "eyes-spike-playwright-v1",
-  async bootstrap({ use }) {
-    const sandbox = await use();
+// baked into the ENVIRONMENT (once), inherited by every session.
+export const environment = DockerSandbox.environment({
+  prepare: async (sandbox) => {
     await sandbox.run({
       command: "mkdir -p /workspace/shot && cd /workspace/shot && npm init -y && npm install playwright",
     });
@@ -16,3 +13,5 @@ export default defineSandbox({
     });
   },
 });
+
+export default defineSandbox(() => environment.open());
