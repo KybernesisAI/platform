@@ -1,0 +1,15 @@
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+import { routines } from "../lib/routines.js";
+
+// "Remind me every morning at 8" needs something behind it, or the agent
+// confirms a routine that does not exist.
+export default defineTool({
+  description: routines.create_routine.description,
+  inputSchema: z.object({
+    name: z.string().describe("Short name, e.g. 'morning brief'"),
+    cron: z.string().describe("5-field cron: every day at 10am is `0 10 * * *`"),
+    instruction: z.string().describe("What to do each time, written to yourself with enough context to act on alone"),
+  }),
+  execute: (input) => routines.create_routine.execute(input),
+});

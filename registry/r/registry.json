@@ -230,7 +230,7 @@
       "name": "manage",
       "type": "registry:item",
       "title": "Kybernesis Manage",
-      "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password.",
+      "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password. Gives the agent create_routine, list_routines and delete_routine, so a routine asked for in chat is real.",
       "dependencies": [
         "@kybernesis/manage",
         "@kybernesis/enterprise"
@@ -244,6 +244,26 @@
           "path": "registry/manage-channel.ts",
           "type": "registry:file",
           "target": "agent/channels/kyb.ts"
+        },
+        {
+          "path": "registry/manage-routines.ts",
+          "type": "registry:file",
+          "target": "agent/lib/routines.ts"
+        },
+        {
+          "path": "registry/manage-create-routine.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_routine.ts"
+        },
+        {
+          "path": "registry/manage-list-routines.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_routines.ts"
+        },
+        {
+          "path": "registry/manage-delete-routine.ts",
+          "type": "registry:file",
+          "target": "agent/tools/delete_routine.ts"
         }
       ]
     },
