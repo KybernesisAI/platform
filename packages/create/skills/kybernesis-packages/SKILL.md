@@ -82,7 +82,10 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
 - **manage** — the other direction: `manageChannel()` lets Studio install
   capabilities and write schedules onto a running agent, and `routineTools()`
   turns "every morning at 8, brief me" into a real schedule file. This is how a
-  routine gets created from chat without anyone touching the repo. Since 0.11
+  routine gets created from chat without anyone touching the repo. The registry
+  item writes `create_routine`, `list_routines` and `delete_routine` into
+  `agent/tools/` (sharing `agent/lib/routines.ts`, which reads the restart from
+  `agent/channels/kyb.ts`), so `kyb init --studio` agents have them. Since 0.11
   it also carries the owner's setup routes (`GET /eve/v1/kyb/setup`,
   `POST .../setup/env`, `POST .../setup/action`): a `manage` grant only;
   allowlisted env (`EXE_MODEL`, `EXE_LLM_URL`, `ANTHROPIC_API_KEY`,
