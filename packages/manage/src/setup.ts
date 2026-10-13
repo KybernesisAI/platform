@@ -386,7 +386,7 @@ export async function setupStatus(input: {
       done: has("KYBERNESIS_AGENT_CREDENTIAL"),
       detail: has("KYBERNESIS_AGENT_CREDENTIAL")
         ? "Identifies itself to the control plane."
-        : "Has no control-plane credential yet (POST /eve/v1/kyb/credential).",
+        : "Has no control-plane credential yet; whoever set it up finishes this.",
       actions: [],
       env: [],
     },
@@ -475,6 +475,9 @@ export async function setupStatus(input: {
 // ── Actions ────────────────────────────────────────────────────────────────
 
 /** VNC reads only the first eight characters, so a longer password only looks stronger. */
+export const VNC_PASSWORD = /^[A-Za-z0-9!#%+,.:=?@^_~-]{6,8}$/;
+
+/** VNC reads only the first eight characters, so a longer password only looks stronger. */
 export function vncPassword(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   let out = "";
@@ -549,17 +552,22 @@ export function createSetupActions(input: {
 
   const actions: Record<string, (body: Record<string, unknown>) => Promise<ActionResult>> = {
     /**
-     * A new password for the computer's screen, shown once.
+     * A new password for the computer's screen: the owner's own (`password`,
+     * 6 to 8 characters, since VNC reads only eight) or a generated one, shown once.
      *
      * The container keeps the password it was created with (x11vnc rewrites
      * its password file from the container's env at every start), so the
      * computer is removed and recreated at the safe restart. Its home and
      * /workspace are volumes: files and the signed-in browser survive that.
      */
-    "vnc.password": async () => {
+    "vnc.password": async (body) => {
       if (!dependencies(appRoot).has("@kybernesis/computer")) return fail(409, "This agent has no computer.");
       if (!CONTAINER.test(computerName)) return fail(500, "The computer's container name is not usable.");
-      const password = vncPassword();
+      const chosen = body.password;
+      if (chosen !== undefined && (typeof chosen !== "string" || !VNC_PASSWORD.test(chosen))) {
+        return fail(400, "Use 6 to 8 letters, digits or simple symbols; the screen reads only eight characters.");
+      }
+      const password = typeof chosen === "string" ? chosen : vncPassword();
       writeEnvFile(envPath, { set: { COMPUTER_VNC_PASSWORD: password }, unset: [] });
       writeSetupState(appRoot, (s) => {
         s.vnc = { rotatedAt: new Date((options.now ?? Date.now)()).toISOString() };

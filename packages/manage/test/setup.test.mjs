@@ -158,6 +158,14 @@ test("vnc.password: eight characters, stored, and the computer is recreated at t
   assert.equal(parseEnv(readFileSync(join(dir, ".env.local"), "utf8")).get("COMPUTER_VNC_PASSWORD"), body.password);
   assert.deepEqual(befores, ["docker rm -f a-computer"]);
 
+  const own = await actions.run({ action: "vnc.password", password: "my-scrn7" });
+  assert.equal(own.status, 200);
+  assert.equal(own.body.password, "my-scrn7", "the owner's own password is used as typed");
+  assert.equal(parseEnv(readFileSync(join(dir, ".env.local"), "utf8")).get("COMPUTER_VNC_PASSWORD"), "my-scrn7");
+  for (const bad of ["short", "toolongpass", "has space", "q'uote", 12345678]) {
+    assert.equal((await actions.run({ action: "vnc.password", password: bad })).status, 400, `refuses ${bad}`);
+  }
+
   const none = createSetupActions({ appRoot: agentDir(), options: {}, restarter: { request() {} } });
   assert.equal((await none.run({ action: "vnc.password" })).status, 409, "no computer, nothing to rotate");
   assert.equal((await none.run({ action: "nope" })).status, 400);

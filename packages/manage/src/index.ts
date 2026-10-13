@@ -859,6 +859,7 @@ export {
   setupRoutes,
   setupStatus,
   vncPassword,
+  VNC_PASSWORD,
   type SetupItem,
   type SetupOptions,
   type SetupStatus,
