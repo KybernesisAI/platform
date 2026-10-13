@@ -75,7 +75,15 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
 - **manage** — the other direction: `manageChannel()` lets Studio install
   capabilities and write schedules onto a running agent, and `routineTools()`
   turns "every morning at 8, brief me" into a real schedule file. This is how a
-  routine gets created from chat without anyone touching the repo.
+  routine gets created from chat without anyone touching the repo. Since 0.11
+  it also carries the owner's setup routes (`GET /eve/v1/kyb/setup`,
+  `POST .../setup/env`, `POST .../setup/action`): a `manage` grant only;
+  allowlisted env (`EXE_MODEL`, `EXE_LLM_URL`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`) and the actions
+  `claude.login` (link, then the code on stdin), `linq.signup`/`linq.verify`,
+  `link.login` and `vnc.password`. Every change applies at one restart that
+  waits until no conversation is in flight (deploy.sh's count). A BYOK key only
+  takes effect when `agent/agent.ts` uses that provider; status says so.
 - **exe** — running off Vercel. `exeModel()` for exe.dev's LLM integration,
   `grokSubscription()` / `readGrokCredential()` for a SuperGrok or X Premium+
   login (`grok login` → `~/.grok/auth.json`, a valid bearer for api.x.ai —

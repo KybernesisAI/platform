@@ -72,7 +72,7 @@
       "name": "buzz",
       "type": "registry:item",
       "title": "Kybernesis Buzz",
-      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals \u2014 and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
+      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals — and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
       "dependencies": [
         "@kybernesis/buzz"
       ],
@@ -206,7 +206,7 @@
       "name": "manage",
       "type": "registry:item",
       "title": "Kybernesis Manage",
-      "description": "Let KYBER Studio change this agent: install capabilities and write schedules, authorized by the caller's control-plane grant.",
+      "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password.",
       "dependencies": [
         "@kybernesis/manage",
         "@kybernesis/enterprise"
