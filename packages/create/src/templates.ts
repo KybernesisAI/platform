@@ -469,11 +469,14 @@ function agentModelTemplate(host: HostKind, config: ModelScaffoldConfig): AgentM
   }
   if (host === "exe") {
     return {
+      // createAnthropic: the gateway serves Claude on Messages only, so an
+      // anthropic/* EXE_MODEL through the OpenAI client answers 404.
       imports:
+        `import { createAnthropic } from "@ai-sdk/anthropic";\n` +
         `import { createOpenAI } from "@ai-sdk/openai";\n` +
         `import { exeModel } from "@kybernesis/exe";\n\n`,
       fields:
-        `  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(config.model)}, createOpenAI }),\n` +
+        `  model: exeModel({ model: process.env.EXE_MODEL ?? ${JSON.stringify(config.model)}, createOpenAI, createAnthropic }),\n` +
         `  modelContextWindowTokens: 200_000,\n`,
     };
   }
