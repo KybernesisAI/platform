@@ -170,6 +170,10 @@ window under a running session.
 
 Every call through `claudeSubscription()` carries `maxOutputTokens: 16000` unless the call sets its own. Without it the provider asks for the model's maximum (`max_tokens: 128000` on claude-opus-5) on every request, and because a subscription is a shared per-minute output budget, the subscription agent is the first thing to fail under load. Change it per agent with `maxOutputTokens: 32000`, or disable it with `maxOutputTokens: false`. The constant is exported as `CLAUDE_SUBSCRIPTION_MAX_OUTPUT_TOKENS`.
 
+## iMessage through Linq
+
+`@kybernesis/exe/linq` carries what a Linq line needs on a VM: `linqEnvCredentials()` reads `LINQ_API_KEY` and `LINQ_WEBHOOK_SECRET` with errors that name the missing variable, and `linqSenderIdentity()` is the channel's `onMessage`. It resolves each sender's number through the control plane's channel identity, so a linked person runs as themselves, an unlinked number gets one text with a claim link and no turn, and a refused sender gets silence. `eve add @kybernesis/linq` writes the channel; the manage setup action `linq.verify` writes the two keys and registers the webhook.
+
 ## The agent's computer
 
 Moved to its own package: `@kybernesis/computer` (the `DockerComputer` provider,
