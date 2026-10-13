@@ -869,10 +869,13 @@ export {
   applyEnvUpdate,
   classifyAuthoredReach,
   inFlightRuns,
+  MODEL_REACH_ENV,
+  resolveSwitchedReach,
   parseEnv,
   validateEnvUpdate,
   type AuthoredReach,
   type EnvUpdate,
+  type ModelReachState,
 } from "./setup-env.js";
 
 export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";

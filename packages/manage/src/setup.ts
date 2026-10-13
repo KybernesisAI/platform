@@ -6,7 +6,8 @@ import { basename, join } from "node:path";
 import { GET, POST, type RouteDefinition } from "eve/channels";
 import {
   inFlightRuns,
-  readAuthoredReach,
+  MODEL_REACH_ENV,
+  readModelReach,
   readEnvFile,
   validateEnvUpdate,
   writeEnvFile,
@@ -315,6 +316,12 @@ export interface SetupItem {
 export interface SetupStatus {
   model: {
     reach: AuthoredReach;
+    /** agent/agent.ts uses exeModelReach: `KYB_MODEL_REACH` (via POST /setup/env) picks the route. */
+    switchable: boolean;
+    /** The route the source authors when `KYB_MODEL_REACH` is unset (switchable agents only). */
+    authored?: AuthoredReach;
+    /** `KYB_MODEL_REACH` names a route that cannot run, so the agent boots on its authored one. */
+    fallback?: { requested: string; reason: string };
     gateway: { model: string | null; url: string };
     byok: { anthropic: boolean; openai: boolean };
     subscription: "signed-in" | "signed-out" | "not-running";
@@ -341,11 +348,13 @@ export async function setupStatus(input: {
   const { appRoot, options } = input;
   const envPath = join(appRoot, ".env.local");
   const env = readEnvFile(envPath);
-  const has = (key: string) => Boolean(env.get(key) || process.env[key]);
+  const get = (key: string) => env.get(key) || process.env[key];
+  const has = (key: string) => Boolean(get(key));
   const deps = dependencies(appRoot);
   const channels = channelFiles(appRoot);
   const saved = readSetupState(appRoot);
-  const reach = readAuthoredReach(appRoot);
+  const reachState = readModelReach(appRoot, get);
+  const reach = reachState.reach;
   const port = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   const subscription = await subscriptionState(port);
   const gatewayModel = env.get("EXE_MODEL") ?? process.env.EXE_MODEL ?? null;
@@ -360,11 +369,15 @@ export async function setupStatus(input: {
           : reach === "byok-openai"
             ? has("OPENAI_API_KEY")
             : reach === "other";
-  const modelDetail = modelDone
-    ? `Reaches its model through ${REACH_WORDS[reach]}${reach === "gateway" && gatewayModel ? ` (${gatewayModel})` : ""}.`
-    : reach === "claude-sub"
-      ? "Set to a Claude subscription that is not signed in."
-      : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`;
+  const fallbackNote = reachState.fallback
+    ? ` ${MODEL_REACH_ENV}=${reachState.fallback.requested} is not used: ${reachState.fallback.reason}.`
+    : "";
+  const modelDetail =
+    (modelDone
+      ? `Reaches its model through ${REACH_WORDS[reach]}${reach === "gateway" && gatewayModel ? ` (${gatewayModel})` : ""}.`
+      : reach === "claude-sub"
+        ? "Set to a Claude subscription that is not signed in."
+        : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`) + fallbackNote;
 
   const items: SetupItem[] = [
     {
@@ -383,7 +396,7 @@ export async function setupStatus(input: {
       done: modelDone,
       detail: modelDetail,
       actions: ["claude.login"],
-      env: ["EXE_MODEL", "EXE_LLM_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+      env: [...(reachState.switchable ? [MODEL_REACH_ENV] : []), "EXE_MODEL", "EXE_LLM_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     },
   ];
   if (deps.has("@kybernesis/computer")) {
@@ -447,6 +460,9 @@ export async function setupStatus(input: {
   return {
     model: {
       reach,
+      switchable: reachState.switchable,
+      ...(reachState.authored ? { authored: reachState.authored } : {}),
+      ...(reachState.fallback ? { fallback: reachState.fallback } : {}),
       gateway: { model: gatewayModel, url: env.get("EXE_LLM_URL") ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1" },
       byok: { anthropic: has("ANTHROPIC_API_KEY"), openai: has("OPENAI_API_KEY") },
       subscription,
@@ -729,7 +745,9 @@ export function createSetupActions(input: {
           state = await subscriptionState(proxyPort);
         }
         if (state !== "signed-in") return fail(502, "Signed in, but the subscription is not authenticating yet. Try again.");
-        const reach = readAuthoredReach(appRoot);
+        const fileEnv = readEnvFile(join(appRoot, ".env.local"));
+        const reachState = readModelReach(appRoot, (key) => fileEnv.get(key) || process.env[key]);
+        const reach = reachState.reach;
         return {
           status: 200,
           body: {
@@ -738,7 +756,11 @@ export function createSetupActions(input: {
             agentUsesSubscription: reach === "claude-sub",
             ...(reach === "claude-sub"
               ? {}
-              : { note: `The subscription is signed in, but this agent still reaches its model through ${REACH_WORDS[reach]}.` }),
+              : {
+                  note:
+                    `The subscription is signed in, but this agent still reaches its model through ${REACH_WORDS[reach]}.` +
+                    (reachState.switchable ? ` Set ${MODEL_REACH_ENV}=claude-sub to use it.` : ""),
+                }),
           },
         };
       }

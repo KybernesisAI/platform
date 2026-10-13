@@ -21,6 +21,18 @@
 
 export { exeModel, type ExeModelOptions } from "./model.js";
 export {
+  CLAUDE_SUBSCRIPTION_DEFAULT_MODEL,
+  EXE_DEFAULT_CONTEXT_WINDOW,
+  EXE_MODEL_REACHES,
+  MODEL_REACH_ENV,
+  exeModelReach,
+  resolveExeReach,
+  type ExeModelReach,
+  type ExeModelReachOptions,
+  type ExeReachDecision,
+  type ExeReachDefaults,
+} from "./reach.js";
+export {
   grokSubscription,
   readGrokCredential,
   type GrokSubscriptionOptions,

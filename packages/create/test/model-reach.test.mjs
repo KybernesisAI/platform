@@ -61,29 +61,49 @@ test("claude-sub is exe-only, normalizes the known gateway prefix, and rejects u
   );
 });
 
-test("subscription templates route root, departments, and builder through the same provider shape", () => {
+test("subscription templates route root, departments, and builder through the switch, defaulting to the subscription", () => {
   const sources = [
     hostAgentTs("exe", claudeSub),
     subagentAgentTs("finance", "exe", claudeSub),
     engineerPlan("exe", claudeSub).files.find((file) => file.path === "agent/subagents/builder/agent.ts").content,
   ];
   for (const source of sources) {
-    assert.match(source, /createAnthropic/);
-    assert.match(source, /claudeSubscription\(\{ model: "claude-opus-5", createAnthropic \}\)/);
-    assert.match(source, /CLAUDE_SUBSCRIPTION_CONTEXT_WINDOW/);
-    assert.doesNotMatch(source, /exeModel/);
-    assert.doesNotMatch(source, /EXE_MODEL/);
-    assert.doesNotMatch(source, /anthropic\/claude-opus-5/);
+    assert.match(source, /import \{ createAnthropic \} from "@ai-sdk\/anthropic"/);
+    assert.match(source, /import \{ createOpenAI \} from "@ai-sdk\/openai"/);
+    assert.match(
+      source,
+      /\.\.\.exeModelReach\(\{ reach: "claude-sub", model: "anthropic\/claude-opus-5", createOpenAI, createAnthropic \}\)/,
+    );
+    assert.doesNotMatch(source, /modelContextWindowTokens/, "the switch declares the window that matches its route");
+    assert.doesNotMatch(source, /process\.env/, "the switch reads its own env");
   }
 });
 
-test("ordinary exe and Vercel templates retain their existing route shapes", () => {
+test("ordinary exe templates take the switch with today's gateway default; Vercel is unchanged", () => {
   const exe = hostAgentTs("exe", defaultExe);
   const vercel = hostAgentTs("vercel", { reach: "default", model: "openai/gpt-5.4" });
-  assert.match(exe, /exeModel\(\{ model: process\.env\.EXE_MODEL/);
-  assert.match(exe, /modelContextWindowTokens: 200_000/);
+  assert.match(exe, /\.\.\.exeModelReach\(\{ reach: "gateway", model: "anthropic\/claude-sonnet-5", createOpenAI, createAnthropic \}\)/);
+  assert.match(exe, /KYB_MODEL_REACH/);
+  assert.match(exe, /limits: \{ maxInputTokensPerSession: false \}/);
   assert.match(vercel, /model: "openai\/gpt-5.4"/);
   assert.doesNotMatch(vercel, /@kybernesis\/exe/);
+});
+
+test("doctor follows the switch: KYB_MODEL_REACH when it can run, else the authored default", () => {
+  const src = hostAgentTs("exe", defaultExe);
+  const routing = { kind: "external", provider: "openai" };
+  assert.deepEqual(classifyModelReach(src, routing), { kind: "exe" });
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "claude-sub" }), { kind: "claude-sub" });
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "byok", ANTHROPIC_API_KEY: "sk-ant-x" }), {
+    kind: "direct-provider",
+    provider: "anthropic",
+  });
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "byok" }), { kind: "exe" }, "no key: the default boots");
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "nope" }), { kind: "exe" });
+  assert.deepEqual(classifyModelReach(hostAgentTs("exe", claudeSub), routing), { kind: "claude-sub" });
+  const check = modelReachDoctorCheck(src, routing, { KYB_MODEL_REACH: "claude-sub" });
+  assert.equal(check.verdict, "pass");
+  assert.match(check.label, /claude-sub.*KYB_MODEL_REACH switch/);
 });
 
 test("subscription env and host steps omit gateway configuration and explain the proxy", () => {

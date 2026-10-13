@@ -71,8 +71,15 @@ export function dockerTemplateDoctorChecks(result: DockerTemplateInspection): Ch
 export function modelReachDoctorCheck(
   authoredSource: string | null,
   compiledRouting: CompiledModelRouting,
+  env: Record<string, string | undefined> = {},
 ): Check {
-  const reach = classifyModelReach(authoredSource, compiledRouting);
+  const check = modelReachCheck(classifyModelReach(authoredSource, compiledRouting, env));
+  return authoredSource !== null && /\bexeModelReach\s*\(/.test(authoredSource)
+    ? { ...check, label: `${check.label} [KYB_MODEL_REACH switch]` }
+    : check;
+}
+
+function modelReachCheck(reach: ReturnType<typeof classifyModelReach>): Check {
   switch (reach.kind) {
     case "claude-sub":
       return { verdict: "pass", label: "Model reach: claude-sub (Claude subscription)" };
@@ -739,14 +746,14 @@ export async function doctor(): Promise<void> {
     const reachCheck = modelReachDoctorCheck(rootAgentSource, {
       kind: "unresolved",
       reason: "eve info failed before compiled model routing could be inspected",
-    });
+    }, env);
     add(reachCheck.verdict, reachCheck.label, reachCheck.detail);
     add("warn", "Eve max input tokens/session: unresolved", "eve info failed before the compiled root policy could be inspected");
   } else {
     const diag = info.diagnostics;
     if (diag && diag.errors === 0) add("pass", `eve discovery clean (${diag.warnings} warnings)`);
     else add("fail", `eve discovery: ${diag ? `${diag.errors} errors` : "unparsed"}`, "npx eve info --json");
-    const reachCheck = modelReachDoctorCheck(rootAgentSource, info.modelRouting);
+    const reachCheck = modelReachDoctorCheck(rootAgentSource, info.modelRouting, env);
     add(reachCheck.verdict, reachCheck.label, reachCheck.detail);
     const limitCheck = agentInputLimitDoctorCheck(info.limit);
     add(limitCheck.verdict, limitCheck.label, limitCheck.detail);

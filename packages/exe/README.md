@@ -63,6 +63,30 @@ and stops the agent from processing workflow work at all, while looking correct
 in the environment file. The preflight exists because that failure names
 `fetch failed` and nothing else.
 
+## Model reach chosen at boot
+
+`exeModelReach()` picks one of three routes from `KYB_MODEL_REACH` each time the agent starts, so the owner can change it through the setup route (`POST /eve/v1/kyb/setup/env` in `@kybernesis/manage`) without editing `agent/agent.ts`:
+
+| `KYB_MODEL_REACH` | Route | Model id | Window |
+| --- | --- | --- | --- |
+| `gateway` | the exe LLM integration (`exeModel`) | `EXE_MODEL`, provider-prefixed | 200k |
+| `byok` | the provider's own API with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | `EXE_MODEL`; its `anthropic/` or `openai/` prefix picks the key | 200k |
+| `claude-sub` | the loopback Claude OAuth proxy (`claudeSubscription`) | `claude-opus-5` | 1M |
+
+```ts title="agent/agent.ts"
+import { defineAgent } from "eve";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
+import { exeModelReach } from "@kybernesis/exe";
+
+export default defineAgent({
+  ...exeModelReach({ reach: "gateway", model: "anthropic/claude-sonnet-5", createOpenAI, createAnthropic }),
+  limits: { maxInputTokensPerSession: false },
+});
+```
+
+Unset, it builds the `reach` and `model` the file names: `kyb init --host=exe` writes exactly the route it used to hard-code. A requested route that cannot run (an unknown value, BYOK without its key or prefix) boots the default instead with one `[exe] KYB_MODEL_REACH=… not used` line in the journal, rather than throwing: the route that would switch it back lives inside the agent. The setup status route reports the same decision. `resolveExeReach()` is the pure decision, for scripts.
+
 ## Models on a client's own subscription
 
 Three providers, one purpose: a client already pays for a seat, and an agent

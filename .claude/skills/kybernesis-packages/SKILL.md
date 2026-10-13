@@ -84,7 +84,13 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   `link.login` and `vnc.password`. Every change applies at one restart that
   waits until no conversation is in flight (deploy.sh's count). A BYOK key only
   takes effect when `agent/agent.ts` uses that provider; status says so.
-- **exe** — running off Vercel. `exeModel()` for exe.dev's LLM integration,
+  Since 0.12 it also takes `KYB_MODEL_REACH` (`gateway`, `byok`,
+  `claude-sub`) for agents authored with exe's `exeModelReach()`, and status
+  reports the route that will boot (with `fallback` when the request can't run).
+- **exe** — running off Vercel. `exeModelReach()` (0.16+, what `kyb init
+  --host=exe` writes from create 0.19) picks gateway, BYOK or the Claude
+  subscription from `KYB_MODEL_REACH` at boot and falls back to the authored
+  default rather than fail to start. `exeModel()` for exe.dev's LLM integration,
   `grokSubscription()` / `readGrokCredential()` for a SuperGrok or X Premium+
   login (`grok login` → `~/.grok/auth.json`, a valid bearer for api.x.ai —
   same shape as eve's `experimental_chatgpt()`), `hostPreflight()`, Photon

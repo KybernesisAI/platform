@@ -11,6 +11,7 @@ import {
   classifyAuthoredReach,
   inFlightRuns,
   parseEnv,
+  resolveSwitchedReach,
   validateEnvUpdate,
   writeEnvFile,
 } from "../dist/setup-env.js";
@@ -331,4 +332,71 @@ test("routes: every setup route asks the manage-level check, and env never echoe
 test("firstJson finds the object a CLI prints between notices", () => {
   assert.deepEqual(firstJson('update available {x}\n{"a":{"b":"}"}}\nbye'), { a: { b: "}" } });
   assert.equal(firstJson("no json"), null);
+});
+
+const SWITCH_SOURCE = (reach) => `import { exeModelReach } from "@kybernesis/exe";
+export default defineAgent({
+  ...exeModelReach({ reach: "${reach}", model: "anthropic/claude-opus-5", createOpenAI, createAnthropic }),
+});`;
+
+test("KYB_MODEL_REACH: only the three routes are writable", () => {
+  for (const v of ["gateway", "byok", "claude-sub"]) assert.equal(validateEnvUpdate({ set: { KYB_MODEL_REACH: v } }).ok, true, v);
+  for (const v of ["", "Gateway", "openai", "claude"]) assert.equal(validateEnvUpdate({ set: { KYB_MODEL_REACH: v } }).ok, false, v);
+});
+
+test("switched reach: the same rules the agent applies at boot, including the fallback", () => {
+  const env = (vars) => (k) => vars[k];
+  assert.equal(resolveSwitchedReach(`model: exeModel({ model: "x", createOpenAI })`, env({})), null);
+  assert.deepEqual(resolveSwitchedReach(SWITCH_SOURCE("claude-sub"), env({})), {
+    switchable: true,
+    authored: "claude-sub",
+    reach: "claude-sub",
+  });
+  assert.equal(resolveSwitchedReach(SWITCH_SOURCE("claude-sub"), env({ KYB_MODEL_REACH: "gateway" })).reach, "gateway");
+  assert.equal(
+    resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "byok", ANTHROPIC_API_KEY: ANTHROPIC })).reach,
+    "byok-anthropic",
+  );
+  assert.equal(
+    resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "byok", EXE_MODEL: "openai/gpt-5.6", OPENAI_API_KEY: "sk-x" }))
+      .reach,
+    "byok-openai",
+  );
+  const missing = resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "byok" }));
+  assert.equal(missing.reach, "gateway");
+  assert.match(missing.fallback.reason, /needs ANTHROPIC_API_KEY/);
+  const unknown = resolveSwitchedReach(SWITCH_SOURCE("claude-sub"), env({ KYB_MODEL_REACH: "nope" }));
+  assert.equal(unknown.reach, "claude-sub");
+  assert.match(unknown.fallback.reason, /must be one of/);
+});
+
+test("setup status: a switchable agent offers KYB_MODEL_REACH and reports what will run", async () => {
+  const dir = agentDir();
+  mkdirSync(join(dir, "agent"), { recursive: true });
+  writeFileSync(join(dir, "agent", "agent.ts"), SWITCH_SOURCE("gateway"));
+  writeFileSync(join(dir, ".env.local"), `KYB_MODEL_REACH=byok\nANTHROPIC_API_KEY=${ANTHROPIC}\n`);
+  const routes = setupRoutes({
+    prefix: "/eve/v1/kyb",
+    appRoot: dir,
+    options: { launch: () => {}, claudeProxyPort: 1 },
+    writable: () => ({ ok: true }),
+    authorize: async () => null,
+  });
+  const get = routes.find((r) => r.method === "GET" && r.path === "/eve/v1/kyb/setup").handler;
+  const status = await (await get(new Request("http://agent/eve/v1/kyb/setup"))).json();
+  assert.equal(status.model.reach, "byok-anthropic");
+  assert.equal(status.model.switchable, true);
+  assert.equal(status.model.authored, "gateway");
+  const model = status.items.find((i) => i.id === "model");
+  assert.equal(model.done, true);
+  assert.ok(model.env.includes("KYB_MODEL_REACH"));
+  assert.doesNotMatch(JSON.stringify(status), /sk-ant-/);
+
+  writeFileSync(join(dir, ".env.local"), "KYB_MODEL_REACH=byok\n");
+  const fellBack = await (await get(new Request("http://agent/eve/v1/kyb/setup"))).json();
+  if (!process.env.ANTHROPIC_API_KEY) {
+    assert.equal(fellBack.model.reach, "gateway");
+    assert.equal(fellBack.model.fallback.requested, "byok");
+    assert.match(fellBack.items.find((i) => i.id === "model").detail, /KYB_MODEL_REACH=byok is not used/);
+  }
 });

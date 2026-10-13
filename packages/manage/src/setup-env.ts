@@ -29,6 +29,12 @@ export interface SetupEnvKey {
  * that something on the host mints (the Linq pair, the VNC password, the
  * agent credential) are written by their own action or route, never here.
  */
+/** The routes `KYB_MODEL_REACH` selects between. Mirrors `EXE_MODEL_REACHES` in @kybernesis/exe. */
+type SwitchReach = "gateway" | "byok" | "claude-sub";
+const MODEL_REACHES: readonly SwitchReach[] = ["gateway", "byok", "claude-sub"];
+/** The env variable exeModelReach reads. */
+export const MODEL_REACH_ENV = "KYB_MODEL_REACH";
+
 export const SETUP_ENV_KEYS: Record<string, SetupEnvKey> = {
   // The default model reach: the exe LLM gateway, which holds the provider
   // credential itself, so nothing secret is written for it.
@@ -37,6 +43,15 @@ export const SETUP_ENV_KEYS: Record<string, SetupEnvKey> = {
     secret: false,
     expects: "a model id with its provider prefix, e.g. openai/gpt-5.6-sol",
     valid: (v) => /^[a-z0-9][a-z0-9-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v),
+  },
+  // Which of the three routes the agent takes at its next boot, for an agent
+  // whose agent/agent.ts uses exeModelReach (@kybernesis/exe). Unset means the
+  // route the scaffold authored.
+  KYB_MODEL_REACH: {
+    item: "model",
+    secret: false,
+    expects: "one of gateway, byok, claude-sub",
+    valid: (v) => MODEL_REACHES.includes(v as SwitchReach),
   },
   EXE_LLM_URL: {
     item: "model",
@@ -51,7 +66,8 @@ export const SETUP_ENV_KEYS: Record<string, SetupEnvKey> = {
       }
     },
   },
-  // Bring your own key: optional overrides of the gateway.
+  // Bring your own key: used when KYB_MODEL_REACH=byok (or by an agent
+  // authored on a direct provider).
   ANTHROPIC_API_KEY: {
     item: "model",
     secret: true,
@@ -280,4 +296,67 @@ export function readAuthoredReach(appRoot: string): AuthoredReach {
   } catch {
     return "unknown";
   }
+}
+
+/** The reach the agent takes at its next boot, and whether env can change it. */
+export interface ModelReachState {
+  reach: AuthoredReach;
+  /** The source uses exeModelReach, so `KYB_MODEL_REACH` picks the route. */
+  switchable: boolean;
+  /** The route the source authors when `KYB_MODEL_REACH` is unset. */
+  authored?: AuthoredReach;
+  /** `KYB_MODEL_REACH` asked for a route that cannot run; the agent boots on its default instead. */
+  fallback?: { requested: string; reason: string };
+}
+
+/**
+ * The effective reach for an agent authored with `exeModelReach`.
+ *
+ * The same rules `resolveExeReach` in @kybernesis/exe applies at boot, so the
+ * status route says what the agent will actually run rather than what was
+ * asked for. Kept here rather than imported: manage does not depend on exe,
+ * and the rules are short. Change both together.
+ */
+export function resolveSwitchedReach(source: string, get: (key: string) => string | undefined): ModelReachState | null {
+  if (!/\bexeModelReach\s*\(/.test(source)) return null;
+  const authoredSwitch = /\breach\s*:\s*["'](gateway|byok|claude-sub)["']/.exec(source)?.[1] as SwitchReach | undefined;
+  const authoredModel = /\bmodel\s*:\s*["']([^"']+)["']/.exec(source)?.[1];
+  if (!authoredSwitch) return { reach: "other", switchable: true };
+
+  const model = get("EXE_MODEL") ?? authoredModel ?? "";
+  const asReach = (r: SwitchReach): { reach: AuthoredReach; problem?: string } => {
+    if (r === "gateway") return { reach: "gateway" };
+    if (r === "claude-sub") return { reach: "claude-sub" };
+    const provider = /^(anthropic|openai)\//.exec(model)?.[1];
+    if (!provider) {
+      return { reach: "byok-openai", problem: `byok needs EXE_MODEL with an anthropic/ or openai/ prefix, and it is ${JSON.stringify(model)}` };
+    }
+    const reach = provider === "anthropic" ? "byok-anthropic" : "byok-openai";
+    const key = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+    return get(key)?.trim() ? { reach } : { reach, problem: `byok on ${model} needs ${key}, and it is not set` };
+  };
+  // A misconfigured default is still what boots; it shows as that route, not configured.
+  const authored = asReach(authoredSwitch).reach;
+  const base = { switchable: true, authored };
+
+  const requested = get(MODEL_REACH_ENV)?.trim() ?? "";
+  if (!requested || requested === authoredSwitch) return { ...base, reach: authored };
+  if (!MODEL_REACHES.includes(requested as SwitchReach)) {
+    return { ...base, reach: authored, fallback: { requested, reason: `${MODEL_REACH_ENV} must be one of ${MODEL_REACHES.join(", ")}` } };
+  }
+  const chosen = asReach(requested as SwitchReach);
+  return chosen.problem
+    ? { ...base, reach: authored, fallback: { requested, reason: chosen.problem } }
+    : { ...base, reach: chosen.reach };
+}
+
+/** Read agent/agent.ts and resolve its reach against an env view (the file first, then the process). */
+export function readModelReach(appRoot: string, get: (key: string) => string | undefined): ModelReachState {
+  let source: string;
+  try {
+    source = readFileSync(join(appRoot, "agent", "agent.ts"), "utf8");
+  } catch {
+    return { reach: "unknown", switchable: false };
+  }
+  return resolveSwitchedReach(source, get) ?? { reach: classifyAuthoredReach(source), switchable: false };
 }
