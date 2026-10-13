@@ -143,6 +143,17 @@ the control plane. `list_vault` shows an agent what applies to the site it is on
 the page on the agent's own computer. A login only fills on the site it was
 saved for; a card asks the person each time; every materialization is audited.
 
+### linq — an iMessage line
+
+`eve add @kybernesis/linq` (after `enterprise`). Writes `agent/channels/linq.ts`,
+which answers texts on a Linq iMessage line. Each sender's number is resolved
+through the control plane: a linked person runs as themselves, an unlinked
+number gets one text with a claim link and no turn, a refused sender gets
+silence. The owner connects the line from KYBER Studio's setup, which writes
+`LINQ_API_KEY` and `LINQ_WEBHOOK_SECRET` and registers the webhook.
+
+Package: [`@kybernesis/exe`](https://www.npmjs.com/package/@kybernesis/exe) (`/linq`)
+
 ## The full install (a governed, remembering, multiplayer, self-testing agent)
 
 ```bash

@@ -58,3 +58,23 @@ test("withoutSafetyIdentifier removes only that field, and leaves non-JSON bodie
   assert.equal(withoutSafetyIdentifier(undefined), undefined);
   assert.equal(withoutSafetyIdentifier(null), null);
 });
+
+test("exeModel sends anthropic/* ids to the Messages API with the bare id", () => {
+  const made = [];
+  const sentinel = { provider: "anthropic.messages" };
+  const model = exeModel({
+    model: "anthropic/claude-sonnet-5",
+    createOpenAI: () => { throw new Error("the OpenAI client must not be used for Claude"); },
+    createAnthropic: (config) => (id) => { made.push({ config, id }); return sentinel; },
+  });
+  assert.equal(model, sentinel);
+  assert.equal(made[0].id, "claude-sonnet-5");
+  assert.equal(made[0].config.apiKey, "exe-integration");
+});
+
+test("exeModel refuses an anthropic/* id it has no Messages client for", () => {
+  assert.throws(
+    () => exeModel({ model: "anthropic/claude-sonnet-5", createOpenAI: () => fakeProvider([]) }),
+    /createAnthropic/,
+  );
+});

@@ -155,6 +155,30 @@
       ]
     },
     {
+      "name": "linq",
+      "type": "registry:item",
+      "title": "Kybernesis iMessage (Linq)",
+      "description": "Answer texts on an iMessage line through Linq. Every sender is resolved to their control-plane person by number: linked people run as themselves, an unlinked number gets one claim link, refused senders get silence. Connect the line from Studio setup.",
+      "dependencies": [
+        "@kybernesis/exe",
+        "@kybernesis/enterprise"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": "",
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "LINQ_API_KEY": "",
+        "LINQ_WEBHOOK_SECRET": ""
+      },
+      "files": [
+        {
+          "path": "registry/linq-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/linq.ts"
+        }
+      ]
+    },
+    {
       "name": "local",
       "type": "registry:item",
       "title": "Kybernesis Local",

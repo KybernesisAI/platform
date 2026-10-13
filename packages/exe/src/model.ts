@@ -48,6 +48,19 @@ export interface ExeModelOptions<TModel> {
    * before believing anything that 404 says.
    */
   api?: "chat" | "responses";
+  /**
+   * The `createAnthropic` factory from `@ai-sdk/anthropic`, for `anthropic/*`
+   * ids.
+   *
+   * The gateway serves Claude on the Messages API only — models.json lists
+   * every `anthropic/*` id with `"apis": ["anthropic_messages"]` — so the same
+   * id sent through the OpenAI client answers `404 Not Found` on
+   * `/v1/responses`. That was the default scaffold for a while: a freshly built
+   * agent that was healthy, passed doctor, and could not answer a single turn.
+   * With this passed, an `anthropic/*` EXE_MODEL goes to Messages with the
+   * provider prefix dropped (the gateway takes the bare id there).
+   */
+  createAnthropic?: (config: { baseURL: string; apiKey: string }) => (model: string) => TModel;
 }
 
 type CallOptions = {
@@ -103,6 +116,21 @@ export function exeModel<TModel>(options: ExeModelOptions<TModel>): TModel {
 
   const baseURL =
     options.baseURL ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1";
+
+  // Claude on the gateway is a Messages endpoint, not an OpenAI one. Without
+  // the Anthropic factory there is no route that works, so say so here rather
+  // than let every turn fail with a 404 that blames the endpoint.
+  const anthropicId = /^anthropic\//.exec(options.model) ? options.model.slice("anthropic/".length) : undefined;
+  if (anthropicId) {
+    if (!options.createAnthropic) {
+      throw new Error(
+        `exeModel: ${options.model} is served on the gateway's Anthropic Messages API, not the OpenAI one. ` +
+          "Pass createAnthropic (from @ai-sdk/anthropic) to exeModel, or set EXE_MODEL to a non-Anthropic id.",
+      );
+    }
+    // apiKey is required by the SDK but unused: exe injects the real credential.
+    return options.createAnthropic({ baseURL, apiKey: "exe-integration" })(anthropicId);
+  }
 
   // apiKey is required by the SDK but unused: exe injects the real credential.
   const provider = options.createOpenAI({ baseURL, apiKey: "exe-integration" });
