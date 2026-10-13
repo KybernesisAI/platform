@@ -1,17 +1,22 @@
 import { installComputerUse, startComputerUse } from "eve/computer-use/sandbox";
 import type { SandboxSession } from "eve/sandbox";
-import { installChrome, installDesktopShell, startDesktopShell } from "./provider.js";
+import { installChrome, installDesktopShell, isBakedComputer, startDesktopShell } from "./provider.js";
 
 /**
  * Everything the computer needs, once, at `eve build`: eve's desktop stack,
  * then Chrome, then the person's launcher bar — and then the desktop itself,
  * so the shared screen shows a real desktop from the moment the build ends,
  * not a black display waiting for the first session to open the sandbox.
+ *
+ * A computer started from a current bake (see `bakeComputerImage`) already
+ * has all three installed, so it only starts the desktop.
  */
 export async function prepareComputer(sandbox: SandboxSession): Promise<void> {
-  await installComputerUse(sandbox);
-  await installChrome(sandbox);
-  await installDesktopShell(sandbox);
+  if (!(await isBakedComputer(sandbox))) {
+    await installComputerUse(sandbox);
+    await installChrome(sandbox);
+    await installDesktopShell(sandbox);
+  }
   await startComputer(sandbox);
 }
 

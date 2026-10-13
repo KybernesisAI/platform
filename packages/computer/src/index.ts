@@ -1,4 +1,7 @@
 export {
+  bakeComputerImage,
+  bakedImageTag,
+  bakeKey,
   CHROME_DEBUG_PORT,
   CHROME_PROFILE,
   COMPUTER_DOCKERFILE,
