@@ -68,9 +68,28 @@ Deployments extend the host list: `openBrowserTool({ connectorHosts: { ...CONNEC
 
 - `DockerComputer.environment({ name, vncPassword?, prepare?, memoryLimit? })` → `environment.open()`
 - `prepareComputer(sandbox)` / `startComputer(sandbox)` — the build-time and per-session steps
+- `bakeComputerImage({ prepare, log? })`, `bakedImageTag()`, `bakeKey()` — bake prepare into an image for new agents
 - `installChrome`, `installDesktopShell`, `startDesktopShell`, `openChromeCommand(url)`
 - `computerTool({ vision? })`, `openBrowserTool(options?)`, `closeTabsTool()`
 - `COMPUTER_INSTRUCTIONS`, `CONNECTOR_HOSTS`, `decideBrowserUse`, `serviceForUrl`
+
+## Baking the computer on a provisioning host
+
+`prepareComputer` installs eve's desktop stack, Chrome and the launcher bar in
+every new agent's container, which is most of a new agent's first `eve build`.
+A host that builds many agents bakes it once:
+
+```js
+import { bakeComputerImage, prepareComputer } from "@kybernesis/computer";
+await bakeComputerImage({ prepare: prepareComputer, log: console.log });
+```
+
+That commits `kybernesis/agent-computer:baked-<recipe>-<key>`. A NEW agent's
+computer (no volumes yet) then starts from it: Docker seeds its empty home and
+`/workspace` volumes from the image, and `prepareComputer` only starts the
+desktop. The key is this package's version plus eve's computer-use revision, so
+after an upgrade the old bake is ignored and prepare runs in full until the
+host is baked again. An existing agent never switches to a bake.
 
 ## Filling a form without the model seeing the values
 

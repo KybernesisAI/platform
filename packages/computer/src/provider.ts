@@ -28,9 +28,10 @@
  * `installComputerUse` is the intended payload); `open()` returns the running
  * computer; the session hooks never delete it.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { Readable } from "node:stream";
+import { COMPUTER_USE_REVALIDATION_KEY } from "eve/computer-use/sandbox";
 import type { SandboxSession } from "eve/sandbox";
 import {
   defineSandboxProvider,
@@ -144,6 +145,96 @@ async function ensurePrepared(session: SandboxSession, prepare: DockerComputerEn
 
 function recipeHash(): string {
   return createHash("sha256").update(COMPUTER_DOCKERFILE).digest("hex").slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// The baked computer. `prepareComputer` installs eve's desktop stack, Chrome
+// and the launcher bar inside every new agent's container, and that is most of
+// a new agent's build time. A provisioning host bakes it once
+// (`bakeComputerImage`), and a NEW agent's computer starts from that image:
+// the installs are already in its filesystem, and the home and /workspace
+// files prepare writes are seeded into the agent's fresh, empty volumes by
+// Docker itself. `prepareComputer` then only starts the desktop.
+//
+// The bake key is this package's version plus eve's computer-use revision, so
+// an upgrade that changes what prepare installs never reuses an old bake: the
+// marker no longer matches and prepare runs in full. An existing agent (its
+// volumes already exist) never starts from the baked image; its volumes would
+// not be re-seeded.
+// ---------------------------------------------------------------------------
+
+// Kept in step with package.json by a test. Not read from package.json at run
+// time: eve bundles the agent's modules, so a relative require of
+// "../package.json" resolves inside eve's build output and throws.
+export const COMPUTER_VERSION = "0.2.3";
+
+/** Identifies what a bake contains: this package's prepare and eve's computer-use stack. */
+export function bakeKey(): string {
+  return createHash("sha256").update(`${COMPUTER_VERSION}|${COMPUTER_USE_REVALIDATION_KEY}`).digest("hex").slice(0, 10);
+}
+
+/** The image `bakeComputerImage` writes for the current recipe and bake key. */
+export function bakedImageTag(): string {
+  return `kybernesis/agent-computer:baked-${recipeHash()}-${bakeKey()}`;
+}
+
+/** @internal Present on a computer started from a current bake. */
+export const BAKED_MARKER = () => `${PREPARED_MARKER_DIR}/baked-${bakeKey()}`;
+
+/** @internal Whether this computer came from a bake that matches the installed packages. */
+export async function isBakedComputer(sandbox: SandboxSession): Promise<boolean> {
+  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()}` });
+  return result.exitCode === 0;
+}
+
+/** @internal The image every computer is built FROM (no prepare in it). */
+async function ensureBaseImage(image: string, log?: (m: string) => void): Promise<void> {
+  if ((await docker(["image", "inspect", image])).exitCode === 0) return;
+  log?.(`building the computer's base image ${image}`);
+  await dockerOk(["build", "-t", image, "-f", "-", "."], "image build", COMPUTER_DOCKERFILE);
+}
+
+/**
+ * Bake `prepare` into an image on this host, for every agent created after it.
+ *
+ * Runs `prepare` in a throwaway container with no volumes (so what it writes
+ * under home and /workspace lands in the image, to seed new volumes), drops the
+ * runtime leftovers (logs, the display's session bus, any Chrome profile),
+ * marks it, and commits it as {@link bakedImageTag}. Idempotent: an existing
+ * bake for the current key is kept. Returns the tag.
+ */
+export async function bakeComputerImage(options: {
+  prepare: (sandbox: SandboxSession) => Promise<void> | void;
+  log?: (m: string) => void;
+}): Promise<string> {
+  const tag = bakedImageTag();
+  if ((await docker(["image", "inspect", tag])).exitCode === 0) {
+    options.log?.(`${tag} already baked`);
+    return tag;
+  }
+  const base = `kybernesis/agent-computer:base-${recipeHash()}`;
+  await ensureBaseImage(base, options.log);
+  const container = `kyb-computer-bake-${randomBytes(4).toString("hex")}`;
+  await dockerOk(["run", "-d", "--name", container, "--shm-size=1g", base], "bake container create");
+  try {
+    await dockerOk(["exec", "-u", "root", container, "chown", `${USER}:${USER}`, HOME, WORKSPACE], "bake ownership");
+    const session = createSession({ container, env: {} });
+    options.log?.("preparing the computer to bake");
+    await options.prepare(session);
+    const clean = await session.run({
+      command: [
+        `rm -rf ${CHROME_PROFILE} ${WORKSPACE}/computer-use/*.log ${WORKSPACE}/computer-use/dbus-session-address`,
+        `sudo -n mkdir -p ${PREPARED_MARKER_DIR}`,
+        `sudo -n touch ${PREPARED_MARKER} ${BAKED_MARKER()}`,
+      ].join(" && "),
+    });
+    if (clean.exitCode !== 0) throw new Error(`bake clean-up failed: ${clean.stderr.trim()}`);
+    await dockerOk(["commit", container, tag], "bake commit");
+    options.log?.(`baked ${tag}`);
+    return tag;
+  } finally {
+    await docker(["rm", "-f", container]);
+  }
 }
 
 function docker(args: string[], options: { input?: string | Uint8Array; env?: Record<string, string> } = {}) {
@@ -270,8 +361,17 @@ async function ensureComputer(options: Required<Pick<DockerComputerEnvironmentOp
   if (!options.image) {
     const have = await docker(["image", "inspect", image]);
     if (have.exitCode !== 0) {
-      log?.(`building the computer's base image ${image}`);
-      await dockerOk(["build", "-t", image, "-f", "-", "."], "image build", COMPUTER_DOCKERFILE);
+      // A brand-new computer (no volumes yet) starts from this host's bake when
+      // there is one for the current packages; see bakeComputerImage.
+      const baked = bakedImageTag();
+      const fresh = (await docker(["volume", "inspect", `${options.name}-home`])).exitCode !== 0 &&
+        (await docker(["volume", "inspect", `${options.name}-workspace`])).exitCode !== 0;
+      if (fresh && (await docker(["image", "inspect", baked])).exitCode === 0) {
+        log?.(`starting the computer from the baked image ${baked}`);
+        await dockerOk(["tag", baked, image], "image tag");
+      } else {
+        await ensureBaseImage(image, log);
+      }
     }
   }
   let state = await containerState(options.name);
