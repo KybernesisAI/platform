@@ -63,14 +63,43 @@ export function resolveModelScaffold(options: {
 }
 
 /**
+ * The route an `exeModelReach` agent takes at boot: KYB_MODEL_REACH when it is
+ * one that can run, else the authored `reach`. The same rules as
+ * `resolveExeReach` in @kybernesis/exe (declared here so create keeps zero
+ * runtime deps); change both together.
+ */
+export function switchedModelReach(source: string, env: Record<string, string | undefined>): DoctorModelReach | null {
+  if (!/\bexeModelReach\s*\(/.test(source)) return null;
+  const authored = /\breach\s*:\s*["'](gateway|byok|claude-sub)["']/.exec(source)?.[1];
+  if (!authored) return { kind: "unresolved", reason: "exeModelReach has no literal default reach to read" };
+  const model = env.EXE_MODEL ?? /\bmodel\s*:\s*["']([^"']+)["']/.exec(source)?.[1] ?? "";
+  const route = (reach: string): DoctorModelReach | null => {
+    if (reach === "gateway") return { kind: "exe" };
+    if (reach === "claude-sub") return { kind: "claude-sub" };
+    if (reach !== "byok") return null;
+    const provider = /^(anthropic|openai)\//.exec(model)?.[1];
+    if (!provider) return null;
+    return env[provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"]?.trim()
+      ? { kind: "direct-provider", provider }
+      : null;
+  };
+  const requested = env[MODEL_REACH_ENV]?.trim();
+  const chosen = requested ? route(requested) : null;
+  return chosen ?? route(authored) ?? { kind: "direct-provider", ...(/^(anthropic|openai)\//.exec(model) ? { provider: model.split("/")[0] } : {}) };
+}
+
+/**
  * Classify the effective route from stable authored helpers first, then Eve's
  * compiled routing. Provider=anthropic alone is not evidence of a subscription.
  */
 export function classifyModelReach(
   authoredSource: string | null,
   compiledRouting: CompiledModelRouting,
+  env: Record<string, string | undefined> = {},
 ): DoctorModelReach {
   if (authoredSource !== null) {
+    const switched = switchedModelReach(authoredSource, env);
+    if (switched) return switched;
     const claudeSubscription = /\bclaudeSubscription\s*\(/.test(authoredSource);
     const exeModel = /\bexeModel\s*\(/.test(authoredSource);
     const grokSubscription = /\bgrokSubscription\s*\(/.test(authoredSource);

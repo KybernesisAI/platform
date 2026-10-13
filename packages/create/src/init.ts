@@ -220,17 +220,12 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir });
   }
 
-  // Anthropic is always the exe eval judge and is also the claude-sub agent
-  // provider. OpenAI is needed only by the ordinary exeModel gateway route.
+  // Anthropic is always the exe eval judge. Both providers are installed on
+  // every exe agent: exeModelReach can be switched to any route at boot, and
+  // between them the routes call both.
   const extraDeps = [
     ...plan.deps,
-    ...(host === "exe"
-      ? [
-          "@kybernesis/exe",
-          ...(model.reach === "default" ? ["@ai-sdk/openai"] : []),
-          "@ai-sdk/anthropic",
-        ]
-      : []),
+    ...(host === "exe" ? ["@kybernesis/exe", "@ai-sdk/openai", "@ai-sdk/anthropic"] : []),
   ];
   if (extraDeps.length) {
     console.log(bold(`\n2b   Installing for ${channel}/${host}: ${extraDeps.join(", ")} …`));

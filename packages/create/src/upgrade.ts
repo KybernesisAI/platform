@@ -659,7 +659,7 @@ export async function preflightEvalGate(cwd: string): Promise<EvalGatePreflight>
   const reach = classifyModelReach(authoredSource, inspection?.modelRouting ?? {
     kind: "unresolved",
     reason: "eve info failed before compiled model routing could be inspected",
-  });
+  }, env);
   const reasons: string[] = [];
 
   switch (reach.kind) {
