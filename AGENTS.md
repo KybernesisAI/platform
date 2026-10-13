@@ -27,7 +27,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | --- | --- | --- |
 | `packages/arcana` | Long-term memory (Arcana MCP + skills + recall-first instructions; opt-in eve memory slot `arcanaMemory()`) | **eve extension** (built with `eve extension build`) |
 | `packages/enterprise` | Control-plane governance (`kybernesisAuth`, `channelIdentity`, surface header) | plain TS library (route auth can't ship in extensions) |
-| `packages/manage` | Studio management routes (`/eve/v1/kyb/*`: info, sessions, surfaces, install, computer) | plain TS library |
+| `packages/manage` | Studio management routes (`/eve/v1/kyb/*`: info, sessions, surfaces, install, computer, setup) | plain TS library |
 | `packages/local` | The agent works on the person's own machine through Studio (control-plane relay) | plain TS library |
 | `packages/computer` | The agent's own computer (`DockerComputer`, `computerTool`, `open_browser`, `close_tabs`) | plain TS library |
 | `packages/vault` | Per-person, per-agent vault (`list_vault`, `fill_from_vault`, `request_vault_item` helpers) | plain TS library; workflow tools written by the registry item |

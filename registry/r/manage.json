@@ -2,7 +2,7 @@
   "name": "manage",
   "type": "registry:item",
   "title": "Kybernesis Manage",
-  "description": "Let KYBER Studio change this agent: install capabilities and write schedules, authorized by the caller's control-plane grant.",
+  "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password.",
   "dependencies": [
     "@kybernesis/manage",
     "@kybernesis/enterprise"
@@ -16,7 +16,7 @@
       "path": "registry/manage-channel.ts",
       "type": "registry:file",
       "target": "agent/channels/kyb.ts",
-      "content": "import { manageChannel } from \"@kybernesis/manage\";\n\n// Management routes for KYBER Studio: install a registry item, write a\n// schedule, rebuild, restart. Authorized by the caller's control-plane identity\n// and their grant on THIS agent — the same decision that lets them talk to it.\n//\n// The agent edits its own repository, so this only works where the repo is\n// present and writable (a VM, a container with the working copy). On a\n// read-only serverless bundle the routes refuse with that reason rather than\n// reporting a success that vanishes on the next deploy.\n//\n// restartCommand is what makes an install take effect. Without it the response\n// says a restart is still required instead of claiming the change is live.\nexport default manageChannel({\n  // appRoot: \"/home/exedev/my-agent\",\n  // restartCommand: \"bash ~/restart.sh\",\n});\n"
+      "content": "import { manageChannel } from \"@kybernesis/manage\";\n\n// Management routes for KYBER Studio and the web control plane: install a\n// registry item, write a schedule, rebuild, restart. Authorized by the caller's\n// control-plane identity and their grant on THIS agent — the same decision\n// that lets them talk to it.\n//\n// Setup routes (/eve/v1/kyb/setup) let the agent's OWNER (a manage grant)\n// finish setup with no terminal: model reach (the exe LLM gateway by default,\n// an Anthropic or OpenAI key, or a Claude subscription sign-in), Slack\n// credentials, an iMessage line, the Link wallet and the computer's screen\n// password. Changes apply at a restart that waits until no conversation is in\n// flight. Pass `setup: false` to leave them out.\n//\n// The agent edits its own repository, so this only works where the repo is\n// present and writable (a VM, a container with the working copy). On a\n// read-only serverless bundle the routes refuse with that reason rather than\n// reporting a success that vanishes on the next deploy.\n//\n// restartCommand is what makes an install take effect. Without it the response\n// says a restart is still required instead of claiming the change is live. On\n// exe hosts it is the agent's systemd unit; `kyb init --host=exe` wires it.\nexport default manageChannel({\n  // appRoot: \"/home/exedev/my-agent\",\n  // restartCommand: \"sudo -n systemctl restart my-agent-agent\",\n});\n"
     }
   ],
   "$schema": "https://ui.shadcn.com/schema/registry-item.json"

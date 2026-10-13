@@ -7,6 +7,7 @@ import { defineChannel, GET, POST } from "eve/channels";
 import { routineSource } from "./routine-source.js";
 import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
+import { setupRoutes, type SetupOptions } from "./setup.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -146,7 +147,7 @@ export function runIsAlive(appRoot: string, sessionId: string): boolean {
  * client, which is a workaround with a password box rather than authentication,
  * and it bypassed the grants that govern every other door into this agent.
  */
-async function authorize(req: Request, options: ManageOptions): Promise<Response | null> {
+async function authorize(req: Request, options: ManageOptions, level: "use" | "manage" = "use"): Promise<Response | null> {
   const issuer = options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
   const agent = options.agent ?? process.env.KYBERNESIS_AGENT;
   if (!agent) {
@@ -156,8 +157,15 @@ async function authorize(req: Request, options: ManageOptions): Promise<Response
     );
   }
   const result = await verifyKybernesisRequest(req, { issuer, agent });
-  if (result.ok) return null;
-  return Response.json({ ok: false, error: result.error }, { status: result.status });
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
+  // Setup writes secrets and restarts the agent: talking to it is not enough.
+  if (level === "manage" && result.principal.level !== "manage") {
+    return Response.json(
+      { ok: false, error: `Setting up "${agent}" needs manage access; you can use it but not change it.` },
+      { status: 403 },
+    );
+  }
+  return null;
 }
 
 export interface ManageOptions {
@@ -190,6 +198,14 @@ export interface ManageOptions {
    * default; the routes report no computer when nothing listens on the port.
    */
   computer?: ComputerOptions | false;
+  /**
+   * Setup routes under /eve/v1/kyb/setup, for an owner's client: setup status,
+   * allowlisted env values (model reach, Slack), and the steps that used to
+   * need a terminal on the host (Claude subscription sign-in, iMessage line,
+   * Link wallet, the computer's screen password). Owner-only (a `manage`
+   * grant). On by default.
+   */
+  setup?: SetupOptions | false;
 }
 
 /**
@@ -371,6 +387,20 @@ export function manageChannel(options: ManageOptions = {}) {
       ...(options.computer === false
         ? []
         : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
+      ...(options.setup === false
+        ? []
+        : setupRoutes({
+            prefix: PREFIX,
+            appRoot,
+            agent: options.agent ?? process.env.KYBERNESIS_AGENT,
+            restartCommand: options.restartCommand,
+            options: {
+              ...(options.computer ? { computerName: options.computer.name } : {}),
+              ...options.setup,
+            },
+            writable: () => writableRoot(appRoot),
+            authorize: (req) => authorize(req, options, "manage"),
+          })),
       /**
        * The conversation this agent considers canonical.
        *
@@ -823,5 +853,26 @@ export function registryItemRef(item: string): string {
   const name = item.trim();
   return name.includes("/") ? name : `@kybernesis/${name}`;
 }
+
+export {
+  SafeRestarter,
+  setupRoutes,
+  setupStatus,
+  vncPassword,
+  type SetupItem,
+  type SetupOptions,
+  type SetupStatus,
+  type RestartState,
+} from "./setup.js";
+export {
+  SETUP_ENV_KEYS,
+  applyEnvUpdate,
+  classifyAuthoredReach,
+  inFlightRuns,
+  parseEnv,
+  validateEnvUpdate,
+  type AuthoredReach,
+  type EnvUpdate,
+} from "./setup-env.js";
 
 export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";
