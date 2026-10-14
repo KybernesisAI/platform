@@ -331,7 +331,9 @@ export async function doctor(): Promise<void> {
   // iMessage or Telegram should never be told to create a Slack connector.
   const hasSlackChannel = existsSync(join(cwd, "agent/channels/slack.ts"));
   if (hasSlackChannel) {
-    if (env.SLACK_CONNECTOR_UID) add("pass", `Slack connector uid: ${env.SLACK_CONNECTOR_UID}`, "verify trigger path /eve/v1/slack (vercel connect list)");
+    const slackSource = readFileSync(join(cwd, "agent/channels/slack.ts"), "utf8");
+    if (slackSource.includes("controlPlaneSlackCredentials")) add("pass", "Slack via the control plane (this agent's own Slack app)", "the owner adds it from the Channels page");
+    else if (env.SLACK_CONNECTOR_UID) add("pass", `Slack connector uid: ${env.SLACK_CONNECTOR_UID}`, "verify trigger path /eve/v1/slack (vercel connect list)");
     else if (env.SLACK_BOT_TOKEN) add("pass", "Slack via portable credentials (SLACK_BOT_TOKEN)");
     else add("warn", "Slack channel present but no credentials", "SLACK_CONNECTOR_UID (Vercel) or SLACK_BOT_TOKEN (portable)");
   }
