@@ -83,7 +83,7 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   `POST .../setup/env`, `POST .../setup/action`): a `manage` grant only;
   allowlisted env (`EXE_MODEL`, `EXE_LLM_URL`, `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`) and the actions
-  `claude.login` (link, then the code on stdin), `linq.signup`/`linq.verify`,
+  `claude.login` (link, then the code on stdin), `linq.signup`/`linq.verify`, `linq.contacts`/`linq.contact.add`/`linq.contact.remove` (who can text a shared line, 0.15),
   `link.login` and `vnc.password`. Every change applies at one restart that
   waits until no conversation is in flight (deploy.sh's count). A BYOK key only
   takes effect when `agent/agent.ts` uses that provider; status says so.

@@ -514,7 +514,7 @@ export async function setupStatus(input: {
       : saved.linq?.email
         ? `Waiting for the code emailed to ${saved.linq.email}.`
         : "No iMessage line yet.",
-    actions: ["linq.signup", "linq.verify"],
+    actions: linqKeys ? ["linq.contacts", "linq.contact.add", "linq.contact.remove"] : ["linq.signup", "linq.verify"],
     env: [],
   });
   let buzz: BuzzStatus | undefined;
@@ -610,6 +610,13 @@ export function vncPassword(): string {
   let out = "";
   for (let i = 0; i < 8; i++) out += alphabet[randomInt(alphabet.length)];
   return out;
+}
+
+/** A phone number as E.164 (`+` and 7 to 15 digits), separators dropped; null when it is not one. */
+export function e164(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const compact = input.trim().replace(/[\s().-]/g, "");
+  return /^\+[1-9]\d{6,14}$/.test(compact) ? compact : null;
 }
 
 /** The first JSON object in a CLI's output; CLIs print banners and notices around it. */
@@ -837,6 +844,53 @@ export function createSetupActions(input: {
           ...(channel ? {} : { note: "The line is ready, but this agent has no Linq channel installed to answer it." }),
         },
       };
+    },
+
+    /**
+     * Who can text the line. A shared line is inbound first: only the numbers
+     * on its contact list reach it. A dedicated line takes texts from anyone,
+     * so it has no list (`shared: false`).
+     */
+    "linq.contacts": async () => {
+      const result = await linq(["contacts", "list", "--json"], 60_000);
+      const text = `${result.stdout}\n${result.stderr}`;
+      const number = readSetupState(appRoot).linq?.number ?? null;
+      if (/Shared line accounts only/i.test(text)) return { status: 200, body: { ok: true, shared: false, number, contacts: [] } };
+      if (/Not logged in|linq signup|linq login/i.test(text) && result.code !== 0) {
+        return fail(409, "This agent has no iMessage line yet. Set one up first.");
+      }
+      const data = firstJson(result.stdout);
+      if (result.code !== 0 || !data || !Array.isArray(data.contacts)) return fail(502, "Linq did not list the contacts. Try again.");
+      const contacts = (data.contacts as Array<Record<string, unknown>>)
+        .filter((c) => typeof c.contactPhone === "string")
+        .map((c) => ({ phone: c.contactPhone as string, addedAt: typeof c.createdAt === "string" ? c.createdAt : null }));
+      return { status: 200, body: { ok: true, shared: true, number, contacts } };
+    },
+
+    /** Let one more number text the shared line (E.164, like +12025551234). */
+    "linq.contact.add": async (body) => {
+      const phone = e164(body.phone);
+      if (!phone) return fail(400, "phone must be a full number with its country code, like +12025551234.");
+      const result = await linq(["contacts", "add", phone, "--json"], 60_000);
+      const text = `${result.stdout}\n${result.stderr}`;
+      if (/Shared line accounts only/i.test(text)) return fail(409, "This line takes texts from anyone, so it has no contact list.");
+      const data = firstJson(result.stdout);
+      if (result.code !== 0 || !data) return fail(502, /already/i.test(text) ? "That number is already on the list." : "Linq did not add that number. Try again.");
+      return {
+        status: 200,
+        body: { ok: true, phone: typeof data.contactPhone === "string" ? data.contactPhone : phone, shareLink: typeof data.shareLink === "string" ? data.shareLink : null },
+      };
+    },
+
+    /** Take a number off the shared line's contact list. */
+    "linq.contact.remove": async (body) => {
+      const phone = e164(body.phone);
+      if (!phone) return fail(400, "phone must be a full number with its country code, like +12025551234.");
+      const result = await linq(["contacts", "remove", phone, "--json"], 60_000);
+      const text = `${result.stdout}\n${result.stderr}`;
+      if (/Shared line accounts only/i.test(text)) return fail(409, "This line takes texts from anyone, so it has no contact list.");
+      if (result.code !== 0) return fail(502, "Linq did not remove that number. Try again.");
+      return { status: 200, body: { ok: true, phone } };
     },
 
     /**
