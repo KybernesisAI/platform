@@ -2,7 +2,7 @@ import { defineWorkflowTool } from "eve/tools";
 import { z } from "zod";
 // The driver body may only import pure modules (eve bundles it without Node);
 // the Link calls come from the steps entry and are reached only inside "use step".
-import { APPROVE_SPEND_REQUEST_DESCRIPTION, spendRequestAsk, type SpendRequestSnapshot } from "@kybernesis/payments/ask";
+import { APPROVE_SPEND_REQUEST_DESCRIPTION, interpretSpendRequestAnswer, spendRequestAsk, type SpendRequestSnapshot } from "@kybernesis/payments/ask";
 import { cancelSpendRequest, spendRequestApprovalLink, spendRequestSettledStatus, spendRequestSnapshot } from "@kybernesis/payments/steps";
 
 // The approval moment as one durable call: shows the purchase (merchant, total,
@@ -21,7 +21,7 @@ export default defineWorkflowTool({
     }
     const approval_url = current.approval_url ?? (await approvalLink(current.id));
     const answer = await ctx.ask(spendRequestAsk({ ...current, approval_url }));
-    if (answer.status !== "answered" || answer.optionId === "cancel") {
+    if (interpretSpendRequestAnswer(answer) === "cancel") {
       await cancel(current.id);
       return { status: "canceled", note: "The person cancelled. Do not buy this." };
     }
