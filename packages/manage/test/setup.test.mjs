@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -247,6 +247,117 @@ test("link.login: returns the approval link and phrase, and leaves a poll runnin
   assert.match(launched[0], /link-cli auth status --interval 5/);
 });
 
+test("wallet.add: adds the payments item, rebuilds, and restarts only after a good build", async () => {
+  const dir = agentDir({ "@kybernesis/computer": "^0.2.2" });
+  mkdirSync(join(dir, "agent", "tools"), { recursive: true });
+  writeFileSync(join(dir, "agent", "tools", "mine.ts"), "export default 1;");
+  const calls = [];
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    agent: "planner",
+    options: {
+      exec: async (file, args) => {
+        calls.push([file, ...args].join(" "));
+        if (args.includes("add")) {
+          writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@kybernesis/computer": "^0.2.2", "@kybernesis/payments": "^0.3.0" } }));
+          writeFileSync(join(dir, "agent", "tools", "pay_on_computer.ts"), "export default 2;");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => (restarts++, { restart: "scheduled", inFlight: 0, note: "restarting" }) },
+  });
+  const { status, body } = await actions.run({ action: "wallet.add" });
+  assert.equal(status, 200);
+  assert.equal(body.state, "added");
+  assert.deepEqual(calls, ["npx --yes eve add @kybernesis/payments --yes", "npx eve build"]);
+  assert.equal(restarts, 1);
+  assert.equal((await actions.run({ action: "wallet.add" })).body.state, "done", "a second press changes nothing");
+  assert.equal(calls.length, 2);
+});
+
+test("wallet.add: a failed build leaves the agent exactly as it was and never restarts it", async () => {
+  const dir = agentDir({ "@kybernesis/computer": "^0.2.2" });
+  writeFileSync(join(dir, "package-lock.json"), '{"lock":1}');
+  mkdirSync(join(dir, "agent", "tools"), { recursive: true });
+  writeFileSync(join(dir, "agent", "tools", "mine.ts"), "export default 1;");
+  const pkgBefore = readFileSync(join(dir, "package.json"), "utf8");
+  let builds = 0;
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (_file, args) => {
+        if (args.includes("add")) {
+          writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@kybernesis/payments": "^0.3.0" } }));
+          writeFileSync(join(dir, "package-lock.json"), '{"lock":2}');
+          mkdirSync(join(dir, "agent", "instructions"), { recursive: true });
+          writeFileSync(join(dir, "agent", "instructions", "payments.ts"), "x");
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        builds++;
+        return { code: builds === 1 ? 1 : 0, stdout: "", stderr: "type error" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  const { status, body } = await actions.run({ action: "wallet.add" });
+  assert.equal(status, 502);
+  assert.doesNotMatch(body.error, /type error/, "build output is not shown to the customer");
+  assert.equal(readFileSync(join(dir, "package.json"), "utf8"), pkgBefore);
+  assert.equal(readFileSync(join(dir, "package-lock.json"), "utf8"), '{"lock":1}');
+  assert.equal(existsSync(join(dir, "agent", "instructions", "payments.ts")), false);
+  assert.equal(existsSync(join(dir, "agent", "tools", "mine.ts")), true, "the agent's own files are kept");
+  assert.equal(builds, 2, "rebuilt as it was");
+  assert.equal(restarts, 0);
+});
+
+test("wallet.add: refused without a computer to pay on", async () => {
+  const actions = createSetupActions({ appRoot: agentDir({}), options: { exec: async () => assert.fail("nothing runs") }, restarter: { request() {} } });
+  assert.equal((await actions.run({ action: "wallet.add" })).status, 409);
+});
+
+test("wallet item: add it when there is a computer, sign in once added, sign out once signed in", async () => {
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const auth = join(mkdtempSync(join(tmpdir(), "kyb-link-")), "config.json");
+  const previous = process.env.LINK_AUTH_FILE;
+  process.env.LINK_AUTH_FILE = auth;
+  try {
+    const wallet = async (deps) =>
+      (await setupStatus({ appRoot: agentDir(deps), options: {}, restarter })).items.find((i) => i.id === "wallet");
+    assert.equal(await wallet({}), undefined, "no computer, no wallet");
+    assert.deepEqual((await wallet({ "@kybernesis/computer": "^0.2.2" })).actions, ["wallet.add"]);
+    const out = await wallet({ "@kybernesis/computer": "^0.2.2", "@kybernesis/payments": "^0.3.0" });
+    assert.deepEqual([out.done, out.actions], [false, ["link.login"]]);
+    writeFileSync(auth, JSON.stringify({ auth: { access_token: "tok" } }));
+    const signedIn = await wallet({ "@kybernesis/computer": "^0.2.2", "@kybernesis/payments": "^0.3.0" });
+    assert.deepEqual([signedIn.done, signedIn.actions], [true, ["link.logout"]]);
+    assert.doesNotMatch(JSON.stringify(signedIn), /tok/);
+
+    const dir = agentDir({ "@kybernesis/payments": "^0.3.0" });
+    let argv;
+    const actions = createSetupActions({
+      appRoot: dir,
+      options: {
+        exec: async (_file, args) => {
+          argv = args;
+          writeFileSync(auth, JSON.stringify({ auth: null }));
+          return { code: 0, stdout: '{"authenticated":false}', stderr: "" };
+        },
+      },
+      restarter: { request() {} },
+    });
+    const { status, body } = await actions.run({ action: "link.logout" });
+    assert.equal(status, 200);
+    assert.equal(body.state, "signed-out");
+    assert.deepEqual(argv.slice(0, 4), ["--no-install", "link-cli", "auth", "logout"]);
+  } finally {
+    if (previous === undefined) delete process.env.LINK_AUTH_FILE;
+    else process.env.LINK_AUTH_FILE = previous;
+  }
+});
+
 test("claude.login: link first, then the code on stdin; done only when the API authenticates", async () => {
   const api = createServer((_req, res) => res.writeHead(200).end("{}"));
   await new Promise((r) => api.listen(0, "127.0.0.1", r));
@@ -334,7 +445,7 @@ test("routes: every setup route asks the manage-level check, and env never echoe
   const model = status.items.find((i) => i.id === "model");
   assert.equal(model.done, false, "the gateway needs EXE_MODEL; a stored key the source does not use is not a model");
   assert.ok(status.items.find((i) => i.id === "computer"));
-  assert.ok(!status.items.find((i) => i.id === "wallet"), "no wallet item without payments");
+  assert.deepEqual(status.items.find((i) => i.id === "wallet").actions, ["wallet.add"], "a computer without payments can add the wallet");
 });
 
 test("firstJson finds the object a CLI prints between notices", () => {
