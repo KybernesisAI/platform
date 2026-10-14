@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { upsertEnv } from "./envfile.js";
+import { BUZZ_EXTENSION_MOUNT } from "./buzz.js";
 import { reconcileHostArtifact } from "./host-artifacts.js";
 import { assessPeerTree, staleRangeWarning } from "./peer-tree.js";
 import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
@@ -116,21 +117,7 @@ function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
   const mount = join(cwd, "agent/extensions/buzz.ts");
   if (!existsSync(mount)) {
     mkdirSync(join(cwd, "agent/extensions"), { recursive: true });
-    writeFileSync(
-      mount,
-      `// The agent's hands in Buzz: projects, issues, pull requests, patches, repos,
-` +
-        `// long-form notes, channel canvases, workflows, the feed, media — everything the
-` +
-        `// workspace has beyond talking, which the bridge alone does not provide.
-` +
-        `//
-` +
-        `// Actions are signed with THIS AGENT's key and appear under its name.
-` +
-        `export { default } from "@kybernesis/buzz/extension";
-`,
-    );
+    writeFileSync(mount, BUZZ_EXTENSION_MOUNT);
     done.push("mounted the Buzz extension (agent/extensions/buzz.ts)");
   }
 
@@ -143,7 +130,10 @@ function repairBuzzSetup(cwd: string, deps: Record<string, string>): void {
    */
   const envPath = join(cwd, ".env.local");
   const env = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
-  if (!/^BUZZ_RELAY=/m.test(env)) {
+  // An agent set up by `kyb add buzz` has no relay until its owner connects a
+  // community from the Channels page; that is waiting, not broken.
+  const awaitingOwner = /^BUZZ_KEYFILE=/m.test(env) && capture("sh", ["-c", "grep -l 'kyb add buzz' /etc/systemd/system/*buzz-bridge.service 2>/dev/null"]);
+  if (!/^BUZZ_RELAY=/m.test(env) && !awaitingOwner) {
     const unit = capture("sh", [
       "-c",
       "grep -ohE 'BUZZ_(RELAY|KEYFILE)=[^ \"]+' /etc/systemd/system/*buzz-bridge.service 2>/dev/null | head -2",

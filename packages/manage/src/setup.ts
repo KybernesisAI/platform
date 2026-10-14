@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes, randomInt } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { GET, POST, type RouteDefinition } from "eve/channels";
 import {
   inFlightRuns,
@@ -13,6 +13,17 @@ import {
   writeEnvFile,
   type AuthoredReach,
 } from "./setup-env.js";
+import {
+  bridgeState,
+  bridgeUnitName,
+  buzzIdentity,
+  buzzKeyFile,
+  installBridgeUnit,
+  parseProfileOutput,
+  parseRelays,
+  type BridgeState,
+  type RelayOutcome,
+} from "./buzz.js";
 
 /**
  * Setup routes: the steps that used to need a terminal on the agent's host,
@@ -221,6 +232,8 @@ interface SetupState {
   linq?: { email?: string; number?: string; webhookId?: string; at?: string };
   vnc?: { rotatedAt?: string };
   link?: { startedAt?: string };
+  /** The agent's public key (cached: reading it means running the Buzz CLI) and where it was last connected. */
+  buzz?: { keyFile?: string; npub?: string; hex?: string; relays?: string[]; members?: string[]; at?: string };
 }
 
 function stateFile(appRoot: string): string {
@@ -334,7 +347,7 @@ async function subscriptionState(port: number): Promise<"signed-in" | "signed-ou
 }
 
 export interface SetupItem {
-  id: "identity" | "model" | "computer" | "slack" | "imessage" | "wallet";
+  id: "identity" | "model" | "computer" | "slack" | "imessage" | "buzz" | "wallet";
   required: boolean;
   done: boolean;
   detail: string;
@@ -358,6 +371,18 @@ export interface SetupStatus {
   };
   restart: RestartState & { configured: boolean; owed: boolean };
   items: SetupItem[];
+  /** Present when the agent has Buzz installed (`kyb add buzz`). */
+  buzz?: BuzzStatus;
+}
+
+export interface BuzzStatus {
+  /** The key an admin adds to the community; null until the agent has one. */
+  npub: string | null;
+  hex: string | null;
+  relays: string[];
+  /** Communities where the last connect found the agent a member. */
+  members: string[];
+  bridge: BridgeState;
 }
 
 const REACH_WORDS: Record<AuthoredReach, string> = {
@@ -371,6 +396,7 @@ const REACH_WORDS: Record<AuthoredReach, string> = {
 
 export async function setupStatus(input: {
   appRoot: string;
+  agent?: string;
   options: SetupOptions;
   restarter: SafeRestarter;
   restartCommand?: string;
@@ -491,6 +517,33 @@ export async function setupStatus(input: {
     actions: ["linq.signup", "linq.verify"],
     env: [],
   });
+  let buzz: BuzzStatus | undefined;
+  if (deps.has("@kybernesis/buzz")) {
+    const exec = options.exec ?? defaultExec;
+    const identity = await cachedBuzzIdentity(exec, appRoot, buzzKeyFile(get));
+    const relays = (get("BUZZ_RELAY") ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+    const agent = agentName(appRoot, input.agent, get);
+    const bridge = agent ? await bridgeState(exec, appRoot, bridgeUnitName(agent)) : "unknown";
+    const members = (saved.buzz?.members ?? []).filter((m) => relays.includes(m));
+    buzz = { npub: identity?.npub ?? null, hex: identity?.hex ?? null, relays, members, bridge };
+    const hosts = (list: string[]) => list.map((r) => r.replace(/^wss:\/\//, "")).join(", ");
+    items.push({
+      id: "buzz",
+      required: false,
+      done: relays.length > 0 && bridge === "active" && members.length > 0,
+      detail: !relays.length
+        ? identity
+          ? "Ready for your Buzz community: an admin adds its key, then connect it with the community's address."
+          : "Buzz is installed but the agent has no key yet; connecting makes one."
+        : bridge !== "active"
+          ? `Connected to ${hosts(relays)}, but its bridge is ${bridge === "missing" ? "not installed" : bridge === "failed" ? "failing" : "off"}.`
+          : members.length < relays.length
+            ? `Waiting for an admin to add its key in ${hosts(relays.filter((r) => !members.includes(r)))}, then connect again.`
+            : `In Buzz (${hosts(relays)}).`,
+      actions: ["buzz.join", "buzz.leave"],
+      env: [],
+    });
+  }
   if (deps.has("@kybernesis/payments")) {
     const signedIn = linkSignedIn();
     items.push({
@@ -521,7 +574,29 @@ export async function setupStatus(input: {
     },
     restart: { ...input.restarter.state(), configured: Boolean(input.restartCommand), owed: owed || input.restarter.pending },
     items,
+    ...(buzz ? { buzz } : {}),
   };
+}
+
+const AGENT_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/i;
+
+/** The agent's name, which names its bridge unit: given, then KYBERNESIS_AGENT, then the app folder. */
+function agentName(appRoot: string, given: string | undefined, get: (key: string) => string | undefined): string | null {
+  const name = given || get("KYBERNESIS_AGENT") || basename(appRoot);
+  return AGENT_NAME.test(name) ? name : null;
+}
+
+/** Read once and kept: the key never changes under a file, and reading it runs the Buzz CLI. */
+async function cachedBuzzIdentity(exec: Exec, appRoot: string, keyFile: string): Promise<{ npub: string; hex: string } | null> {
+  const saved = readSetupState(appRoot).buzz;
+  if (saved?.keyFile === keyFile && saved.npub && saved.hex && existsSync(keyFile)) return { npub: saved.npub, hex: saved.hex };
+  const identity = await buzzIdentity(exec, appRoot, keyFile);
+  if (identity) {
+    writeSetupState(appRoot, (s) => {
+      s.buzz = { ...s.buzz, keyFile, ...identity };
+    });
+  }
+  return identity;
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────
@@ -765,6 +840,113 @@ export function createSetupActions(input: {
     },
 
     /**
+     * Put the agent in its owner's Buzz community: `relay` is the community's
+     * address (wss:// or https://, up to five), `name` and `picture` (https) are
+     * how it appears there, defaulting to the agent's own name.
+     *
+     * Writes BUZZ_RELAY where the bridge and the agent both read it, publishes
+     * the profile in every community that already counts the agent a member,
+     * and switches the bridge on. Connecting again after an admin adds the key
+     * publishes the profile where it could not before, without bouncing a
+     * bridge that is already running for the same communities.
+     */
+    "buzz.join": async (body) => {
+      if (!dependencies(appRoot).has("@kybernesis/buzz")) {
+        return fail(409, "Buzz is not installed on this agent. Run kyb add buzz on its host.");
+      }
+      const env = readEnvFile(envPath);
+      const get = (key: string) => env.get(key) || process.env[key];
+      const agent = agentName(appRoot, input.agent, get);
+      if (!agent) return fail(500, "This agent's name cannot name a bridge.");
+      const parsed = parseRelays(body.relay ?? body.relays);
+      if (!parsed.ok) return fail(400, parsed.error);
+      const relays = parsed.relays;
+      const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : agent;
+      if (name.length > 64 || /[\u0000-\u001f\u007f]/.test(name)) return fail(400, "name must be one line of at most 64 characters.");
+      const picture = typeof body.picture === "string" ? body.picture.trim() : "";
+      if (picture && !/^https:\/\/[^\s]{1,2040}$/.test(picture)) return fail(400, "picture must be an https:// address.");
+
+      // One key for the bridge and the agent's tools. A key already in use is
+      // kept: a new key is a member the community never invited.
+      const legacy = buzzKeyFile(() => undefined);
+      const keyFile = get("BUZZ_KEYFILE") || (existsSync(legacy) ? legacy : join(appRoot, ".buzz", "agent-key.json"));
+      if (!existsSync(keyFile)) {
+        mkdirSync(dirname(keyFile), { recursive: true });
+        await exec("npx", ["kybernesis-buzz", "init"], { cwd: appRoot, timeoutMs: 60_000, env: { BUZZ_KEYFILE: keyFile } });
+      }
+      const identity = await cachedBuzzIdentity(exec, appRoot, keyFile);
+      if (!identity) return fail(502, "Could not read the agent's Buzz key (npx kybernesis-buzz init).");
+
+      const changed = writeEnvFile(envPath, { set: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile }, unset: [] });
+      const profileArgs = ["kybernesis-buzz", "profile", "--name", name, ...(picture ? ["--picture", picture] : [])];
+      const published = await exec("npx", profileArgs, {
+        cwd: appRoot,
+        timeoutMs: 90_000,
+        env: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile },
+      });
+      const outcomes: RelayOutcome[] = parseProfileOutput(`${published.stdout}\n${published.stderr}`, relays);
+
+      const unit = bridgeUnitName(agent);
+      let bridge = await bridgeState(exec, appRoot, unit);
+      if (bridge === "missing" && !(await installBridgeUnit(exec, appRoot, agent))) {
+        return fail(502, `Could not install ${unit} on this host (it needs passwordless sudo).`);
+      }
+      const enabled = await exec("sudo", ["-n", "systemctl", "enable", unit], { cwd: appRoot, timeoutMs: 30_000 });
+      if (enabled.code !== 0) return fail(502, `Could not switch on ${unit} (it needs passwordless sudo).`);
+      // A running bridge read its communities at start; only new ones need it back.
+      if (changed.length || bridge !== "active") {
+        await exec("sudo", ["-n", "systemctl", "restart", unit], { cwd: appRoot, timeoutMs: 30_000 });
+      }
+      bridge = await bridgeState(exec, appRoot, unit);
+
+      const members = outcomes.filter((o) => o.member).map((o) => o.url);
+      writeSetupState(appRoot, (s) => {
+        s.buzz = { ...s.buzz, keyFile, ...identity, relays, members, at: new Date((options.now ?? Date.now)()).toISOString() };
+      });
+      const waiting = outcomes.filter((o) => !o.member).map((o) => o.url.replace(/^wss:\/\//, ""));
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          npub: identity.npub,
+          hex: identity.hex,
+          relays: outcomes,
+          bridge,
+          // The agent's tools read BUZZ_RELAY at start, so it restarts only when that changed.
+          restart: changed.length ? restarter.request() : { ...restarter.state(), note: "Nothing changed." },
+          next: waiting.length
+            ? `An admin of ${waiting.join(", ")} adds ${identity.npub} as a member and to the channels it should be in, then connect again to publish its name.`
+            : "Connected. Mention it in any channel it has been added to.",
+        },
+      };
+    },
+
+    /** Take the agent out of Buzz: the bridge stops and stays off, the key is kept for next time. */
+    "buzz.leave": async () => {
+      const env = readEnvFile(envPath);
+      const get = (key: string) => env.get(key) || process.env[key];
+      const agent = agentName(appRoot, input.agent, get);
+      if (!agent) return fail(500, "This agent's name cannot name a bridge.");
+      const unit = bridgeUnitName(agent);
+      if ((await bridgeState(exec, appRoot, unit)) !== "missing") {
+        const off = await exec("sudo", ["-n", "systemctl", "disable", "--now", unit], { cwd: appRoot, timeoutMs: 30_000 });
+        if (off.code !== 0) return fail(502, `Could not switch off ${unit} (it needs passwordless sudo).`);
+      }
+      const changed = writeEnvFile(envPath, { set: {}, unset: ["BUZZ_RELAY"] });
+      writeSetupState(appRoot, (s) => {
+        if (s.buzz) s.buzz = { ...s.buzz, relays: [], members: [] };
+      });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          bridge: await bridgeState(exec, appRoot, unit),
+          restart: changed.length ? restarter.request() : { ...restarter.state(), note: "Nothing changed." },
+        },
+      };
+    },
+
+    /**
      * Sign a Claude subscription in to this host's loopback proxy.
      *
      * Two calls, because Claude's sign-in ends with a code the person copies
@@ -927,7 +1109,13 @@ export function setupRoutes(input: {
       const denied = await input.authorize(req);
       if (denied) return denied;
       const writable = input.writable();
-      const status = await setupStatus({ appRoot: input.appRoot, options: input.options, restarter, restartCommand: input.restartCommand });
+      const status = await setupStatus({
+        appRoot: input.appRoot,
+        agent: input.agent,
+        options: input.options,
+        restarter,
+        restartCommand: input.restartCommand,
+      });
       return Response.json({
         ok: true,
         writable: writable.ok,
