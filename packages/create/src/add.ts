@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { bold, dim, green, red, run, yellow } from "./util.js";
+import { addBuzz } from "./buzz.js";
 import { CHANNEL_KINDS, arcanaMemorySlotTs, channelPlan, type ChannelKind, type HostKind } from "./templates.js";
 
 /**
@@ -21,10 +22,14 @@ import { CHANNEL_KINDS, arcanaMemorySlotTs, channelPlan, type ChannelKind, type 
  */
 export async function add(what: string | undefined, rest: string[]): Promise<void> {
   if (what === "memory") return addMemory();
+  // Buzz is a bridge and a key, not a channel file; "add channel buzz" is what
+  // the provisioner and people naturally type, so both spellings land here.
+  if (what === "buzz" || (what === "channel" && rest.find((a) => !a.startsWith("-")) === "buzz")) return addBuzz();
   if (what !== "channel") {
     console.error(red(`kyb add: don't know how to add "${what ?? ""}".`));
     console.log(dim(`  kyb add channel <${CHANNEL_KINDS.filter((k) => k !== "none").join("|")}>`));
     console.log(dim(`  kyb add memory   ${dim("— an eve 0.49 memory slot backed by Arcana (recall before every turn)")}`));
+    console.log(dim(`  kyb add buzz     ${dim("— the agent's own Buzz identity, tools and bridge, ready for its owner's community")}`));
     process.exitCode = 1;
     return;
   }

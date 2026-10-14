@@ -239,6 +239,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --yes             ${dim("no prompts; take flags and defaults")}
   ${bold("kyb add channel <kind>")}
       ${dim("slack|imessage|telegram|discord|web — writes the channel, deps and env")}
+  ${bold("kyb add buzz")}        ${dim("the agent's own Buzz identity, tools and bridge (connected from the Channels page)")}
   ${bold("kyb add memory")}      ${dim("eve 0.49 memory slot backed by Arcana: recall before every turn")}
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code
