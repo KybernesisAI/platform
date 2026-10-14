@@ -8,6 +8,7 @@ import { routineSource } from "./routine-source.js";
 import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
+import { memoryRoutes, type MemoryOptions } from "./memory.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -206,6 +207,13 @@ export interface ManageOptions {
    * grant). On by default.
    */
   setup?: SetupOptions | false;
+  /**
+   * Memory routes under /eve/v1/kyb/memory, for an owner's client: search,
+   * recent, recall one entity, remember or correct, pin. Read with the agent's
+   * own workspace key from its environment. Owner-only (a `manage` grant). On
+   * by default; they answer 404 when the agent has no memory configured.
+   */
+  memory?: MemoryOptions | false;
 }
 
 /**
@@ -387,6 +395,9 @@ export function manageChannel(options: ManageOptions = {}) {
       ...(options.computer === false
         ? []
         : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
+      ...(options.memory === false
+        ? []
+        : memoryRoutes({ prefix: PREFIX, options: options.memory ?? {}, authorize: (req) => authorize(req, options, "manage") })),
       ...(options.setup === false
         ? []
         : setupRoutes({
@@ -847,6 +858,7 @@ export function routineTools(options: ManageOptions = {}) {
 }
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
+export { memoryRoutes, memoryConfig, callMemory, contentOf, MEMORY_MCP_URL, type MemoryOptions } from "./memory.js";
 
 /** The name `eve add` needs: bare catalog names belong to the Kybernesis registry. */
 export function registryItemRef(item: string): string {
