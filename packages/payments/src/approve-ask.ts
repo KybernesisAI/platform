@@ -9,6 +9,11 @@
  * Kybernesis client renders as a card — merchant, total, an "Approve in Link"
  * button — and parks until they tap "I approved" or "Cancel". Then it checks
  * with Link and returns the real status. The model sees one result.
+ *
+ * Text-only channels (iMessage) cannot show the buttons, and eve only matches a
+ * plain reply to an option by its exact id or label. So the question also takes
+ * free text: a reply that reads as a no cancels, anything else means "check
+ * Link". Link's own status still decides whether the purchase goes ahead.
  */
 export const SPEND_REQUEST_MARKER = "[kyb:spend-request]";
 
@@ -26,7 +31,7 @@ export function spendRequestPrompt(ask: SpendRequestAsk): string {
   const total = `${(ask.amount / 100).toFixed(2)} ${ask.currency.toUpperCase()}`;
   const at = ask.merchant ? ` at ${ask.merchant}` : "";
   const link = ask.approval_url ? ` Approve it in Link: ${ask.approval_url}` : "";
-  return `${SPEND_REQUEST_MARKER} ${JSON.stringify(ask)}\nA purchase of ${total}${at} is waiting for your approval.${link}`;
+  return `${SPEND_REQUEST_MARKER} ${JSON.stringify(ask)}\nA purchase of ${total}${at} is waiting for your approval.${link} Reply once you have approved it, or say cancel.`;
 }
 
 export function parseSpendRequestPrompt(prompt: string): { ask: SpendRequestAsk; text: string } | null {
@@ -55,11 +60,25 @@ export function spendRequestAsk(current: SpendRequestSnapshot) {
   return {
     prompt: spendRequestPrompt(current),
     display: "confirmation" as const,
+    allowFreeform: true,
     options: [
       { id: "approved", label: "I approved it in Link", style: "primary" as const },
       { id: "cancel", label: "Cancel this purchase", style: "danger" as const },
     ],
   };
+}
+
+const DECLINE = /^\s*(no|nope|cancel|cancelled|canceled|stop|don'?t|do not|decline|declined|reject|rejected|never ?mind|abort)\b/i;
+
+/**
+ * What the person's answer means. "cancel" only when they said so (the button,
+ * or a reply that opens with a no); every other reply, "Approve" and "done"
+ * included, means "check Link", which is where the purchase is really approved.
+ */
+export function interpretSpendRequestAnswer(answer: { status: string; optionId?: string; text?: string }): "check" | "cancel" {
+  if (answer.status !== "answered" || answer.optionId === "cancel") return "cancel";
+  if (answer.optionId) return "check";
+  return DECLINE.test(answer.text ?? "") ? "cancel" : "check";
 }
 
 export const APPROVE_SPEND_REQUEST_DESCRIPTION =
