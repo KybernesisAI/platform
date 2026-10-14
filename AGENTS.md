@@ -86,7 +86,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 3. Publish. Ian publishes from his machine with browser 2FA (`ianborders`
    publishes new versions; only the **kybernesis** account can create new
    packages in the @kybernesis scope). Agents never publish: hand him the exact
-   command, never with `--otp`. `scripts/prepublish.mjs` refuses a version
+   command, never with `--otp`. `scripts/prepublish.mjs` rebuilds `dist/` (it is not in git, so a stale one shipped manage 0.13.0 without its routes) and refuses a version
    already on npm. The packument shows about a minute before the tarball, so
    poll the tarball URL before deploying a consumer:
    `cd ~/platform/packages/<name> && git pull --ff-only && npm publish`

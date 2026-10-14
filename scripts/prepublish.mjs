@@ -27,8 +27,8 @@ try {
   );
 } catch {
   // Never published, or npm is unreachable. A first publish must not be blocked
-  // by a network hiccup, and npm itself still rejects a true duplicate.
-  process.exit(0);
+  // by a network hiccup, and npm itself still rejects a true duplicate. The
+  // build below still runs.
 }
 
 if ([].concat(published).includes(pkg.version)) {
@@ -39,4 +39,18 @@ if ([].concat(published).includes(pkg.version)) {
       `  Bump first:  npm version patch --no-git-tag-version\n`,
   );
   process.exit(1);
+}
+
+// Build what is about to ship. dist/ is not in git, so `npm publish` packs
+// whatever the last local build left there: manage 0.13.0 went out from a
+// dist older than its own memory routes (and its setup routes) and did
+// nothing once installed. Building here makes the tarball match the source
+// at this commit, with the eve installed in this tree.
+if (pkg.scripts?.build) {
+  try {
+    execFileSync("npm", ["run", "build"], { stdio: "inherit" });
+  } catch {
+    console.error(`\n  ${pkg.name}@${pkg.version}: the build failed, so nothing was published.\n`);
+    process.exit(1);
+  }
 }
