@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes, randomInt } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { GET, POST, type RouteDefinition } from "eve/channels";
@@ -319,6 +319,17 @@ export function publicUrlFor(explicit?: string): string | undefined {
   return vm && /^[a-z0-9][a-z0-9-]{0,62}$/.test(vm) ? `https://${vm}.exe.xyz:8000` : undefined;
 }
 
+/** Every file under a folder, as absolute paths; none when it does not exist. */
+function listFiles(dir: string): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((e) => (e.isDirectory() ? listFiles(join(dir, e.name)) : [join(dir, e.name)]));
+}
+
 function linkAuthFile(): string {
   if (process.env.LINK_AUTH_FILE) return process.env.LINK_AUTH_FILE;
   return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "link-cli-nodejs", "config.json");
@@ -551,7 +562,17 @@ export async function setupStatus(input: {
       required: false,
       done: signedIn,
       detail: signedIn ? "The Link wallet is signed in." : "The Link wallet is not signed in.",
-      actions: ["link.login"],
+      actions: signedIn ? ["link.logout"] : ["link.login"],
+      env: [],
+    });
+  } else if (deps.has("@kybernesis/computer")) {
+    // The wallet pays on the agent's own computer, so it can be added only where there is one.
+    items.push({
+      id: "wallet",
+      required: false,
+      done: false,
+      detail: "No wallet yet. Adding one lets it pay from your own Link account, with your approval each time.",
+      actions: ["wallet.add"],
       env: [],
     });
   }
@@ -673,6 +694,7 @@ export function createSetupActions(input: {
   const proxyName = options.claudeProxyName ?? process.env.CLAUDE_PROXY_NAME ?? `${basename(appRoot)}-claude-subscription`;
   const proxyPort = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   let claudeLogin: PendingClaudeLogin | undefined;
+  let addingWallet = false;
 
   const linq = (args: string[], timeoutMs = 120_000) =>
     exec("npx", ["--yes", linqCli, ...args], { cwd: appRoot, timeoutMs });
@@ -752,6 +774,64 @@ export function createSetupActions(input: {
           prompt: "Open the link, sign in to Link, and approve the request showing this phrase.",
         },
       };
+    },
+
+    /** Sign the Link wallet out on this host. The agent cannot pay again until the owner signs in. */
+    "link.logout": async () => {
+      if (!dependencies(appRoot).has("@kybernesis/payments")) return fail(409, "This agent has no wallet installed.");
+      const result = await exec("npx", ["--no-install", "link-cli", "auth", "logout", "--format", "json"], { cwd: appRoot, timeoutMs: 60_000 });
+      if (linkSignedIn()) return fail(502, result.code === 0 ? "Link is still signed in. Try again in a minute." : "Link did not sign out. Try again in a minute.");
+      writeSetupState(appRoot, (s) => {
+        delete s.link;
+      });
+      return { status: 200, body: { ok: true, state: "signed-out", note: "The wallet is signed out. It cannot pay until you sign in again." } };
+    },
+
+    /**
+     * Add the Link wallet to an agent that was built without it: the payments
+     * registry item (its tools and instructions), a rebuild, and a safe restart.
+     *
+     * A failed build would take the agent down at its next restart (systemd
+     * builds before it starts), so if anything fails the files the item wrote
+     * are removed, package.json and its lock are put back, and it rebuilds as
+     * it was. Nothing is restarted unless the new build succeeded.
+     */
+    "wallet.add": async () => {
+      const deps = dependencies(appRoot);
+      if (deps.has("@kybernesis/payments")) return { status: 200, body: { ok: true, state: "done", note: "The wallet is already added." } };
+      if (!deps.has("@kybernesis/computer")) return fail(409, "The wallet pays on the agent's own computer, and this agent has none.");
+      if (addingWallet) return fail(409, "The wallet is already being added. Check again in a minute.");
+      addingWallet = true;
+      try {
+        const kept = new Map<string, string>();
+        for (const file of ["package.json", "package-lock.json"]) {
+          const path = join(appRoot, file);
+          if (existsSync(path)) kept.set(path, readFileSync(path, "utf8"));
+        }
+        const before = new Set(listFiles(join(appRoot, "agent")));
+        const rollBack = async () => {
+          for (const file of listFiles(join(appRoot, "agent"))) if (!before.has(file)) rmSync(file, { force: true });
+          for (const [path, text] of kept) writeFileSync(path, text);
+          await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+        };
+        const added = await exec("npx", ["--yes", "eve", "add", "@kybernesis/payments", "--yes"], { cwd: appRoot, timeoutMs: 600_000 });
+        if (added.code !== 0 || !dependencies(appRoot).has("@kybernesis/payments")) {
+          await rollBack();
+          return fail(502, "The wallet could not be added, and the agent was left as it was. Try again later or contact support.");
+        }
+        const built = await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+        if (built.code !== 0) {
+          await rollBack();
+          return fail(502, "The agent did not build with the wallet, so it was left as it was. Contact support.");
+        }
+        const restart = restarter.request();
+        return {
+          status: 200,
+          body: { ok: true, state: "added", restart, note: "The wallet is added. Sign in to Link once the agent has restarted." },
+        };
+      } finally {
+        addingWallet = false;
+      }
     },
 
     /** Step one of an iMessage line: Linq emails the owner a six-digit code. */

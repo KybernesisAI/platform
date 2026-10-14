@@ -52,7 +52,7 @@ export function readStoredAuth(file: string): StoredAuth | null {
 }
 
 export const NOT_SIGNED_IN =
-  "Link is not signed in on this host. The owner runs `npx link-cli auth login --client-name <agent>` here and approves it in the Link app; the agent cannot do this step.";
+  "The Link wallet is not signed in. The owner signs it in from the Wallet page of the agent's settings, or on the agent's host with `npx link-cli auth login --client-name <agent>`, and approves it in the Link app; the agent cannot do this step.";
 
 function runCli(cliPath: string, args: string[], env: NodeJS.ProcessEnv): Promise<number> {
   return new Promise((resolve) => {
