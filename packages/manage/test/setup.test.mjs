@@ -439,3 +439,42 @@ test("slack: an agent on its own control-plane Slack app reports install state f
     globalThis.fetch = realFetch;
   }
 });
+
+test("linq contacts: list, add and remove on a shared line; a dedicated line has no list", async () => {
+  const dir = agentDir();
+  const calls = [];
+  let shared = true;
+  const exec = async (file, args) => {
+    calls.push(args.slice(2).join(" "));
+    const cmd = args.slice(2).join(" ");
+    if (!shared) return { code: 2, stdout: "", stderr: "Error: This command is for Shared line accounts only." };
+    if (cmd === "contacts list --json") {
+      return { code: 0, stdout: '{"contacts":[{"contactPhone":"+12025551234","createdAt":"2026-10-14T08:00:00.000Z"}]}', stderr: "" };
+    }
+    if (cmd.startsWith("contacts add")) return { code: 0, stdout: '{"contactPhone":"+12025559876","linqNumber":"+15550100","shareLink":"https://linqapp.com/s/text/x"}', stderr: "" };
+    if (cmd.startsWith("contacts remove")) return { code: 0, stdout: "{}", stderr: "" };
+    return { code: 1, stdout: "", stderr: "unexpected" };
+  };
+  const actions = createSetupActions({ appRoot: dir, options: { exec }, restarter: { request() {} } });
+
+  const listed = await actions.run({ action: "linq.contacts" });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.shared, true);
+  assert.deepEqual(listed.body.contacts, [{ phone: "+12025551234", addedAt: "2026-10-14T08:00:00.000Z" }]);
+
+  assert.equal((await actions.run({ action: "linq.contact.add", phone: "202 555 9876" })).status, 400, "needs the country code");
+  assert.equal((await actions.run({ action: "linq.contact.add", phone: "+1; rm -rf /" })).status, 400);
+  const added = await actions.run({ action: "linq.contact.add", phone: "+1 (202) 555-9876" });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.phone, "+12025559876");
+  assert.equal(added.body.shareLink, "https://linqapp.com/s/text/x");
+  assert.ok(calls.includes("contacts add +12025559876 --json"), "the number reaches the CLI normalised");
+
+  assert.equal((await actions.run({ action: "linq.contact.remove", phone: "+12025559876" })).status, 200);
+
+  shared = false;
+  const dedicated = await actions.run({ action: "linq.contacts" });
+  assert.equal(dedicated.status, 200);
+  assert.equal(dedicated.body.shared, false);
+  assert.equal((await actions.run({ action: "linq.contact.add", phone: "+12025559876" })).status, 409);
+});
