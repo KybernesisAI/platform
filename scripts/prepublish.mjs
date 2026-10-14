@@ -40,3 +40,12 @@ if ([].concat(published).includes(pkg.version)) {
   );
   process.exit(1);
 }
+
+// Build what is about to ship. npm packs whatever dist/ is on disk, and a dist
+// built before the last pull ships the previous release's code under the new
+// number: manage 0.13.0 went out without its memory routes and 0.15.0 without
+// its iMessage contact actions, each carrying the version before it. Building
+// here makes the tarball match the source it is tagged with.
+if (pkg.scripts?.build) {
+  execFileSync("npm", ["run", "build"], { stdio: "inherit" });
+}
