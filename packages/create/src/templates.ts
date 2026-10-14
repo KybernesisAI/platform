@@ -312,19 +312,23 @@ export function channelPlan(kind: ChannelKind, name: string, host: HostKind): Ch
       return {
         file: "slack.ts",
         content: onExe
-          ? `import { multiplayerSlackChannel } from "@kybernesis/multiplayer/slack";
-import { forwardedSocketVerifier } from "@kybernesis/exe/slack";
+          ? `import { channelIdentity } from "@kybernesis/enterprise";
+import { controlPlaneSlackCredentials, multiplayerSlackChannel } from "@kybernesis/multiplayer/slack";
 
-// Slack on a self-hosted (exe.dev) host.
-// Inbound: a forwarder holds the exe-brokered Socket Mode connection and POSTs
-// events here; the verifier authenticates them on SLACK_SOCKET_FORWARDING_SECRET.
-// Outbound: SLACK_BOT_TOKEN must be on the host — eve's SlackChannelCredentials
-// has no apiUrl, so calls can't route through the exe integration yet.
+// Slack as this agent's own Slack app: its own name, @handle and picture in the
+// customer's workspace. The control plane makes the app and keeps its signing
+// secret and bot token in the customer's org; this channel reads them with the
+// agent credential at call time, so installing or removing the app from the
+// Channels page needs no restart and nothing Slack-related lives on this host.
+//
+// Every sender is a control-plane person, never a bare Slack user: an unlinked
+// one gets a private DM with a one-time claim link and nothing else.
+const issuer = process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
+const credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;
+
 export default multiplayerSlackChannel({
-  credentials: {
-    botToken: process.env.SLACK_BOT_TOKEN!,
-    webhookVerifier: forwardedSocketVerifier(),
-  },
+  credentials: controlPlaneSlackCredentials({ issuer, credential }),
+  identity: credential ? channelIdentity({ issuer, credential }) : null,
 });
 `
           : `import { connectSlackCredentials } from "@vercel/connect/eve";
@@ -336,20 +340,13 @@ export default multiplayerSlackChannel({
   credentials: connectSlackCredentials(process.env.SLACK_CONNECTOR_UID!),
 });
 `,
-        deps: ["@kybernesis/multiplayer", ...(onExe ? ["@kybernesis/exe"] : ["@vercel/connect"])],
+        deps: onExe ? ["@kybernesis/multiplayer@^0.6.0", "@kybernesis/enterprise"] : ["@kybernesis/multiplayer", "@vercel/connect"],
         registryItems: [],
-        env: onExe
-          ? [
-              `SLACK_BOT_TOKEN="xoxb-..."   # outbound; from Slack OAuth & Permissions`,
-              `SLACK_SOCKET_FORWARDING_SECRET="$(openssl rand -hex 24)"`,
-            ]
-          : [`SLACK_CONNECTOR_UID="slack/${name}"`],
+        env: onExe ? [] : [`SLACK_CONNECTOR_UID="slack/${name}"`],
         steps: onExe
           ? [
-              `Create a Slack app (Socket Mode on; scopes: app_mentions:read, chat:write, channels:history, groups:history, im:history, users:read)`,
-              `Hold its tokens off-host: ssh exe.dev integrations add slack --name ${name} --bot-token=- --app-token=-`,
-              `Run the forwarder (scripts/slack-forwarder.py in @kybernesis/exe) with EXE_SLACK_GW set`,
-              `After ANY scope change, reinstall the app — a stale token silently stops receiving events`,
+              `Make the host public so Slack can reach /eve/v1/slack (ssh exe.dev share set-public <vm>)`,
+              `The control plane makes this agent's Slack app; the owner adds it to their workspace from the Channels page`,
             ]
           : [
               `vercel connect create slack --triggers --name ${name}`,
@@ -357,28 +354,60 @@ export default multiplayerSlackChannel({
             ],
       };
     case "imessage":
-      return {
+      return onExe
+        ? {
+            file: "linq.ts",
+            content: `import { channelIdentity } from "@kybernesis/enterprise";
+import { linqEnvCredentials, linqSenderIdentity } from "@kybernesis/exe/linq";
+import { linqChannel } from "eve/channels/linq";
+
+// iMessage and SMS via the customer's own Linq account. Inbound is a signed
+// webhook at /eve/v1/linq. The owner connects a line from the Channels page
+// (the manage linq.signup and linq.verify actions), which writes LINQ_API_KEY
+// and LINQ_WEBHOOK_SECRET and registers this host's webhook.
+//
+// A sender is a control-plane person, never a phone number: an unlinked number
+// gets one text with a claim link and nothing else.
+const issuer = process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
+const credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;
+const agentName = process.env.KYBERNESIS_AGENT;
+
+export default linqChannel({
+  credentials: linqEnvCredentials(),
+  ...(agentName ? { userName: agentName } : {}),
+  onMessage: linqSenderIdentity({
+    issuer,
+    agentName,
+    identity: credential ? channelIdentity({ issuer, credential }) : null,
+  }),
+});
+`,
+            deps: ["@kybernesis/exe", "@kybernesis/enterprise"],
+            registryItems: [],
+            env: [],
+            steps: [
+              `Make the host public so Linq can reach /eve/v1/linq (ssh exe.dev share set-public <vm>)`,
+              `The owner connects a line from the Channels page; it signs up their own Linq account with their email`,
+            ],
+          }
+        : {
         file: "photon.ts",
         content: `import { photonIMessageChannel } from "eve/channels/photon";
-${onExe ? `import { photonEnvCredentials } from "@kybernesis/exe/photon";\n` : ""}
+
 // iMessage via Photon. Inbound is a plain webhook at /eve/v1/photon; the Photon
 // signing secret takes precedence over the default Vercel-OIDC verifier, so this
 // works on any host with a public HTTPS URL.
 export default photonIMessageChannel({
-${
-  onExe
-    ? `  credentials: photonEnvCredentials(),`
-    : `  async credentials() {
+  async credentials() {
     const projectId = process.env.IMESSAGE_PROJECT_ID;
     const projectSecret = process.env.IMESSAGE_PROJECT_SECRET;
     if (!projectId || !projectSecret) throw new Error("Photon project credentials are required.");
     return { projectId, projectSecret };
-  },`
-}
+  },
   webhookSecret: process.env.IMESSAGE_WEBHOOK_SECRET,
 });
 `,
-        deps: onExe ? ["@kybernesis/exe"] : [],
+        deps: [],
         registryItems: [],
         env: [
           `IMESSAGE_PROJECT_ID="..."`,
@@ -387,9 +416,7 @@ ${
         ],
         steps: [
           `Create a Photon project and register the phone number (npx eve add channel/photon-imessage walks it)`,
-          onExe
-            ? `Make the host public FIRST — webhooks need anonymous access:\n       ssh exe.dev share port <vm> 8000 && ssh exe.dev share set-public <vm>`
-            : `Deploy so the public URL exists`,
+          `Deploy so the public URL exists`,
           `Register a Photon webhook for https://<your-host>/eve/v1/photon and copy its signing secret to IMESSAGE_WEBHOOK_SECRET`,
         ],
       };

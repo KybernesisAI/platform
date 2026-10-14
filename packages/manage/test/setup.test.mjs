@@ -15,7 +15,7 @@ import {
   validateEnvUpdate,
   writeEnvFile,
 } from "../dist/setup-env.js";
-import { SafeRestarter, createSetupActions, firstJson, setupRoutes, vncPassword } from "../dist/setup.js";
+import { SafeRestarter, createSetupActions, firstJson, setupRoutes, setupStatus, vncPassword } from "../dist/setup.js";
 
 const ANTHROPIC = `sk-ant-api03-${"a".repeat(40)}`;
 
@@ -406,5 +406,36 @@ test("setup status: a switchable agent offers KYB_MODEL_REACH and reports what w
     assert.equal(fellBack.model.reach, "gateway");
     assert.equal(fellBack.model.fallback.requested, "byok");
     assert.match(fellBack.items.find((i) => i.id === "model").detail, /KYB_MODEL_REACH=byok is not used/);
+  }
+});
+
+test("slack: an agent on its own control-plane Slack app reports install state from the control plane", async () => {
+  const dir = agentDir();
+  mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+  writeFileSync(join(dir, "agent", "channels", "slack.ts"), "multiplayerSlackChannel({ credentials: controlPlaneSlackCredentials({ issuer, credential }) })");
+  writeFileSync(join(dir, ".env.local"), 'KYBERNESIS_ISSUER="https://cp.example"\nKYBERNESIS_AGENT_CREDENTIAL="cred"\n');
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  let answer = { status: 200, body: { signingSecret: "s", botToken: null } };
+  globalThis.fetch = async (url, init) => {
+    seen.push([String(url), init?.headers?.authorization]);
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
+  };
+  try {
+    const status = async () =>
+      (await setupStatus({ appRoot: dir, options: { claudeProxyPort: 1 }, restarter: new SafeRestarter({ appRoot: dir }) })).items.find((i) => i.id === "slack");
+    let slack = await status();
+    assert.equal(slack.done, false);
+    assert.match(slack.detail, /ready to add/);
+    assert.deepEqual(slack.env, [], "no Slack keys belong on this host");
+    answer = { status: 200, body: { signingSecret: "s", botToken: "xoxb-1" } };
+    slack = await status();
+    assert.equal(slack.done, true);
+    assert.doesNotMatch(JSON.stringify(slack), /xoxb/);
+    answer = { status: 404, body: {} };
+    assert.match((await status()).detail, /not been made/);
+    assert.ok(seen.some(([url, auth]) => url === "https://cp.example/api/agent/slack" && auth === "Bearer cred"));
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });

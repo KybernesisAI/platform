@@ -262,6 +262,36 @@ function channelFiles(appRoot: string): string[] {
   }
 }
 
+/** True when the Slack channel reads its app from the control plane rather than env. */
+function channelUsesControlPlaneSlack(appRoot: string, channels: string[]): boolean {
+  const file = channels.find((f) => /slack/i.test(f));
+  if (!file) return false;
+  try {
+    return readFileSync(join(appRoot, "agent", "channels", file), "utf8").includes("controlPlaneSlackCredentials");
+  } catch {
+    return false;
+  }
+}
+
+async function controlPlaneSlackState(
+  issuer: string | undefined,
+  credential: string | undefined,
+): Promise<"installed" | "created" | "none" | "unknown"> {
+  if (!credential) return "unknown";
+  try {
+    const res = await fetch(`${(issuer || "https://agent.kybernesis.ai").replace(/\/$/, "")}/api/agent/slack`, {
+      headers: { authorization: `Bearer ${credential}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.status === 404) return "none";
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as { botToken?: unknown };
+    return typeof body.botToken === "string" && body.botToken ? "installed" : "created";
+  } catch {
+    return "unknown";
+  }
+}
+
 export function publicUrlFor(explicit?: string): string | undefined {
   const raw = explicit ?? process.env.KYB_PUBLIC_URL;
   if (raw) {
@@ -412,19 +442,41 @@ export async function setupStatus(input: {
     });
   }
   const slackChannel = channels.some((f) => /slack/i.test(f));
-  const slackKeys = has("SLACK_BOT_TOKEN") && has("SLACK_SIGNING_SECRET");
-  items.push({
-    id: "slack",
-    required: false,
-    done: slackKeys && slackChannel,
-    detail: !slackChannel
-      ? "No Slack channel is installed on this agent."
-      : slackKeys
-        ? "Slack credentials are stored."
-        : "The Slack channel is installed but has no bot token and signing secret.",
-    actions: [],
-    env: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
-  });
+  const slackFromControlPlane = slackChannel && channelUsesControlPlaneSlack(appRoot, channels);
+  if (slackFromControlPlane) {
+    // The agent's own Slack app lives in the control plane; ask it whether the
+    // customer has installed it, with the same credential the channel uses.
+    const app = await controlPlaneSlackState(get("KYBERNESIS_ISSUER"), get("KYBERNESIS_AGENT_CREDENTIAL"));
+    items.push({
+      id: "slack",
+      required: false,
+      done: app === "installed",
+      detail:
+        app === "installed"
+          ? "In Slack as its own app."
+          : app === "created"
+            ? "Its Slack app is ready to add to your workspace."
+            : app === "none"
+              ? "Its Slack app has not been made yet."
+              : "Could not reach the control plane to check Slack.",
+      actions: [],
+      env: [],
+    });
+  } else {
+    const slackKeys = has("SLACK_BOT_TOKEN") && has("SLACK_SIGNING_SECRET");
+    items.push({
+      id: "slack",
+      required: false,
+      done: slackKeys && slackChannel,
+      detail: !slackChannel
+        ? "No Slack channel is installed on this agent."
+        : slackKeys
+          ? "Slack credentials are stored."
+          : "The Slack channel is installed but has no bot token and signing secret.",
+      actions: [],
+      env: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
+    });
+  }
   const linqKeys = has("LINQ_API_KEY") && has("LINQ_WEBHOOK_SECRET");
   const linqChannel = channels.some((f) => /^linq\.(ts|js|mjs)$/.test(f));
   items.push({
