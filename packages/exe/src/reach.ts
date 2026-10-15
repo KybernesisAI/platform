@@ -63,8 +63,13 @@ export const CLAUDE_SUBSCRIPTION_DEFAULT_MODEL = "claude-opus-5";
 /** The bare xAI id a Grok subscription runs when `GROK_MODEL` is unset. */
 export const GROK_SUBSCRIPTION_DEFAULT_MODEL = "grok-4.6";
 
-/** The bare OpenAI id a ChatGPT subscription runs when `CHATGPT_MODEL` is unset: eve's own `chatgpt()` default. */
-export const CHATGPT_SUBSCRIPTION_DEFAULT_MODEL = "gpt-5.6-luna-fast";
+/**
+ * The bare OpenAI id a ChatGPT subscription runs when `CHATGPT_MODEL` is unset.
+ * Not eve's own `chatgpt()` default (`gpt-5.6-luna-fast`): Codex on a ChatGPT
+ * account refuses that id with a 400 on every turn. It must be one of the
+ * Codex CLI's own model presets.
+ */
+export const CHATGPT_SUBSCRIPTION_DEFAULT_MODEL = "gpt-6-sol";
 
 /** Context window declared on the Grok subscription route. */
 export const GROK_SUBSCRIPTION_CONTEXT_WINDOW = 400_000;
