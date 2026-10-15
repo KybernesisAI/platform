@@ -15,7 +15,7 @@ import {
   validateEnvUpdate,
   writeEnvFile,
 } from "../dist/setup-env.js";
-import { SafeRestarter, createSetupActions, firstJson, setupRoutes, setupStatus, vncPassword } from "../dist/setup.js";
+import { SafeRestarter, createSetupActions, firstJson, readSetupState, setupRoutes, setupStatus, vncPassword } from "../dist/setup.js";
 
 const ANTHROPIC = `sk-ant-api03-${"a".repeat(40)}`;
 
@@ -864,4 +864,175 @@ test("chatgpt.login: installs codex when missing, runs the device sign-in, done 
     if (previous === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previous;
   }
+});
+
+/** An agent on its own host, registered with the control plane. */
+function hostedAgentDir(deps = {}) {
+  const dir = agentDir(deps);
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  writeFileSync(join(dir, "scripts", "eve-server.sh"), "#!/bin/bash\n");
+  writeFileSync(join(dir, ".env.local"), 'KYBERNESIS_AGENT_CREDENTIAL="cred"\n');
+  return dir;
+}
+
+const CP_SLACK = 'import { controlPlaneSlackCredentials } from "@kybernesis/multiplayer/slack";\n';
+const withDep = (dir, name) => {
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  pkg.dependencies = { ...pkg.dependencies, [name]: "^1.0.0" };
+  writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+};
+
+test("slack.add: writes the control-plane Slack channel with the Kybernesis CLI, builds, restarts once", async () => {
+  const dir = hostedAgentDir();
+  const calls = [];
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (file, args) => {
+        calls.push([file, ...args].join(" "));
+        if (args.includes("channel")) {
+          mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+          writeFileSync(join(dir, "agent", "channels", "slack.ts"), CP_SLACK);
+          withDep(dir, "@kybernesis/multiplayer");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => (restarts++, { restart: "now" }) },
+  });
+  const { status, body } = await actions.run({ action: "slack.add" });
+  assert.equal(status, 200);
+  assert.equal(body.state, "added");
+  assert.match(body.note, /Slack app is made next/);
+  assert.deepEqual(calls, ["npx --yes --package=@kybernesis/create@latest kyb add channel slack", "npx eve build"]);
+  assert.equal(restarts, 1);
+  assert.equal((await actions.run({ action: "slack.add" })).body.state, "done");
+  assert.equal(calls.length, 2);
+});
+
+test("slack.add: a channel that is not the control-plane one is rolled back; no host or no credential is refused", async () => {
+  const dir = hostedAgentDir();
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (_file, args) => {
+        if (args.includes("channel")) {
+          mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+          writeFileSync(join(dir, "agent", "channels", "slack.ts"), "export default 1;\n");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  assert.equal((await actions.run({ action: "slack.add" })).status, 502);
+  assert.equal(existsSync(join(dir, "agent", "channels", "slack.ts")), false);
+  assert.equal(restarts, 0);
+
+  const exec = async () => assert.fail("nothing runs");
+  const vercel = createSetupActions({ appRoot: agentDir(), options: { exec }, restarter: { request() {} } });
+  assert.equal((await vercel.run({ action: "slack.add" })).status, 409);
+  const unregistered = hostedAgentDir();
+  writeFileSync(join(unregistered, ".env.local"), "");
+  const previous = process.env.KYBERNESIS_AGENT_CREDENTIAL;
+  delete process.env.KYBERNESIS_AGENT_CREDENTIAL;
+  try {
+    const none = createSetupActions({ appRoot: unregistered, options: { exec }, restarter: { request() {} } });
+    assert.equal((await none.run({ action: "slack.add" })).status, 409);
+  } finally {
+    if (previous !== undefined) process.env.KYBERNESIS_AGENT_CREDENTIAL = previous;
+  }
+});
+
+test("slack item: offers slack.add only to a registered agent on its own host with no Slack channel", async () => {
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const item = async (dir) => (await setupStatus({ appRoot: dir, options: {}, restarter })).items.find((i) => i.id === "slack");
+  assert.deepEqual((await item(hostedAgentDir())).actions, ["slack.add"]);
+  assert.deepEqual((await item(agentDir())).actions, [], "not on its own host");
+  const withLegacy = hostedAgentDir();
+  mkdirSync(join(withLegacy, "agent", "channels"), { recursive: true });
+  writeFileSync(join(withLegacy, "agent", "channels", "slack.ts"), "export default 1;\n");
+  assert.deepEqual((await item(withLegacy)).actions, []);
+});
+
+const settle = async (check) => {
+  for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(check());
+};
+
+test("buzz.add: answers at once, runs kyb add buzz and a build, then restarts once; the item reports it", async () => {
+  const dir = hostedAgentDir();
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const buzzItem = async () => (await setupStatus({ appRoot: dir, options: {}, restarter })).items.find((i) => i.id === "buzz");
+  assert.deepEqual([(await buzzItem()).actions, (await buzzItem()).detail], [["buzz.add"], "Not in Buzz yet."]);
+
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (file, args) => {
+        calls.push([file, ...args].join(" "));
+        if (args.includes("buzz") && args.includes("add")) {
+          await gate;
+          mkdirSync(join(dir, "agent", "extensions"), { recursive: true });
+          writeFileSync(join(dir, "agent", "extensions", "buzz.ts"), "export { default } from '@kybernesis/buzz/extension';\n");
+          withDep(dir, "@kybernesis/buzz");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => (restarts++, { restart: "now" }) },
+  });
+  const first = await actions.run({ action: "buzz.add" });
+  assert.equal(first.status, 202);
+  assert.equal(first.body.state, "adding");
+  const busy = await buzzItem();
+  assert.equal(busy.busy, true);
+  assert.match(busy.detail, /Adding Buzz/);
+  assert.equal((await actions.run({ action: "buzz.add" })).status, 202, "a second press while it runs starts nothing");
+  assert.equal((await actions.run({ action: "linq.add" })).status, 409, "one add at a time");
+  release();
+  await settle(() => restarts === 1);
+  assert.deepEqual(calls, ["npx --yes --package=@kybernesis/create@latest kyb add buzz", "npx eve build"]);
+  assert.equal(readSetupState(dir).buzzAdd, undefined);
+  assert.equal((await actions.run({ action: "buzz.add" })).body.state, "done");
+});
+
+test("buzz.add: a failed build puts the agent back, never restarts, and the item says why", async () => {
+  const dir = hostedAgentDir();
+  let builds = 0;
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (_file, args) => {
+        if (args.includes("buzz")) {
+          mkdirSync(join(dir, "agent", "extensions"), { recursive: true });
+          writeFileSync(join(dir, "agent", "extensions", "buzz.ts"), "x");
+          withDep(dir, "@kybernesis/buzz");
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        builds++;
+        return { code: builds === 1 ? 1 : 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  assert.equal((await actions.run({ action: "buzz.add" })).status, 202);
+  await settle(() => Boolean(readSetupState(dir).buzzAdd?.error));
+  assert.equal(existsSync(join(dir, "agent", "extensions", "buzz.ts")), false);
+  assert.equal(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies["@kybernesis/buzz"], undefined);
+  assert.equal(restarts, 0);
+  const item = (await setupStatus({ appRoot: dir, options: {}, restarter: new SafeRestarter({ appRoot: "/nonexistent" }) })).items.find((i) => i.id === "buzz");
+  assert.match(item.detail, /did not build with Buzz/);
+  assert.equal(item.busy, undefined);
+
+  writeFileSync(join(dir, ".kyb-setup.json"), JSON.stringify({ buzzAdd: { startedAt: "2026-10-15T00:00:00Z", pid: -1 } }));
+  const interrupted = (await setupStatus({ appRoot: dir, options: {}, restarter: new SafeRestarter({ appRoot: "/nonexistent" }) })).items.find((i) => i.id === "buzz");
+  assert.match(interrupted.detail, /interrupted/);
 });
