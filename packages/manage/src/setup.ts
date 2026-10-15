@@ -242,6 +242,8 @@ interface SetupState {
   link?: { startedAt?: string };
   /** The agent's public key (cached: reading it means running the Buzz CLI) and where it was last connected. */
   buzz?: { keyFile?: string; npub?: string; hex?: string; relays?: string[]; members?: string[]; at?: string };
+  /** A `buzz.add` that has started: the process running it, and why it stopped if it failed. */
+  buzzAdd?: { startedAt?: string; pid?: number; error?: string };
 }
 
 function stateFile(appRoot: string): string {
@@ -284,6 +286,14 @@ function channelFiles(appRoot: string): string[] {
 }
 
 const isLinqChannelFile = (f: string) => /^linq\.(ts|js|mjs)$/.test(f);
+
+/** An agent on its own host (an exe VM): systemd runs it, so a bridge and a restart are possible. */
+function onOwnHost(appRoot: string): boolean {
+  return existsSync(join(appRoot, "scripts", "eve-server.sh"));
+}
+
+/** The Kybernesis CLI, at its newest, the way a build runs it: `npx <KYB> add channel slack`. */
+const KYB = ["--yes", "--package=@kybernesis/create@latest", "kyb"];
 
 /** True when the agent has the iMessage channel that answers its Linq line. */
 function hasLinqChannel(appRoot: string): boolean {
@@ -380,6 +390,8 @@ export interface SetupItem {
   /** Actions (`POST /setup/action`) and env keys (`POST /setup/env`) that move it forward. */
   actions: string[];
   env: string[];
+  /** One of its actions is still running (`buzz.add` takes minutes); ask again for the outcome. */
+  busy?: boolean;
 }
 
 export interface SetupStatus {
@@ -547,7 +559,8 @@ export async function setupStatus(input: {
         : slackKeys
           ? "Slack credentials are stored."
           : "The Slack channel is installed but has no bot token and signing secret.",
-      actions: [],
+      // Built without Slack: the owner adds the control-plane channel (manage 0.19).
+      actions: !slackChannel && onOwnHost(appRoot) && has("KYBERNESIS_AGENT_CREDENTIAL") ? ["slack.add"] : [],
       env: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
     });
   }
@@ -594,6 +607,26 @@ export async function setupStatus(input: {
             : `In Buzz (${hosts(relays)}).`,
       actions: ["buzz.join", "buzz.leave"],
       env: [],
+    });
+  } else if (onOwnHost(appRoot)) {
+    // Built without Buzz: the owner adds it (manage 0.19). It takes minutes, so
+    // the add runs on after its call answers and this reports how it went.
+    const job = saved.buzzAdd;
+    const running = Boolean(job?.startedAt && !job.error && job.pid === process.pid);
+    items.push({
+      id: "buzz",
+      required: false,
+      done: false,
+      detail: running
+        ? "Adding Buzz. This takes a few minutes."
+        : job?.error
+          ? job.error
+          : job?.startedAt
+            ? "Adding Buzz was interrupted, and the agent was left as it was. Try again."
+            : "Not in Buzz yet.",
+      actions: ["buzz.add"],
+      env: [],
+      ...(running ? { busy: true } : {}),
     });
   }
   if (deps.has("@kybernesis/payments")) {
@@ -744,18 +777,20 @@ export function createSetupActions(input: {
     exec("npx", ["--yes", linqCli, ...args], { cwd: appRoot, timeoutMs });
 
   /**
-   * Add a registry item to a running agent: `eve add`, then a rebuild.
+   * Add something to a running agent: an `npx` command (`eve add`, or the
+   * Kybernesis CLI), then a rebuild.
    *
    * A failed build would take the agent down at its next restart (systemd
-   * builds before it starts), so if anything fails the files the item wrote
-   * are removed, package.json, its lock and .env.local are put back, and it
-   * rebuilds as it was. Answers null when it is added and built; the caller
-   * then asks for the safe restart. One add at a time.
+   * builds before it starts), so if anything fails the files the command wrote
+   * under agent/ are removed, package.json, its lock and .env.local are put
+   * back, and it rebuilds as it was. Answers null when it is added and built;
+   * the caller then asks for the safe restart. One add at a time.
    */
-  const addItem = async (
-    item: string,
+  const addWith = async (
+    command: string[],
     isAdded: () => boolean,
     words: { busy: string; notAdded: string; notBuilt: string },
+    timeoutMs = 600_000,
   ): Promise<ActionResult | null> => {
     if (adding) return fail(409, words.busy);
     adding = true;
@@ -771,7 +806,7 @@ export function createSetupActions(input: {
         for (const [path, text] of kept) writeFileSync(path, text);
         await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
       };
-      const added = await exec("npx", ["--yes", "eve", "add", `@kybernesis/${item}`, "--yes"], { cwd: appRoot, timeoutMs: 600_000 });
+      const added = await exec("npx", command, { cwd: appRoot, timeoutMs });
       if (added.code !== 0 || !isAdded()) {
         await rollBack();
         return fail(502, words.notAdded);
@@ -786,6 +821,9 @@ export function createSetupActions(input: {
       adding = false;
     }
   };
+  const addItem = (item: string, isAdded: () => boolean, words: { busy: string; notAdded: string; notBuilt: string }) =>
+    addWith(["--yes", "eve", "add", `@kybernesis/${item}`, "--yes"], isAdded, words);
+  let buzzAdding = false;
 
   const endClaudeLogin = () => {
     if (!claudeLogin) return;
@@ -1060,6 +1098,88 @@ export function createSetupActions(input: {
             : "iMessage is added. Get it a number next.",
         },
       };
+    },
+
+    /**
+     * Add Slack to an agent that was built without it: the same channel a
+     * build writes (`kyb add channel slack`), which reads the agent's own Slack
+     * app from the control plane, then a rebuild and a safe restart. The app
+     * itself is made in the control plane; the client asks for it once this
+     * answers. Same rollback as iMessage.
+     */
+    "slack.add": async () => {
+      if (channelFiles(appRoot).some((f) => /slack/i.test(f))) return { status: 200, body: { ok: true, state: "done", note: "Slack is already added." } };
+      if (!onOwnHost(appRoot)) return fail(409, "Slack can be added here only to an agent on its own host.");
+      if (!(readEnvFile(envPath).get("KYBERNESIS_AGENT_CREDENTIAL") || process.env.KYBERNESIS_AGENT_CREDENTIAL)) {
+        return fail(409, "This agent is not registered with Kybernesis, so it has no Slack app to read. Contact support.");
+      }
+      const added = await addWith(
+        [...KYB, "add", "channel", "slack"],
+        () => channelUsesControlPlaneSlack(appRoot, channelFiles(appRoot)) && dependencies(appRoot).has("@kybernesis/multiplayer"),
+        {
+          busy: "Something is already being added to this agent. Try again in a minute.",
+          notAdded: "Slack could not be added, and the agent was left as it was. Try again later or contact support.",
+          notBuilt: "The agent did not build with Slack, so it was left as it was. Contact support.",
+        },
+      );
+      if (added) return added;
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: "added",
+          restart: restarter.request(),
+          note: "Slack is added. Its own Slack app is made next; the button to add it to your workspace appears here when it is ready.",
+        },
+      };
+    },
+
+    /**
+     * Add Buzz to an agent that was built without it: what a build does
+     * (`kyb add buzz`: the package, its extension, the agent's key, the Buzz
+     * CLI and the bridge's unit, left off), then a rebuild and a safe restart.
+     * Building the CLI takes minutes, so this answers 202 at once and the add
+     * runs on; the buzz item in /setup reports it (busy, then the Buzz card or
+     * the reason it failed). Same rollback as iMessage. Connecting a community
+     * is buzz.join, afterwards.
+     */
+    "buzz.add": async () => {
+      if (dependencies(appRoot).has("@kybernesis/buzz")) return { status: 200, body: { ok: true, state: "done", note: "Buzz is already added." } };
+      if (!onOwnHost(appRoot)) return fail(409, "Buzz runs a bridge beside the agent, so it can be added only to an agent on its own host.");
+      const started = { status: 202, body: { ok: true, state: "adding", note: "Adding Buzz. This takes a few minutes, then the agent restarts once." } };
+      if (buzzAdding) return started;
+      if (adding) return fail(409, "Something else is being added to this agent. Try again in a minute.");
+      buzzAdding = true;
+      writeSetupState(appRoot, (s) => {
+        s.buzzAdd = { startedAt: new Date((options.now ?? Date.now)()).toISOString(), pid: process.pid };
+      });
+      const job = addWith(
+        [...KYB, "add", "buzz"],
+        () => dependencies(appRoot).has("@kybernesis/buzz") && existsSync(join(appRoot, "agent", "extensions", "buzz.ts")),
+        {
+          busy: "Something else is being added to this agent. Try again in a minute.",
+          notAdded: "Buzz could not be added, and the agent was left as it was. Try again later or contact support.",
+          notBuilt: "The agent did not build with Buzz, so it was left as it was. Contact support.",
+        },
+        30 * 60_000,
+      );
+      void job
+        .then((failed) => {
+          writeSetupState(appRoot, (s) => {
+            if (failed) s.buzzAdd = { ...s.buzzAdd, error: String(failed.body.error) };
+            else delete s.buzzAdd;
+          });
+          if (!failed) restarter.request();
+        })
+        .catch(() => {
+          writeSetupState(appRoot, (s) => {
+            s.buzzAdd = { ...s.buzzAdd, error: "Buzz could not be added. Try again later or contact support." };
+          });
+        })
+        .finally(() => {
+          buzzAdding = false;
+        });
+      return started;
     },
 
     /** Step one of an iMessage line: Linq emails the owner a six-digit code. */
