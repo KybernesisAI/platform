@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { homedir } from "node:os";
 
 /**
  * The pure half of the setup routes: which env keys a client may write, how
@@ -30,8 +31,8 @@ export interface SetupEnvKey {
  * agent credential) are written by their own action or route, never here.
  */
 /** The routes `KYB_MODEL_REACH` selects between. Mirrors `EXE_MODEL_REACHES` in @kybernesis/exe. */
-type SwitchReach = "gateway" | "byok" | "claude-sub";
-const MODEL_REACHES: readonly SwitchReach[] = ["gateway", "byok", "claude-sub"];
+type SwitchReach = "gateway" | "byok" | "claude-sub" | "grok-sub" | "chatgpt-sub";
+const MODEL_REACHES: readonly SwitchReach[] = ["gateway", "byok", "claude-sub", "grok-sub", "chatgpt-sub"];
 /** The env variable exeModelReach reads. */
 export const MODEL_REACH_ENV = "KYB_MODEL_REACH";
 
@@ -50,8 +51,22 @@ export const SETUP_ENV_KEYS: Record<string, SetupEnvKey> = {
   KYB_MODEL_REACH: {
     item: "model",
     secret: false,
-    expects: "one of gateway, byok, claude-sub",
+    expects: "one of gateway, byok, claude-sub, grok-sub, chatgpt-sub",
     valid: (v) => MODEL_REACHES.includes(v as SwitchReach),
+  },
+  // The Grok subscription's model, a bare xAI id. Unset means grok-4.6.
+  GROK_MODEL: {
+    item: "model",
+    secret: false,
+    expects: "a bare xAI model id, e.g. grok-4.6",
+    valid: (v) => /^grok-[A-Za-z0-9._-]{1,64}$/.test(v),
+  },
+  // The ChatGPT subscription's model, a bare OpenAI id. Unset means eve's default.
+  CHATGPT_MODEL: {
+    item: "model",
+    secret: false,
+    expects: "a bare OpenAI model id, e.g. gpt-6-sol",
+    valid: (v) => /^(gpt|o)[A-Za-z0-9._-]{1,64}$/.test(v),
   },
   EXE_LLM_URL: {
     item: "model",
@@ -265,7 +280,15 @@ export function inFlightRuns(appRoot: string, now = Date.now()): number {
 }
 
 /** How the root agent reaches its model, read from the source it was built from. */
-export type AuthoredReach = "gateway" | "claude-sub" | "byok-anthropic" | "byok-openai" | "other" | "unknown";
+export type AuthoredReach =
+  | "gateway"
+  | "claude-sub"
+  | "grok-sub"
+  | "chatgpt-sub"
+  | "byok-anthropic"
+  | "byok-openai"
+  | "other"
+  | "unknown";
 
 /**
  * Classify `agent/agent.ts`, the same evidence `kyb doctor` reads first.
@@ -285,6 +308,8 @@ export function classifyAuthoredReach(source: string | null): AuthoredReach {
     found.add("byok-anthropic");
   }
   if (/from\s+["']eve\/models\/openai["']/.test(source) && /\bopenai\s*\(/.test(source)) found.add("byok-openai");
+  if (/\bgrokSubscription\s*\(/.test(source)) found.add("grok-sub");
+  if (/from\s+["']eve\/models\/openai["']/.test(source) && /\b(experimental_)?chatgpt\s*\(/.test(source)) found.add("chatgpt-sub");
   // Anything else (a gateway string id, a local-only subscription, two reaches
   // at once) is reported as other rather than guessed at.
   return found.size === 1 ? [...found][0] : "other";
@@ -317,9 +342,19 @@ export interface ModelReachState {
  * asked for. Kept here rather than imported: manage does not depend on exe,
  * and the rules are short. Change both together.
  */
-export function resolveSwitchedReach(source: string, get: (key: string) => string | undefined): ModelReachState | null {
+export function resolveSwitchedReach(
+  source: string,
+  get: (key: string) => string | undefined,
+  probes: { grok?: () => boolean; chatgpt?: () => boolean } = {},
+): ModelReachState | null {
   if (!/\bexeModelReach\s*\(/.test(source)) return null;
-  const authoredSwitch = /\breach\s*:\s*["'](gateway|byok|claude-sub)["']/.exec(source)?.[1] as SwitchReach | undefined;
+  const authoredSwitch = /\breach\s*:\s*["'](gateway|byok|claude-sub|grok-sub|chatgpt-sub)["']/.exec(source)?.[1] as
+    | SwitchReach
+    | undefined;
+  const grokReady = probes.grok ?? (() => grokSignedIn(get("GROK_AUTH_PATH")));
+  const chatgptReady = probes.chatgpt ?? (() => codexOnPath() && codexSignedIn(get("CODEX_HOME")));
+  // exeModelReach can only build chatgpt-sub when the agent hands it eve's chatgpt.
+  const passesChatgpt = /from\s+["']eve\/models\/openai["']/.test(source) && /\bchatgpt\s*[,}]/.test(source);
   const authoredModel = /\bmodel\s*:\s*["']([^"']+)["']/.exec(source)?.[1];
   if (!authoredSwitch) return { reach: "other", switchable: true };
 
@@ -327,6 +362,19 @@ export function resolveSwitchedReach(source: string, get: (key: string) => strin
   const asReach = (r: SwitchReach): { reach: AuthoredReach; problem?: string } => {
     if (r === "gateway") return { reach: "gateway" };
     if (r === "claude-sub") return { reach: "claude-sub" };
+    if (r === "grok-sub") {
+      return grokReady()
+        ? { reach: "grok-sub" }
+        : { reach: "grok-sub", problem: "grok-sub needs a Grok sign-in on this host (grok login), and there is none" };
+    }
+    if (r === "chatgpt-sub") {
+      if (!passesChatgpt) {
+        return { reach: "chatgpt-sub", problem: "chatgpt-sub needs an agent/agent.ts that passes chatgpt from eve/models/openai to exeModelReach" };
+      }
+      return chatgptReady()
+        ? { reach: "chatgpt-sub" }
+        : { reach: "chatgpt-sub", problem: "chatgpt-sub needs the codex CLI and a ChatGPT sign-in on this host (codex login --device-auth)" };
+    }
     const provider = /^(anthropic|openai)\//.exec(model)?.[1];
     if (!provider) {
       return { reach: "byok-openai", problem: `byok needs EXE_MODEL with an anthropic/ or openai/ prefix, and it is ${JSON.stringify(model)}` };
@@ -348,6 +396,39 @@ export function resolveSwitchedReach(source: string, get: (key: string) => strin
   return chosen.problem
     ? { ...base, reach: authored, fallback: { requested, reason: chosen.problem } }
     : { ...base, reach: chosen.reach };
+}
+
+/**
+ * Whether `grok login` has left a credential on this host: the same test
+ * `readGrokCredential` in @kybernesis/exe makes, by shape rather than by key
+ * name, at `GROK_AUTH_PATH` or ~/.grok/auth.json. Says nothing about whether it still authenticates; the CLI refreshes
+ * it in place.
+ */
+export function grokSignedIn(authPath?: string): boolean {
+  const path = authPath?.trim() || process.env.GROK_AUTH_PATH?.trim() || join(homedir(), ".grok", "auth.json");
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, { key?: unknown } | null>;
+    return Object.values(parsed).some((v) => typeof v?.key === "string" && v.key.length > 40);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `codex login` has left a ChatGPT sign-in in `$CODEX_HOME` (default ~/.codex). Mirrors @kybernesis/exe. */
+export function codexSignedIn(codexHome?: string): boolean {
+  const home = codexHome?.trim() || process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+  try {
+    const parsed = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as { tokens?: Record<string, unknown> | null };
+    const tokens = parsed.tokens;
+    return Boolean(tokens && typeof tokens === "object" && Object.values(tokens).some((v) => typeof v === "string" && v.length > 20));
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `codex` is on this process's PATH, which is where eve's chatgpt() looks for it. */
+export function codexOnPath(): boolean {
+  return (process.env.PATH ?? "").split(delimiter).some((dir) => Boolean(dir) && existsSync(join(dir, "codex")));
 }
 
 /** Read agent/agent.ts and resolve its reach against an env view (the file first, then the process). */

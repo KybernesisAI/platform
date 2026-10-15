@@ -21,9 +21,12 @@
 
 export { exeModel, type ExeModelOptions } from "./model.js";
 export {
+  CHATGPT_SUBSCRIPTION_DEFAULT_MODEL,
   CLAUDE_SUBSCRIPTION_DEFAULT_MODEL,
   EXE_DEFAULT_CONTEXT_WINDOW,
   EXE_MODEL_REACHES,
+  GROK_SUBSCRIPTION_CONTEXT_WINDOW,
+  GROK_SUBSCRIPTION_DEFAULT_MODEL,
   MODEL_REACH_ENV,
   exeModelReach,
   resolveExeReach,
@@ -31,7 +34,9 @@ export {
   type ExeModelReachOptions,
   type ExeReachDecision,
   type ExeReachDefaults,
+  type SubscriptionProbes,
 } from "./reach.js";
+export { codexAuthPath, codexOnPath, codexSignedIn } from "./chatgpt.js";
 export {
   grokSubscription,
   readGrokCredential,

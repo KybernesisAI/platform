@@ -589,3 +589,163 @@ test("linq contacts: list, add and remove on a shared line; a dedicated line has
   assert.equal(dedicated.body.shared, false);
   assert.equal((await actions.run({ action: "linq.contact.add", phone: "+12025559876" })).status, 409);
 });
+
+test("grok-sub: writable, and it runs only once Grok is signed in on the host", () => {
+  assert.equal(validateEnvUpdate({ set: { KYB_MODEL_REACH: "grok-sub" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { GROK_MODEL: "grok-4.6" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { GROK_MODEL: "xai/grok-4.6" } }).ok, false, "bare xAI ids only");
+  const env = (vars) => (k) => vars[k];
+  assert.deepEqual(resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "grok-sub" }), { grok: () => true }), {
+    switchable: true,
+    authored: "gateway",
+    reach: "grok-sub",
+  });
+  const out = resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "grok-sub" }), { grok: () => false });
+  assert.equal(out.reach, "gateway");
+  assert.match(out.fallback.reason, /grok login/);
+  assert.equal(classifyAuthoredReach(`model: grokSubscription({ model: "grok-4.6", createOpenAI })`), "grok-sub");
+});
+
+test("grok.login: link and code first, waiting while the device sign-in runs, done once the credential lands", async () => {
+  const dir = agentDir();
+  mkdirSync(join(dir, "agent"), { recursive: true });
+  writeFileSync(join(dir, "agent", "agent.ts"), SWITCH_SOURCE("gateway"));
+  const auth = join(dir, "grok-auth.json");
+  const previous = process.env.GROK_AUTH_PATH;
+  process.env.GROK_AUTH_PATH = auth;
+  try {
+    let startArgs;
+    // Stands in for `grok login`: prints a link and a code, then exits once the credential exists.
+    const fakeLogin = `
+      process.stdout.write("\\u001b[1mOpen https://accounts.x.ai/device?user_code=ABCD-EFGH.\\u001b[0m\\nCode: ABCD-EFGH\\n");
+      const fs = require("fs");
+      const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(auth)})) { clearInterval(t); process.exit(0); } }, 50);`;
+    const actions = createSetupActions({
+      appRoot: dir,
+      options: {
+        exec: async () => ({ code: 0, stdout: "/usr/local/bin/grok\n", stderr: "" }),
+        start: (file, args) => {
+          startArgs = [file, ...args];
+          return spawn(process.execPath, ["-e", fakeLogin]);
+        },
+      },
+      restarter: { request() {} },
+    });
+    const first = await actions.run({ action: "grok.login" });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.state, "device");
+    assert.equal(first.body.url, "https://accounts.x.ai/device?user_code=ABCD-EFGH");
+    assert.equal(first.body.code, "ABCD-EFGH");
+    assert.deepEqual(startArgs, ["/usr/local/bin/grok", "login"]);
+
+    assert.equal((await actions.run({ action: "grok.login", login: "wrong" })).status, 409);
+    assert.equal((await actions.run({ action: "grok.login", login: first.body.login })).body.state, "waiting");
+
+    writeFileSync(auth, JSON.stringify({ "https://auth.x.ai::c": { key: "k".repeat(64) } }));
+    await new Promise((r) => setTimeout(r, 300));
+    const done = await actions.run({ action: "grok.login", login: first.body.login });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.equal(done.body.state, "done");
+    assert.equal(done.body.agentUsesSubscription, false);
+    assert.match(done.body.note, /KYB_MODEL_REACH=grok-sub/);
+    assert.doesNotMatch(JSON.stringify(done.body), /kkkk/);
+
+    const routes = setupRoutes({
+      prefix: "/eve/v1/kyb",
+      appRoot: dir,
+      options: { launch: () => {}, claudeProxyPort: 1 },
+      writable: () => ({ ok: true }),
+      authorize: async () => null,
+    });
+    writeFileSync(join(dir, ".env.local"), "KYB_MODEL_REACH=grok-sub\n");
+    const get = routes.find((r) => r.method === "GET" && r.path === "/eve/v1/kyb/setup").handler;
+    const status = await (await get(new Request("http://agent/eve/v1/kyb/setup"))).json();
+    assert.equal(status.model.grok, "signed-in");
+    assert.equal(status.model.reach, "grok-sub");
+    const model = status.items.find((i) => i.id === "model");
+    assert.equal(model.done, true);
+    assert.ok(model.actions.includes("grok.login"));
+    assert.doesNotMatch(JSON.stringify(status), /kkkk/);
+  } finally {
+    if (previous === undefined) delete process.env.GROK_AUTH_PATH;
+    else process.env.GROK_AUTH_PATH = previous;
+  }
+});
+
+const CHATGPT_SOURCE = `import { chatgpt } from "eve/models/openai";
+import { exeModelReach } from "@kybernesis/exe";
+export default defineAgent({
+  ...exeModelReach({ reach: "gateway", model: "openai/gpt-6-sol", createOpenAI, createAnthropic, chatgpt }),
+});`;
+
+test("chatgpt-sub: writable, needs an agent that passes chatgpt, and runs only once Codex is signed in", () => {
+  assert.equal(validateEnvUpdate({ set: { KYB_MODEL_REACH: "chatgpt-sub" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { CHATGPT_MODEL: "gpt-6-sol" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { CHATGPT_MODEL: "openai/gpt-6-sol" } }).ok, false);
+  const env = (vars) => (k) => vars[k];
+  const on = env({ KYB_MODEL_REACH: "chatgpt-sub" });
+  assert.equal(resolveSwitchedReach(CHATGPT_SOURCE, on, { chatgpt: () => true }).reach, "chatgpt-sub");
+  const notSignedIn = resolveSwitchedReach(CHATGPT_SOURCE, on, { chatgpt: () => false });
+  assert.equal(notSignedIn.reach, "gateway");
+  assert.match(notSignedIn.fallback.reason, /codex login --device-auth/);
+  const oldScaffold = resolveSwitchedReach(SWITCH_SOURCE("gateway"), on, { chatgpt: () => true });
+  assert.equal(oldScaffold.reach, "gateway");
+  assert.match(oldScaffold.fallback.reason, /passes chatgpt/);
+  assert.equal(classifyAuthoredReach(`import { chatgpt } from "eve/models/openai";\nmodel: chatgpt()`), "chatgpt-sub");
+});
+
+test("chatgpt.login: installs codex when missing, runs the device sign-in, done once Codex has a token", async () => {
+  const dir = agentDir();
+  mkdirSync(join(dir, "agent"), { recursive: true });
+  writeFileSync(join(dir, "agent", "agent.ts"), CHATGPT_SOURCE);
+  const codexHome = mkdtempSync(join(tmpdir(), "codex-home-"));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  try {
+    const execs = [];
+    let installed = false;
+    let startArgs;
+    // The shape codex 0.162.1 prints for --device-auth.
+    const fakeLogin = `
+      process.stdout.write("Follow these steps to sign in with ChatGPT using device code authorization:\\n\\n1. Open this link in your browser and sign in to your account\\n   \\u001b[94mhttps://auth.openai.com/codex/device\\u001b[0m\\n\\n2. Enter this one-time code \\u001b[90m(expires in 15 minutes)\\u001b[0m\\n   \\u001b[94mQ7RT-9KZPM\\u001b[0m\\n");
+      const fs = require("fs");
+      const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(join(codexHome, "auth.json"))})) { clearInterval(t); process.exit(0); } }, 50);`;
+    const actions = createSetupActions({
+      appRoot: dir,
+      options: {
+        exec: async (file, args) => {
+          execs.push([file, ...args]);
+          if (file === "sudo") {
+            installed = true;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          return installed ? { code: 0, stdout: "/usr/bin/codex\n", stderr: "" } : { code: 1, stdout: "", stderr: "" };
+        },
+        start: (file, args) => {
+          startArgs = [file, ...args];
+          return spawn(process.execPath, ["-e", fakeLogin]);
+        },
+      },
+      restarter: { request() {} },
+    });
+    const first = await actions.run({ action: "chatgpt.login" });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.ok(execs.some((c) => c.join(" ") === "sudo -n npm install -g @openai/codex@0.162.1"));
+    assert.deepEqual(startArgs, ["/usr/bin/codex", "login", "--device-auth"]);
+    assert.equal(first.body.url, "https://auth.openai.com/codex/device");
+    assert.equal(first.body.code, "Q7RT-9KZPM");
+    assert.match(first.body.instructions, /one-time code/);
+    assert.equal((await actions.run({ action: "chatgpt.login", login: first.body.login })).body.state, "waiting");
+
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: { access_token: "t".repeat(40) } }));
+    await new Promise((r) => setTimeout(r, 300));
+    const done = await actions.run({ action: "chatgpt.login", login: first.body.login });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.equal(done.body.state, "done");
+    assert.match(done.body.note, /KYB_MODEL_REACH=chatgpt-sub/);
+    assert.doesNotMatch(JSON.stringify(done.body), /tttt/);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+  }
+});

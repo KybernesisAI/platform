@@ -9,6 +9,8 @@ import {
   MODEL_REACH_ENV,
   readModelReach,
   readEnvFile,
+  grokSignedIn,
+  codexSignedIn,
   validateEnvUpdate,
   writeEnvFile,
   type AuthoredReach,
@@ -82,6 +84,12 @@ const LINQ_CLI = "@linqapp/cli@2.7.0";
 const LINQ_EVENTS = "message.received,reaction.added,reaction.removed";
 const RESTART_DELAY_MS = 20_000;
 const CLAUDE_LOGIN_TTL_MS = 10 * 60_000;
+/** Both vendors' device codes last fifteen minutes. */
+const DEVICE_LOGIN_TTL_MS = 15 * 60_000;
+/** xAI's own installer for the Grok CLI; it lands in ~/.grok/bin. */
+const GROK_INSTALL = "curl -fsSL https://x.ai/cli/install.sh | bash";
+/** The Codex CLI, pinned: its device sign-in is what chatgpt.login reads. */
+const CODEX_CLI = "@openai/codex@0.162.1";
 
 /**
  * Commands run through a login shell, so `npx` and `docker` resolve the way
@@ -379,6 +387,10 @@ export interface SetupStatus {
     gateway: { model: string | null; url: string };
     byok: { anthropic: boolean; openai: boolean };
     subscription: "signed-in" | "signed-out" | "not-running";
+    /** Whether `grok login` has left a credential on this host (the `grok.login` action). */
+    grok: "signed-in" | "signed-out";
+    /** Whether `codex login` has left a ChatGPT sign-in on this host (the `chatgpt.login` action). */
+    chatgpt: "signed-in" | "signed-out";
   };
   restart: RestartState & { configured: boolean; owed: boolean };
   items: SetupItem[];
@@ -399,6 +411,8 @@ export interface BuzzStatus {
 const REACH_WORDS: Record<AuthoredReach, string> = {
   gateway: "the exe LLM gateway",
   "claude-sub": "a Claude subscription",
+  "grok-sub": "a Grok subscription",
+  "chatgpt-sub": "a ChatGPT subscription",
   "byok-anthropic": "its own Anthropic key",
   "byok-openai": "its own OpenAI key",
   other: "a model set in agent/agent.ts",
@@ -425,13 +439,19 @@ export async function setupStatus(input: {
   const port = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   const subscription = await subscriptionState(port);
   const gatewayModel = env.get("EXE_MODEL") ?? process.env.EXE_MODEL ?? null;
+  const grok = grokSignedIn(get("GROK_AUTH_PATH")) ? "signed-in" : "signed-out";
+  const chatgpt = codexSignedIn(get("CODEX_HOME")) ? "signed-in" : "signed-out";
 
   const modelDone =
     reach === "gateway"
       ? Boolean(gatewayModel)
       : reach === "claude-sub"
         ? subscription === "signed-in"
-        : reach === "byok-anthropic"
+        : reach === "grok-sub"
+          ? grok === "signed-in"
+          : reach === "chatgpt-sub"
+            ? chatgpt === "signed-in"
+            : reach === "byok-anthropic"
           ? has("ANTHROPIC_API_KEY")
           : reach === "byok-openai"
             ? has("OPENAI_API_KEY")
@@ -444,7 +464,9 @@ export async function setupStatus(input: {
       ? `Reaches its model through ${REACH_WORDS[reach]}${reach === "gateway" && gatewayModel ? ` (${gatewayModel})` : ""}.`
       : reach === "claude-sub"
         ? "Set to a Claude subscription that is not signed in."
-        : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`) + fallbackNote;
+        : reach === "grok-sub" || reach === "chatgpt-sub"
+          ? `Set to ${REACH_WORDS[reach]} that is not signed in.`
+          : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`) + fallbackNote;
 
   const items: SetupItem[] = [
     {
@@ -462,8 +484,16 @@ export async function setupStatus(input: {
       required: true,
       done: modelDone,
       detail: modelDetail,
-      actions: ["claude.login"],
-      env: [...(reachState.switchable ? [MODEL_REACH_ENV] : []), "EXE_MODEL", "EXE_LLM_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+      actions: ["claude.login", "grok.login", "chatgpt.login"],
+      env: [
+        ...(reachState.switchable ? [MODEL_REACH_ENV] : []),
+        "EXE_MODEL",
+        "EXE_LLM_URL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GROK_MODEL",
+        "CHATGPT_MODEL",
+      ],
     },
   ];
   if (deps.has("@kybernesis/computer")) {
@@ -592,6 +622,8 @@ export async function setupStatus(input: {
       gateway: { model: gatewayModel, url: env.get("EXE_LLM_URL") ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1" },
       byok: { anthropic: has("ANTHROPIC_API_KEY"), openai: has("OPENAI_API_KEY") },
       subscription,
+      grok,
+      chatgpt,
     },
     restart: { ...input.restarter.state(), configured: Boolean(input.restartCommand), owed: owed || input.restarter.pending },
     items,
@@ -694,6 +726,7 @@ export function createSetupActions(input: {
   const proxyName = options.claudeProxyName ?? process.env.CLAUDE_PROXY_NAME ?? `${basename(appRoot)}-claude-subscription`;
   const proxyPort = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   let claudeLogin: PendingClaudeLogin | undefined;
+  const deviceLogins = new Map<"grok" | "chatgpt", PendingClaudeLogin>();
   let addingWallet = false;
 
   const linq = (args: string[], timeoutMs = 120_000) =>
@@ -704,6 +737,139 @@ export function createSetupActions(input: {
     clearTimeout(claudeLogin.timer);
     if (claudeLogin.child.exitCode === null) claudeLogin.child.kill("SIGKILL");
     claudeLogin = undefined;
+  };
+
+  const onPath = async (command: string): Promise<string | null> => {
+    const found = await exec("sh", ["-c", `command -v ${command}`], { cwd: appRoot, timeoutMs: 10_000 });
+    const path = found.code === 0 ? found.stdout.trim().split("\n").pop()?.trim() : "";
+    return path ? path : null;
+  };
+
+  /**
+   * A vendor CLI's device sign-in, as calls a client can make.
+   *
+   * The first call starts the CLI and returns its link and one-time code (and
+   * the CLI's own words, in case the code is shaped differently from what is
+   * parsed here). The CLI keeps running, polls the vendor and exits once the
+   * person approves. Later calls with the same `login` answer waiting, then
+   * done when the credential is on disk. One pending sign-in per vendor.
+   */
+  const deviceLogin = async (
+    body: Record<string, unknown>,
+    spec: {
+      name: "grok" | "chatgpt";
+      label: string;
+      reach: "grok-sub" | "chatgpt-sub";
+      signedIn: () => boolean;
+      binary: () => Promise<string | null>;
+      args: string[];
+      prompt: string;
+    },
+  ): Promise<ActionResult> => {
+    const action = `${spec.name}.login`;
+    const loginId = typeof body.login === "string" ? body.login : "";
+    const end = () => {
+      const pending = deviceLogins.get(spec.name);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      if (pending.child.exitCode === null) pending.child.kill("SIGKILL");
+      deviceLogins.delete(spec.name);
+    };
+    const finished = (): ActionResult => {
+      const fileEnv = readEnvFile(join(appRoot, ".env.local"));
+      const reachState = readModelReach(appRoot, (key) => fileEnv.get(key) || process.env[key]);
+      const reach = reachState.reach;
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: "done",
+          agentUsesSubscription: reach === spec.reach,
+          ...(reach === spec.reach
+            ? {}
+            : {
+                note:
+                  `${spec.label} is signed in, but this agent still reaches its model through ${REACH_WORDS[reach]}.` +
+                  (reachState.switchable ? ` Set ${MODEL_REACH_ENV}=${spec.reach} to use it.` : ""),
+              }),
+        },
+      };
+    };
+
+    if (loginId) {
+      const pending = deviceLogins.get(spec.name);
+      if (!pending || loginId !== pending.id) return fail(409, `No ${spec.label} sign-in is waiting. Start again with ${action}.`);
+      if (pending.child.exitCode === null && !spec.signedIn()) {
+        return { status: 200, body: { ok: true, state: "waiting", login: pending.id } };
+      }
+      const exitCode = pending.child.exitCode;
+      end();
+      if (!spec.signedIn() || (exitCode !== null && exitCode !== 0)) {
+        return fail(400, `${spec.label} did not finish the sign-in. Start again with ${action}.`);
+      }
+      return finished();
+    }
+
+    const binary = await spec.binary();
+    if (!binary) return fail(502, `The ${spec.label} CLI is not on this host and did not install.`);
+
+    end();
+    const child = start(binary, spec.args, { cwd: appRoot });
+    type Seen = { url: string; code?: string; instructions: string };
+    const seen = await new Promise<Seen | "exited" | null>((resolve) => {
+      let text = "";
+      let done = false;
+      const read = (): Seen | null => {
+        const url = /https:\/\/[^\s"'<>)]+/.exec(text)?.[0]?.replace(/[.,;:]+$/, "");
+        const code =
+          /\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b/.exec(text)?.[0] ??
+          /code[^\n]*\n\s*([A-Za-z0-9-]{6,16})\s*(?:\n|$)/i.exec(text)?.[1];
+        if (!url) return null;
+        const instructions = text.trim().split("\n").map((l) => l.trim()).filter(Boolean).join("\n").slice(-600);
+        return { url, ...(code ? { code } : {}), instructions };
+      };
+      const finish = (value: Seen | "exited" | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const onData = (d: Buffer) => {
+        // Colour codes would split a link or a code from the text around it.
+        text = (text + d.toString().replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")).slice(-8000);
+        const found = read();
+        if (!found) return;
+        // The code can follow the link in a later write; give it a moment.
+        if (found.code) finish(found);
+        else setTimeout(() => finish(read()), 1500);
+      };
+      const timer = setTimeout(() => finish(read()), 30_000);
+      child.stdout.on("data", onData);
+      child.stderr.on("data", onData);
+      child.once("exit", (c) => finish(c === 0 && spec.signedIn() ? "exited" : null));
+    });
+    if (seen === "exited") return finished();
+    if (!seen) {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      return fail(502, `${spec.label} did not start a sign-in on this host.`);
+    }
+    const id = randomBytes(12).toString("base64url");
+    const timer = setTimeout(end, DEVICE_LOGIN_TTL_MS);
+    timer.unref?.();
+    deviceLogins.set(spec.name, { id, child, timer });
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        state: "device",
+        url: seen.url,
+        ...(seen.code ? { code: seen.code } : {}),
+        instructions: seen.instructions,
+        login: id,
+        expiresInSeconds: DEVICE_LOGIN_TTL_MS / 1000,
+        prompt: spec.prompt,
+      },
+    };
   };
 
   const actions: Record<string, (body: Record<string, unknown>) => Promise<ActionResult>> = {
@@ -1195,6 +1361,58 @@ export function createSetupActions(input: {
         },
       };
     },
+    /**
+     * Sign a Grok subscription (SuperGrok, X Premium+) in on this host.
+     *
+     * `grok login` is a device sign-in: it prints a link and a code, the person
+     * approves on x.ai in any browser, and the CLI, still running here, writes
+     * ~/.grok/auth.json and exits. xAI's CLI is installed first if the host
+     * has none. The credential is read per request, so nothing restarts here;
+     * moving the agent onto it is `KYB_MODEL_REACH=grok-sub` through POST /setup/env.
+     */
+    "grok.login": (body) =>
+      deviceLogin(body, {
+        name: "grok",
+        label: "Grok",
+        reach: "grok-sub",
+        signedIn: () => grokSignedIn(),
+        binary: async () => {
+          const installed = join(homedir(), ".grok", "bin", "grok");
+          if (existsSync(installed)) return installed;
+          const found = await onPath("grok");
+          if (found) return found;
+          const install = await exec("bash", ["-c", GROK_INSTALL], { cwd: appRoot, timeoutMs: 300_000 });
+          return install.code === 0 && existsSync(installed) ? installed : null;
+        },
+        args: ["login"],
+        prompt: "Open the link, sign in with the account that holds the Grok subscription, and approve the code.",
+      }),
+
+    /**
+     * Sign a ChatGPT subscription in on this host, for eve's `chatgpt()`.
+     *
+     * eve asks `codex app-server` for the token whenever `codex` is on the
+     * service's PATH, so the CLI is installed globally (npm's prefix on an exe
+     * VM is /usr, hence sudo) and `codex login --device-auth` prints a link
+     * and a one-time code, waits for the approval on chatgpt.com, writes
+     * ~/.codex/auth.json and exits. Codex refreshes it from then on. Moving the
+     * agent onto it is `KYB_MODEL_REACH=chatgpt-sub` through POST /setup/env.
+     */
+    "chatgpt.login": (body) =>
+      deviceLogin(body, {
+        name: "chatgpt",
+        label: "ChatGPT",
+        reach: "chatgpt-sub",
+        signedIn: () => codexSignedIn(),
+        binary: async () => {
+          const found = await onPath("codex");
+          if (found) return found;
+          const install = await exec("sudo", ["-n", "npm", "install", "-g", CODEX_CLI], { cwd: appRoot, timeoutMs: 300_000 });
+          return install.code === 0 ? onPath("codex") : null;
+        },
+        args: ["login", "--device-auth"],
+        prompt: "Open the link, sign in with the ChatGPT account that holds the subscription, and enter the code.",
+      }),
   };
 
   return {

@@ -70,9 +70,10 @@ test("subscription templates route root, departments, and builder through the sw
   for (const source of sources) {
     assert.match(source, /import \{ createAnthropic \} from "@ai-sdk\/anthropic"/);
     assert.match(source, /import \{ createOpenAI \} from "@ai-sdk\/openai"/);
+    assert.match(source, /import \{ chatgpt \} from "eve\/models\/openai"/);
     assert.match(
       source,
-      /\.\.\.exeModelReach\(\{ reach: "claude-sub", model: "anthropic\/claude-opus-5", createOpenAI, createAnthropic \}\)/,
+      /\.\.\.exeModelReach\(\{ reach: "claude-sub", model: "anthropic\/claude-opus-5", createOpenAI, createAnthropic, chatgpt \}\)/,
     );
     assert.doesNotMatch(source, /modelContextWindowTokens/, "the switch declares the window that matches its route");
     assert.doesNotMatch(source, /process\.env/, "the switch reads its own env");
@@ -82,7 +83,7 @@ test("subscription templates route root, departments, and builder through the sw
 test("ordinary exe templates take the switch with today's gateway default; Vercel is unchanged", () => {
   const exe = hostAgentTs("exe", defaultExe);
   const vercel = hostAgentTs("vercel", { reach: "default", model: "openai/gpt-5.4" });
-  assert.match(exe, /\.\.\.exeModelReach\(\{ reach: "gateway", model: "anthropic\/claude-sonnet-5", createOpenAI, createAnthropic \}\)/);
+  assert.match(exe, /\.\.\.exeModelReach\(\{ reach: "gateway", model: "anthropic\/claude-sonnet-5", createOpenAI, createAnthropic, chatgpt \}\)/);
   assert.match(exe, /KYB_MODEL_REACH/);
   assert.match(exe, /limits: \{ maxInputTokensPerSession: false \}/);
   assert.match(vercel, /model: "openai\/gpt-5.4"/);
@@ -94,6 +95,8 @@ test("doctor follows the switch: KYB_MODEL_REACH when it can run, else the autho
   const routing = { kind: "external", provider: "openai" };
   assert.deepEqual(classifyModelReach(src, routing), { kind: "exe" });
   assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "claude-sub" }), { kind: "claude-sub" });
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "chatgpt-sub", CODEX_HOME: "/nonexistent" }), { kind: "exe" });
+  assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "grok-sub", GROK_AUTH_PATH: "/nonexistent" }), { kind: "exe" });
   assert.deepEqual(classifyModelReach(src, routing, { KYB_MODEL_REACH: "byok", ANTHROPIC_API_KEY: "sk-ant-x" }), {
     kind: "direct-provider",
     provider: "anthropic",

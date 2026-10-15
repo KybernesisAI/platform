@@ -87,6 +87,8 @@ function modelReachCheck(reach: ReturnType<typeof classifyModelReach>): Check {
       return { verdict: "pass", label: "Model reach: exe (host LLM integration)" };
     case "grok-sub":
       return { verdict: "pass", label: "Model reach: grok-sub (direct xAI subscription credential)" };
+    case "chatgpt-sub":
+      return { verdict: "pass", label: "Model reach: chatgpt-sub (ChatGPT subscription through Codex)" };
     case "gateway":
       return { verdict: "pass", label: "Model reach: gateway" };
     case "direct-provider":
