@@ -486,9 +486,10 @@ function agentModelTemplate(host: HostKind, config: ModelScaffoldConfig): AgentM
   if (config.reach === "claude-sub" && host !== "exe") throw new Error("claude-sub model templates require an exe host");
   if (host === "exe") {
     /**
-     * Every exe agent takes the runtime switch: KYB_MODEL_REACH (gateway, byok
-     * or claude-sub) picks the route at boot, so the setup route can change it
-     * by writing env. `reach` here is what runs while it is unset, which is
+     * Every exe agent takes the runtime switch: KYB_MODEL_REACH (gateway, byok,
+     * claude-sub, grok-sub or chatgpt-sub) picks the route at boot, so the
+     * setup route can change it by writing env. `chatgpt` is passed so the
+     * ChatGPT subscription is one of those routes; nothing calls it until then. `reach` here is what runs while it is unset, which is
      * exactly what this scaffold used to hard-code.
      *
      * The subscription scaffold still names a gateway id, used only if the
@@ -502,8 +503,9 @@ function agentModelTemplate(host: HostKind, config: ModelScaffoldConfig): AgentM
       imports:
         `import { createAnthropic } from "@ai-sdk/anthropic";\n` +
         `import { createOpenAI } from "@ai-sdk/openai";\n` +
+        `import { chatgpt } from "eve/models/openai";\n` +
         `import { exeModelReach } from "@kybernesis/exe";\n\n`,
-      fields: `  ...exeModelReach({ ${defaults}, createOpenAI, createAnthropic }),\n`,
+      fields: `  ...exeModelReach({ ${defaults}, createOpenAI, createAnthropic, chatgpt }),\n`,
     };
   }
   return { imports: "", fields: `  model: ${JSON.stringify(config.model)},\n` };
@@ -516,7 +518,7 @@ export function hostAgentTs(host: HostKind, model: ModelScaffoldConfig): string 
     : (model.reach === "claude-sub"
         ? `// By default a Claude subscription through the loopback OAuth proxy — no API key or exe gateway.\n`
         : `// By default the exe.dev LLM integration — no provider key on the host; exe\n// injects the credential (managed gateway, your API key, or a connected\n// ChatGPT subscription) server-side.\n`) +
-      `// KYB_MODEL_REACH (gateway | byok | claude-sub) switches the route at boot\n// without editing this file; EXE_MODEL names the gateway or BYOK model.\n`;
+      `// KYB_MODEL_REACH (gateway | byok | claude-sub | grok-sub | chatgpt-sub) switches the route at boot\n// without editing this file; EXE_MODEL names the gateway or BYOK model.\n`;
   return `import { defineAgent } from "eve";
 ${rendered.imports}${comment}export default defineAgent({
 ${rendered.fields}${host === "exe" ? `  // This long-lived self-hosted process has no metered platform session ceiling.\n  limits: { maxInputTokensPerSession: false },\n` : ""}});

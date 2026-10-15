@@ -169,7 +169,7 @@ test("grok-sub: signed in, it runs the Grok subscription with GROK_MODEL and a 4
 test("grok-sub without a sign-in boots on the authored route and says why", () => {
   const lines = [];
   const p = providers();
-  const decision = resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "grok-sub", EXE_MODEL: "openai/gpt-6-sol" }, () => false);
+  const decision = resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "grok-sub", EXE_MODEL: "openai/gpt-6-sol" }, { grok: () => "grok-sub needs a Grok sign-in on this host (grok login), and there is none" });
   assert.equal(decision.reach, "gateway");
   assert.equal(decision.model, "openai/gpt-6-sol");
   assert.match(decision.fallback.reason, /grok login/);
@@ -177,7 +177,7 @@ test("grok-sub without a sign-in boots on the authored route and says why", () =
     ...gatewayDefault,
     ...p,
     env: { KYB_MODEL_REACH: "grok-sub", EXE_MODEL: "openai/gpt-6-sol" },
-    grokSignedIn: () => false,
+    probes: { grok: () => "no grok login here" },
     log: (line, fallback) => lines.push([line, fallback]),
   });
   assert.equal(lines.length, 1);
@@ -186,8 +186,58 @@ test("grok-sub without a sign-in boots on the authored route and says why", () =
 });
 
 test("grok-sub decision defaults to grok-4.6 when GROK_MODEL is unset", () => {
-  assert.deepEqual(resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "grok-sub" }, () => true), {
+  assert.deepEqual(resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "grok-sub" }, { grok: () => true }), {
     reach: "grok-sub",
     model: "grok-4.6",
   });
+});
+
+test("chatgpt-sub: with chatgpt passed and a sign-in, it runs eve's chatgpt() with the bare CHATGPT_MODEL", () => {
+  const p = providers();
+  const asked = [];
+  const built = exeModelReach({
+    ...gatewayDefault,
+    ...p,
+    ...quiet,
+    chatgpt: (id) => (asked.push(id), { modelId: id, kind: "chatgpt" }),
+    probes: { chatgpt: () => true },
+    env: { KYB_MODEL_REACH: "chatgpt-sub", CHATGPT_MODEL: "openai/gpt-6-sol" },
+  });
+  assert.deepEqual(asked, ["gpt-6-sol"]);
+  assert.equal(built.model.kind, "chatgpt");
+  assert.equal(built.modelContextWindowTokens, 200_000);
+  assert.equal(p.made.length, 0);
+});
+
+test("chatgpt-sub falls back when the agent does not pass chatgpt, or the host has no codex sign-in", () => {
+  const lines = [];
+  const p = providers();
+  exeModelReach({
+    ...gatewayDefault,
+    ...p,
+    env: { KYB_MODEL_REACH: "chatgpt-sub", EXE_MODEL: "openai/gpt-6-sol" },
+    probes: { chatgpt: () => true },
+    log: (line) => lines.push(line),
+  });
+  assert.match(lines[0], /passes chatgpt from eve\/models\/openai/);
+  const noLogin = resolveExeReach(
+    gatewayDefault,
+    { KYB_MODEL_REACH: "chatgpt-sub", EXE_MODEL: "openai/gpt-6-sol", PATH: "/nonexistent", CODEX_HOME: "/nonexistent" },
+  );
+  assert.equal(noLogin.reach, "gateway");
+  assert.match(noLogin.fallback.reason, /codex CLI/);
+  assert.deepEqual(resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "chatgpt-sub" }, { chatgpt: () => true }), {
+    reach: "chatgpt-sub",
+    model: "gpt-5.6-luna-fast",
+  });
+});
+
+test("codex sign-in is read from CODEX_HOME and only a ChatGPT token counts", async () => {
+  const { codexSignedIn } = await import("../dist/index.js");
+  const dir = mkdtempSync(join(tmpdir(), "codex-"));
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ OPENAI_API_KEY: null, tokens: null }));
+  assert.equal(codexSignedIn({ CODEX_HOME: dir }), false);
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: "a".repeat(40), refresh_token: "r".repeat(40) } }));
+  assert.equal(codexSignedIn({ CODEX_HOME: dir }), true);
+  rmSync(dir, { recursive: true, force: true });
 });

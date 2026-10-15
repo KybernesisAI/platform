@@ -22,6 +22,7 @@ export type DoctorModelReach =
   | { kind: "claude-sub" }
   | { kind: "exe" }
   | { kind: "grok-sub" }
+  | { kind: "chatgpt-sub" }
   | { kind: "gateway" }
   | { kind: "direct-provider"; provider?: string }
   | { kind: "unresolved"; reason: string };
@@ -73,7 +74,7 @@ export function resolveModelScaffold(options: {
  */
 export function switchedModelReach(source: string, env: Record<string, string | undefined>): DoctorModelReach | null {
   if (!/\bexeModelReach\s*\(/.test(source)) return null;
-  const authored = /\breach\s*:\s*["'](gateway|byok|claude-sub|grok-sub)["']/.exec(source)?.[1];
+  const authored = /\breach\s*:\s*["'](gateway|byok|claude-sub|grok-sub|chatgpt-sub)["']/.exec(source)?.[1];
   if (!authored) return { kind: "unresolved", reason: "exeModelReach has no literal default reach to read" };
   const model = env.EXE_MODEL ?? /\bmodel\s*:\s*["']([^"']+)["']/.exec(source)?.[1] ?? "";
   const route = (reach: string): DoctorModelReach | null => {
@@ -83,6 +84,12 @@ export function switchedModelReach(source: string, env: Record<string, string | 
     if (reach === "grok-sub") {
       const auth = env.GROK_AUTH_PATH?.trim() || join(homedir(), ".grok", "auth.json");
       return existsSync(auth) ? { kind: "grok-sub" } : null;
+    }
+    // Needs eve's chatgpt passed in, and a Codex sign-in on the host.
+    if (reach === "chatgpt-sub") {
+      if (!/\bchatgpt\s*[,}]/.test(source)) return null;
+      const auth = join(env.CODEX_HOME?.trim() || join(homedir(), ".codex"), "auth.json");
+      return existsSync(auth) ? { kind: "chatgpt-sub" } : null;
     }
     if (reach !== "byok") return null;
     const provider = /^(anthropic|openai)\//.exec(model)?.[1];
