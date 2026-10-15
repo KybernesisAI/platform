@@ -228,7 +228,7 @@ test("chatgpt-sub falls back when the agent does not pass chatgpt, or the host h
   assert.match(noLogin.fallback.reason, /codex CLI/);
   assert.deepEqual(resolveExeReach(gatewayDefault, { KYB_MODEL_REACH: "chatgpt-sub" }, { chatgpt: () => true }), {
     reach: "chatgpt-sub",
-    model: "gpt-5.6-luna-fast",
+    model: "gpt-6-sol",
   });
 });
 
