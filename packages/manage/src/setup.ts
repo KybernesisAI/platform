@@ -1369,18 +1369,34 @@ export function createSetupActions(input: {
         };
       }
 
-      const running = await exec("docker", ["ps", "-q", "-f", `name=^${proxyName}$`], { cwd: appRoot, timeoutMs: 20_000 });
-      if (!running.stdout.trim()) {
-        const script = [join(appRoot, "scripts", "claude-subscription.sh"), join(appRoot, "node_modules", "@kybernesis", "exe", "scripts", "claude-subscription.sh")].find(
-          (p) => existsSync(p),
-        );
-        if (!script) return fail(409, "This agent has no Claude subscription proxy installed.");
+      // `up` runs even when the proxy is already running: it moves a container
+      // still on the stock image (which renames the web search tool, failing
+      // every turn that searches) onto the patched one, keeping the sign-in.
+      // The patched image takes minutes to build the first time, longer than a
+      // request should hang, so `prepare` starts that build in the background
+      // and the caller is told to come back (exit 3). A host that cannot build
+      // it (exit 1) still gets the stock proxy rather than no sign-in at all.
+      const script = [join(appRoot, "scripts", "claude-subscription.sh"), join(appRoot, "node_modules", "@kybernesis", "exe", "scripts", "claude-subscription.sh")].find(
+        (p) => existsSync(p),
+      );
+      const proxyEnv = { CLAUDE_PROXY_NAME: proxyName, CLAUDE_PROXY_PORT: String(proxyPort) };
+      if (script) {
+        const prepare = await exec("bash", [script, "prepare"], { cwd: appRoot, timeoutMs: 30_000, env: proxyEnv });
+        if (prepare.code === 3) {
+          return {
+            status: 200,
+            body: { ok: true, state: "preparing", note: "Getting the Claude sign-in ready on this agent. The first time takes a few minutes." },
+          };
+        }
         const up = await exec("bash", [script, "up"], {
           cwd: appRoot,
           timeoutMs: 300_000,
-          env: { CLAUDE_PROXY_NAME: proxyName, CLAUDE_PROXY_PORT: String(proxyPort) },
+          env: prepare.code === 0 ? proxyEnv : { ...proxyEnv, CLAUDE_PROXY_NO_BUILD: "1" },
         });
         if (up.code !== 0) return fail(502, "The subscription proxy did not start on this host.");
+      } else {
+        const running = await exec("docker", ["ps", "-q", "-f", `name=^${proxyName}$`], { cwd: appRoot, timeoutMs: 20_000 });
+        if (!running.stdout.trim()) return fail(409, "This agent has no Claude subscription proxy installed.");
       }
 
       endClaudeLogin();

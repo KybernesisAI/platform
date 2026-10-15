@@ -66,6 +66,21 @@ pick_image() {
 
 die() { echo "  ✗ $*" >&2; exit 1; }
 
+# Build the patched image when the host has none and nobody chose an image.
+# Done by `up` itself because the agents that need it cannot be picked out in
+# advance: an agent built on the gateway and switched to a Claude plan later
+# from the app had no build step that made it, and its first sign-in started
+# the stock image, failing every turn that searched the web. Never fatal: a
+# host that cannot build (no git, no network) still gets the stock image and
+# the warning below.
+ensure_patched() {
+  [ -n "${CLAUDE_PROXY_IMAGE:-}" ] && return 0
+  [ -n "${CLAUDE_PROXY_NO_BUILD:-}" ] && return 0
+  docker image inspect "$PATCHED_TAG" >/dev/null 2>&1 && return 0
+  echo "  … building the patched proxy image (once per host, a few minutes)"
+  "$0" build-patched || echo "  ! could not build the patched image; falling back to the stock one"
+}
+
 require_docker() {
   command -v docker >/dev/null 2>&1 || die "docker is not installed on this host."
 }
@@ -129,6 +144,15 @@ case "${1:-}" in
   up)
     require_docker
     docker volume create "$VOLUME" >/dev/null
+    ensure_patched
+    # A container already on the stock image (from before this script built the
+    # patched one) is moved over: same volume, so the sign-in carries across.
+    if [ -n "$(docker ps -aq -f "name=^${NAME}$")" ] \
+      && [ "$(docker inspect -f '{{.Config.Image}}' "$NAME")" = "$STOCK_IMAGE" ] \
+      && [ "$(pick_image)" != "$STOCK_IMAGE" ]; then
+      docker rm -f "$NAME" >/dev/null
+      echo "  ✓ removed ${NAME}, which ran the stock image (credentials kept in ${VOLUME})"
+    fi
     if [ -n "$(docker ps -aq -f "name=^${NAME}$")" ]; then
       docker start "$NAME" >/dev/null
       echo "  ✓ ${NAME} started (existing container, credentials preserved)"
@@ -298,6 +322,29 @@ case "${1:-}" in
     echo "    Use it:  CLAUDE_PROXY_IMAGE=${TAG} bash scripts/claude-subscription.sh up"
     ;;
 
+  prepare)
+    # For callers that cannot wait minutes (the app's sign-in, a provisioning
+    # step): exit 0 when `up` will start the patched image (or an image was
+    # chosen), 3 while the patched build is running in the background (started
+    # here if needed), 1 when this host cannot build it (`up` then falls back
+    # to the stock image and says so).
+    require_docker
+    [ -n "${CLAUDE_PROXY_IMAGE:-}" ] && exit 0
+    docker image inspect "$PATCHED_TAG" >/dev/null 2>&1 && exit 0
+    command -v git >/dev/null 2>&1 || exit 1
+    LOG="${HOME}/.cache/kybernesis/claude-proxy-build.log"
+    LOCK="${HOME}/.cache/kybernesis/claude-proxy-build.pid"
+    mkdir -p "$(dirname "$LOG")"
+    if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null; then exit 3; fi
+    # A finished build that left no image failed: report that for an hour
+    # rather than starting the same failing build on every call.
+    if [ -f "$LOCK" ] && grep -q "✗" "$LOG" 2>/dev/null && [ -n "$(find "$LOG" -mmin -60 2>/dev/null)" ]; then exit 1; fi
+    nohup "$0" build-patched > "$LOG" 2>&1 &
+    echo $! > "$LOCK"
+    echo "  … building the patched proxy image in the background (log: ${LOG})"
+    exit 3
+    ;;
+
   recreate)
     # Same image, same credential volume, fresh container — for a changed
     # CLAUDE_PROXY_CLI_VERSION (or port). The sign-in lives in the volume, so
@@ -320,7 +367,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "usage: bash scripts/claude-subscription.sh {up|login|reload|status|down|build-patched}"
+    echo "usage: bash scripts/claude-subscription.sh {up|login|reload|status|down|build-patched|prepare|recreate}"
     exit 1
     ;;
 esac

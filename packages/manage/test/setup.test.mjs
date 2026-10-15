@@ -475,6 +475,47 @@ test("claude.login: link first, then the code on stdin; done only when the API a
   api.close();
 });
 
+test("claude.login: runs up even when the proxy runs, and waits while the patched image builds", async () => {
+  const dir = agentDir();
+  writeFileSync(join(dir, "package.json"), "{}");
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  writeFileSync(join(dir, "scripts", "claude-subscription.sh"), "");
+  let prepareCode = 3;
+  const execs = [];
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      claudeProxyName: "a-claude-subscription",
+      claudeProxyPort: 1,
+      exec: async (file, args, opts) => {
+        execs.push({ argv: [file, ...args], env: opts.env });
+        if (file === "bash" && args[1] === "prepare") return { code: prepareCode, stdout: "", stderr: "" };
+        return { code: 0, stdout: file === "docker" && args[0] === "ps" ? "abc123\n" : "", stderr: "" };
+      },
+      start: () => spawn(process.execPath, ["-e", 'process.stdout.write("https://claude.com/cai/oauth/authorize?x=1\\n"); setTimeout(() => {}, 5000)']),
+    },
+    restarter: { request() {} },
+  });
+
+  const waiting = await actions.run({ action: "claude.login" });
+  assert.equal(waiting.status, 200);
+  assert.equal(waiting.body.state, "preparing");
+  assert.ok(!execs.some((c) => c.argv[2] === "up"), "no up while the image builds");
+
+  prepareCode = 0;
+  const ready = await actions.run({ action: "claude.login" });
+  assert.equal(ready.body.state, "code");
+  const up = execs.find((c) => c.argv[2] === "up");
+  assert.ok(up, "up runs although the container is already running");
+  assert.equal(up.env.CLAUDE_PROXY_NO_BUILD, undefined);
+
+  execs.length = 0;
+  prepareCode = 1;
+  const fallback = await actions.run({ action: "claude.login" });
+  assert.equal(fallback.body.state, "code");
+  assert.equal(execs.find((c) => c.argv[2] === "up").env.CLAUDE_PROXY_NO_BUILD, "1", "a host that cannot build gets the stock proxy without a second try");
+});
+
 test("routes: every setup route asks the manage-level check, and env never echoes a value", async () => {
   const dir = agentDir();
   const routes = setupRoutes({

@@ -172,11 +172,16 @@ failure is silent, presents as a model outage, and sends people to Anthropic's
 status page instead of to a browser. Reading the expiry needs root on the host;
 without it that line is omitted rather than guessed.
 
-**If the agent uses web search, build the patched image first:**
+**`up` builds and uses the patched image on its own** (once per host, a few
+minutes), and moves a container still on the stock image over to it, keeping
+the sign-in. `prepare` starts that build in the background for callers that
+cannot wait (it exits 0 when ready, 3 while building, 1 when the host cannot
+build); the app's Claude sign-in uses it. `CLAUDE_PROXY_NO_BUILD=1` skips the
+build, and `CLAUDE_PROXY_IMAGE` still picks an image outright. By hand:
 
 ```bash
 bash scripts/claude-subscription.sh build-patched
-CLAUDE_PROXY_IMAGE=claude-auth-proxy:a62318f-provider-tools bash scripts/claude-subscription.sh up
+CLAUDE_PROXY_IMAGE=claude-auth-proxy:a62318f-provider-tools bash scripts/claude-subscription.sh recreate
 ```
 
 The published image renames provider-defined tools, which Anthropic validates
