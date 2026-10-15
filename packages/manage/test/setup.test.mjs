@@ -589,3 +589,85 @@ test("linq contacts: list, add and remove on a shared line; a dedicated line has
   assert.equal(dedicated.body.shared, false);
   assert.equal((await actions.run({ action: "linq.contact.add", phone: "+12025559876" })).status, 409);
 });
+
+test("grok-sub: writable, and it runs only once Grok is signed in on the host", () => {
+  assert.equal(validateEnvUpdate({ set: { KYB_MODEL_REACH: "grok-sub" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { GROK_MODEL: "grok-4.6" } }).ok, true);
+  assert.equal(validateEnvUpdate({ set: { GROK_MODEL: "xai/grok-4.6" } }).ok, false, "bare xAI ids only");
+  const env = (vars) => (k) => vars[k];
+  assert.deepEqual(resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "grok-sub" }), () => true), {
+    switchable: true,
+    authored: "gateway",
+    reach: "grok-sub",
+  });
+  const out = resolveSwitchedReach(SWITCH_SOURCE("gateway"), env({ KYB_MODEL_REACH: "grok-sub" }), () => false);
+  assert.equal(out.reach, "gateway");
+  assert.match(out.fallback.reason, /grok login/);
+  assert.equal(classifyAuthoredReach(`model: grokSubscription({ model: "grok-4.6", createOpenAI })`), "grok-sub");
+});
+
+test("grok.login: link and code first, waiting while the device sign-in runs, done once the credential lands", async () => {
+  const dir = agentDir();
+  mkdirSync(join(dir, "agent"), { recursive: true });
+  writeFileSync(join(dir, "agent", "agent.ts"), SWITCH_SOURCE("gateway"));
+  const auth = join(dir, "grok-auth.json");
+  const previous = process.env.GROK_AUTH_PATH;
+  process.env.GROK_AUTH_PATH = auth;
+  try {
+    let startArgs;
+    // Stands in for `grok login`: prints a link and a code, then exits once the credential exists.
+    const fakeLogin = `
+      process.stdout.write("\\u001b[1mOpen https://accounts.x.ai/device?user_code=ABCD-EFGH.\\u001b[0m\\nCode: ABCD-EFGH\\n");
+      const fs = require("fs");
+      const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(auth)})) { clearInterval(t); process.exit(0); } }, 50);`;
+    const actions = createSetupActions({
+      appRoot: dir,
+      options: {
+        exec: async () => ({ code: 0, stdout: "/usr/local/bin/grok\n", stderr: "" }),
+        start: (file, args) => {
+          startArgs = [file, ...args];
+          return spawn(process.execPath, ["-e", fakeLogin]);
+        },
+      },
+      restarter: { request() {} },
+    });
+    const first = await actions.run({ action: "grok.login" });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.state, "device");
+    assert.equal(first.body.url, "https://accounts.x.ai/device?user_code=ABCD-EFGH");
+    assert.equal(first.body.code, "ABCD-EFGH");
+    assert.deepEqual(startArgs, ["/usr/local/bin/grok", "login"]);
+
+    assert.equal((await actions.run({ action: "grok.login", login: "wrong" })).status, 409);
+    assert.equal((await actions.run({ action: "grok.login", login: first.body.login })).body.state, "waiting");
+
+    writeFileSync(auth, JSON.stringify({ "https://auth.x.ai::c": { key: "k".repeat(64) } }));
+    await new Promise((r) => setTimeout(r, 300));
+    const done = await actions.run({ action: "grok.login", login: first.body.login });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.equal(done.body.state, "done");
+    assert.equal(done.body.agentUsesSubscription, false);
+    assert.match(done.body.note, /KYB_MODEL_REACH=grok-sub/);
+    assert.doesNotMatch(JSON.stringify(done.body), /kkkk/);
+
+    const routes = setupRoutes({
+      prefix: "/eve/v1/kyb",
+      appRoot: dir,
+      options: { launch: () => {}, claudeProxyPort: 1 },
+      writable: () => ({ ok: true }),
+      authorize: async () => null,
+    });
+    writeFileSync(join(dir, ".env.local"), "KYB_MODEL_REACH=grok-sub\n");
+    const get = routes.find((r) => r.method === "GET" && r.path === "/eve/v1/kyb/setup").handler;
+    const status = await (await get(new Request("http://agent/eve/v1/kyb/setup"))).json();
+    assert.equal(status.model.grok, "signed-in");
+    assert.equal(status.model.reach, "grok-sub");
+    const model = status.items.find((i) => i.id === "model");
+    assert.equal(model.done, true);
+    assert.ok(model.actions.includes("grok.login"));
+    assert.doesNotMatch(JSON.stringify(status), /kkkk/);
+  } finally {
+    if (previous === undefined) delete process.env.GROK_AUTH_PATH;
+    else process.env.GROK_AUTH_PATH = previous;
+  }
+});

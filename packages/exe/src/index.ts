@@ -24,6 +24,8 @@ export {
   CLAUDE_SUBSCRIPTION_DEFAULT_MODEL,
   EXE_DEFAULT_CONTEXT_WINDOW,
   EXE_MODEL_REACHES,
+  GROK_SUBSCRIPTION_CONTEXT_WINDOW,
+  GROK_SUBSCRIPTION_DEFAULT_MODEL,
   MODEL_REACH_ENV,
   exeModelReach,
   resolveExeReach,
@@ -31,6 +33,7 @@ export {
   type ExeModelReachOptions,
   type ExeReachDecision,
   type ExeReachDefaults,
+  type GrokSignedIn,
 } from "./reach.js";
 export {
   grokSubscription,

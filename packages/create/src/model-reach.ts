@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { HostKind } from "./templates.js";
 
 export const MODEL_REACH_ENV = "KYB_MODEL_REACH";
@@ -70,12 +73,17 @@ export function resolveModelScaffold(options: {
  */
 export function switchedModelReach(source: string, env: Record<string, string | undefined>): DoctorModelReach | null {
   if (!/\bexeModelReach\s*\(/.test(source)) return null;
-  const authored = /\breach\s*:\s*["'](gateway|byok|claude-sub)["']/.exec(source)?.[1];
+  const authored = /\breach\s*:\s*["'](gateway|byok|claude-sub|grok-sub)["']/.exec(source)?.[1];
   if (!authored) return { kind: "unresolved", reason: "exeModelReach has no literal default reach to read" };
   const model = env.EXE_MODEL ?? /\bmodel\s*:\s*["']([^"']+)["']/.exec(source)?.[1] ?? "";
   const route = (reach: string): DoctorModelReach | null => {
     if (reach === "gateway") return { kind: "exe" };
     if (reach === "claude-sub") return { kind: "claude-sub" };
+    // Runs only once `grok login` has left a credential; the agent falls back otherwise.
+    if (reach === "grok-sub") {
+      const auth = env.GROK_AUTH_PATH?.trim() || join(homedir(), ".grok", "auth.json");
+      return existsSync(auth) ? { kind: "grok-sub" } : null;
+    }
     if (reach !== "byok") return null;
     const provider = /^(anthropic|openai)\//.exec(model)?.[1];
     if (!provider) return null;

@@ -9,6 +9,7 @@ import {
   MODEL_REACH_ENV,
   readModelReach,
   readEnvFile,
+  grokSignedIn,
   validateEnvUpdate,
   writeEnvFile,
   type AuthoredReach,
@@ -82,6 +83,9 @@ const LINQ_CLI = "@linqapp/cli@2.7.0";
 const LINQ_EVENTS = "message.received,reaction.added,reaction.removed";
 const RESTART_DELAY_MS = 20_000;
 const CLAUDE_LOGIN_TTL_MS = 10 * 60_000;
+const GROK_LOGIN_TTL_MS = 15 * 60_000;
+/** xAI's own installer for the Grok CLI; it lands in ~/.grok/bin. */
+const GROK_INSTALL = "curl -fsSL https://x.ai/cli/install.sh | bash";
 
 /**
  * Commands run through a login shell, so `npx` and `docker` resolve the way
@@ -379,6 +383,8 @@ export interface SetupStatus {
     gateway: { model: string | null; url: string };
     byok: { anthropic: boolean; openai: boolean };
     subscription: "signed-in" | "signed-out" | "not-running";
+    /** Whether `grok login` has left a credential on this host (the `grok.login` action). */
+    grok: "signed-in" | "signed-out";
   };
   restart: RestartState & { configured: boolean; owed: boolean };
   items: SetupItem[];
@@ -399,6 +405,7 @@ export interface BuzzStatus {
 const REACH_WORDS: Record<AuthoredReach, string> = {
   gateway: "the exe LLM gateway",
   "claude-sub": "a Claude subscription",
+  "grok-sub": "a Grok subscription",
   "byok-anthropic": "its own Anthropic key",
   "byok-openai": "its own OpenAI key",
   other: "a model set in agent/agent.ts",
@@ -425,13 +432,16 @@ export async function setupStatus(input: {
   const port = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   const subscription = await subscriptionState(port);
   const gatewayModel = env.get("EXE_MODEL") ?? process.env.EXE_MODEL ?? null;
+  const grok = grokSignedIn(get("GROK_AUTH_PATH")) ? "signed-in" : "signed-out";
 
   const modelDone =
     reach === "gateway"
       ? Boolean(gatewayModel)
       : reach === "claude-sub"
         ? subscription === "signed-in"
-        : reach === "byok-anthropic"
+        : reach === "grok-sub"
+          ? grok === "signed-in"
+          : reach === "byok-anthropic"
           ? has("ANTHROPIC_API_KEY")
           : reach === "byok-openai"
             ? has("OPENAI_API_KEY")
@@ -444,7 +454,9 @@ export async function setupStatus(input: {
       ? `Reaches its model through ${REACH_WORDS[reach]}${reach === "gateway" && gatewayModel ? ` (${gatewayModel})` : ""}.`
       : reach === "claude-sub"
         ? "Set to a Claude subscription that is not signed in."
-        : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`) + fallbackNote;
+        : reach === "grok-sub"
+          ? "Set to a Grok subscription that is not signed in."
+          : `Set to ${REACH_WORDS[reach]}, which is not configured yet.`) + fallbackNote;
 
   const items: SetupItem[] = [
     {
@@ -462,8 +474,15 @@ export async function setupStatus(input: {
       required: true,
       done: modelDone,
       detail: modelDetail,
-      actions: ["claude.login"],
-      env: [...(reachState.switchable ? [MODEL_REACH_ENV] : []), "EXE_MODEL", "EXE_LLM_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+      actions: ["claude.login", "grok.login"],
+      env: [
+        ...(reachState.switchable ? [MODEL_REACH_ENV] : []),
+        "EXE_MODEL",
+        "EXE_LLM_URL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GROK_MODEL",
+      ],
     },
   ];
   if (deps.has("@kybernesis/computer")) {
@@ -592,6 +611,7 @@ export async function setupStatus(input: {
       gateway: { model: gatewayModel, url: env.get("EXE_LLM_URL") ?? process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1" },
       byok: { anthropic: has("ANTHROPIC_API_KEY"), openai: has("OPENAI_API_KEY") },
       subscription,
+      grok,
     },
     restart: { ...input.restarter.state(), configured: Boolean(input.restartCommand), owed: owed || input.restarter.pending },
     items,
@@ -694,10 +714,18 @@ export function createSetupActions(input: {
   const proxyName = options.claudeProxyName ?? process.env.CLAUDE_PROXY_NAME ?? `${basename(appRoot)}-claude-subscription`;
   const proxyPort = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   let claudeLogin: PendingClaudeLogin | undefined;
+  let grokLogin: PendingClaudeLogin | undefined;
   let addingWallet = false;
 
   const linq = (args: string[], timeoutMs = 120_000) =>
     exec("npx", ["--yes", linqCli, ...args], { cwd: appRoot, timeoutMs });
+
+  const endGrokLogin = () => {
+    if (!grokLogin) return;
+    clearTimeout(grokLogin.timer);
+    if (grokLogin.child.exitCode === null) grokLogin.child.kill("SIGKILL");
+    grokLogin = undefined;
+  };
 
   const endClaudeLogin = () => {
     if (!claudeLogin) return;
@@ -1192,6 +1220,119 @@ export function createSetupActions(input: {
           login: id,
           expiresInSeconds: CLAUDE_LOGIN_TTL_MS / 1000,
           prompt: "Open the link, choose your Claude account, then paste the code it shows.",
+        },
+      };
+    },
+    /**
+     * Sign a Grok subscription (SuperGrok, X Premium+) in on this host.
+     *
+     * `grok login` is a device sign-in: it prints a link and a code, the person
+     * approves on x.ai in any browser, and the CLI, still running here, writes
+     * ~/.grok/auth.json and exits. The first call starts it (installing xAI's
+     * CLI first if this host has none) and returns the link; later calls with
+     * the same `login` report waiting or done. The credential is read per
+     * request, so nothing restarts here; moving the agent onto it is
+     * `KYB_MODEL_REACH=grok-sub` through POST /setup/env.
+     */
+    "grok.login": async (body) => {
+      const loginId = typeof body.login === "string" ? body.login : "";
+      const finished = () => {
+        const fileEnv = readEnvFile(join(appRoot, ".env.local"));
+        const reachState = readModelReach(appRoot, (key) => fileEnv.get(key) || process.env[key]);
+        const reach = reachState.reach;
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            state: "done",
+            agentUsesSubscription: reach === "grok-sub",
+            ...(reach === "grok-sub"
+              ? {}
+              : {
+                  note:
+                    `Grok is signed in, but this agent still reaches its model through ${REACH_WORDS[reach]}.` +
+                    (reachState.switchable ? ` Set ${MODEL_REACH_ENV}=grok-sub to use it.` : ""),
+                }),
+          },
+        };
+      };
+
+      if (loginId) {
+        if (!grokLogin || loginId !== grokLogin.id) {
+          return fail(409, "No Grok sign-in is waiting. Start again with grok.login.");
+        }
+        if (grokLogin.child.exitCode === null && !grokSignedIn()) {
+          return { status: 200, body: { ok: true, state: "waiting", login: grokLogin.id } };
+        }
+        const exitCode = grokLogin.child.exitCode;
+        endGrokLogin();
+        if (!grokSignedIn() || (exitCode !== null && exitCode !== 0)) {
+          return fail(400, "Grok did not finish the sign-in. Start again with grok.login.");
+        }
+        return finished();
+      }
+
+      const installed = join(homedir(), ".grok", "bin", "grok");
+      let binary = existsSync(installed) ? installed : "";
+      if (!binary) {
+        const onPath = await exec("sh", ["-c", "command -v grok"], { cwd: appRoot, timeoutMs: 10_000 });
+        binary = onPath.code === 0 ? onPath.stdout.trim() : "";
+      }
+      if (!binary) {
+        const install = await exec("bash", ["-c", GROK_INSTALL], { cwd: appRoot, timeoutMs: 300_000 });
+        if (install.code !== 0 || !existsSync(installed)) return fail(502, "The Grok CLI did not install on this host.");
+        binary = installed;
+      }
+
+      endGrokLogin();
+      const child = start(binary, ["login"], { cwd: appRoot });
+      const seen = await new Promise<{ url: string; code?: string } | "exited" | null>((resolve) => {
+        let text = "";
+        let done = false;
+        const read = () => {
+          const url = /https:\/\/[^\s"'<>)]+/.exec(text)?.[0]?.replace(/[.,;:]+$/, "");
+          const code = /\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b/.exec(text)?.[0];
+          return url ? { url, ...(code ? { code } : {}) } : null;
+        };
+        const finish = (value: { url: string; code?: string } | "exited" | null) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const onData = (d: Buffer) => {
+          // Colour codes would split a link or a code from the text around it.
+          text = (text + d.toString().replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")).slice(-8000);
+          const found = read();
+          if (!found) return;
+          // The code can follow the link in a later write; give it a moment.
+          if (found.code) finish(found);
+          else setTimeout(() => finish(read()), 1500);
+        };
+        const timer = setTimeout(() => finish(read()), 30_000);
+        child.stdout.on("data", onData);
+        child.stderr.on("data", onData);
+        child.once("exit", (c) => finish(c === 0 && grokSignedIn() ? "exited" : null));
+      });
+      if (seen === "exited") return finished();
+      if (!seen) {
+        if (child.exitCode === null) child.kill("SIGKILL");
+        return fail(502, "Grok did not start a sign-in on this host.");
+      }
+      const id = randomBytes(12).toString("base64url");
+      const timer = setTimeout(endGrokLogin, GROK_LOGIN_TTL_MS);
+      timer.unref?.();
+      grokLogin = { id, child, timer };
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: "device",
+          url: seen.url,
+          ...(seen.code ? { code: seen.code } : {}),
+          login: id,
+          expiresInSeconds: GROK_LOGIN_TTL_MS / 1000,
+          prompt: "Open the link, sign in with the account that holds the Grok subscription, and approve the code.",
         },
       };
     },
