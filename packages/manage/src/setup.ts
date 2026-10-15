@@ -283,6 +283,13 @@ function channelFiles(appRoot: string): string[] {
   }
 }
 
+const isLinqChannelFile = (f: string) => /^linq\.(ts|js|mjs)$/.test(f);
+
+/** True when the agent has the iMessage channel that answers its Linq line. */
+function hasLinqChannel(appRoot: string): boolean {
+  return channelFiles(appRoot).some(isLinqChannelFile);
+}
+
 /** True when the Slack channel reads its app from the control plane rather than env. */
 function channelUsesControlPlaneSlack(appRoot: string, channels: string[]): boolean {
   const file = channels.find((f) => /slack/i.test(f));
@@ -545,17 +552,21 @@ export async function setupStatus(input: {
     });
   }
   const linqKeys = has("LINQ_API_KEY") && has("LINQ_WEBHOOK_SECRET");
-  const linqChannel = channels.some((f) => /^linq\.(ts|js|mjs)$/.test(f));
+  const linqChannel = channels.some(isLinqChannelFile);
   items.push({
     id: "imessage",
     required: false,
     done: linqKeys && linqChannel,
     detail: linqKeys
-      ? `Has an iMessage line${saved.linq?.number ? ` (${saved.linq.number})` : ""}${linqChannel ? "." : ", but no Linq channel is installed to answer it."}`
+      ? `Has an iMessage line${saved.linq?.number ? ` (${saved.linq.number})` : ""}${linqChannel ? "." : ", but this agent cannot answer it until iMessage is added."}`
       : saved.linq?.email
         ? `Waiting for the code emailed to ${saved.linq.email}.`
         : "No iMessage line yet.",
-    actions: linqKeys ? ["linq.contacts", "linq.contact.add", "linq.contact.remove"] : ["linq.signup", "linq.verify"],
+    actions: [
+      ...(linqKeys ? ["linq.contacts", "linq.contact.add", "linq.contact.remove"] : ["linq.signup", "linq.verify"]),
+      // Built without the channel: the owner adds it (manage 0.18).
+      ...(linqChannel ? [] : ["linq.add"]),
+    ],
     env: [],
   });
   let buzz: BuzzStatus | undefined;
@@ -727,10 +738,54 @@ export function createSetupActions(input: {
   const proxyPort = options.claudeProxyPort ?? (Number(process.env.CLAUDE_PROXY_PORT) || 3333);
   let claudeLogin: PendingClaudeLogin | undefined;
   const deviceLogins = new Map<"grok" | "chatgpt", PendingClaudeLogin>();
-  let addingWallet = false;
+  let adding = false;
 
   const linq = (args: string[], timeoutMs = 120_000) =>
     exec("npx", ["--yes", linqCli, ...args], { cwd: appRoot, timeoutMs });
+
+  /**
+   * Add a registry item to a running agent: `eve add`, then a rebuild.
+   *
+   * A failed build would take the agent down at its next restart (systemd
+   * builds before it starts), so if anything fails the files the item wrote
+   * are removed, package.json, its lock and .env.local are put back, and it
+   * rebuilds as it was. Answers null when it is added and built; the caller
+   * then asks for the safe restart. One add at a time.
+   */
+  const addItem = async (
+    item: string,
+    isAdded: () => boolean,
+    words: { busy: string; notAdded: string; notBuilt: string },
+  ): Promise<ActionResult | null> => {
+    if (adding) return fail(409, words.busy);
+    adding = true;
+    try {
+      const kept = new Map<string, string>();
+      for (const file of ["package.json", "package-lock.json", ".env.local"]) {
+        const path = join(appRoot, file);
+        if (existsSync(path)) kept.set(path, readFileSync(path, "utf8"));
+      }
+      const before = new Set(listFiles(join(appRoot, "agent")));
+      const rollBack = async () => {
+        for (const file of listFiles(join(appRoot, "agent"))) if (!before.has(file)) rmSync(file, { force: true });
+        for (const [path, text] of kept) writeFileSync(path, text);
+        await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+      };
+      const added = await exec("npx", ["--yes", "eve", "add", `@kybernesis/${item}`, "--yes"], { cwd: appRoot, timeoutMs: 600_000 });
+      if (added.code !== 0 || !isAdded()) {
+        await rollBack();
+        return fail(502, words.notAdded);
+      }
+      const built = await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+      if (built.code !== 0) {
+        await rollBack();
+        return fail(502, words.notBuilt);
+      }
+      return null;
+    } finally {
+      adding = false;
+    }
+  };
 
   const endClaudeLogin = () => {
     if (!claudeLogin) return;
@@ -966,38 +1021,45 @@ export function createSetupActions(input: {
       const deps = dependencies(appRoot);
       if (deps.has("@kybernesis/payments")) return { status: 200, body: { ok: true, state: "done", note: "The wallet is already added." } };
       if (!deps.has("@kybernesis/computer")) return fail(409, "The wallet pays on the agent's own computer, and this agent has none.");
-      if (addingWallet) return fail(409, "The wallet is already being added. Check again in a minute.");
-      addingWallet = true;
-      try {
-        const kept = new Map<string, string>();
-        for (const file of ["package.json", "package-lock.json"]) {
-          const path = join(appRoot, file);
-          if (existsSync(path)) kept.set(path, readFileSync(path, "utf8"));
-        }
-        const before = new Set(listFiles(join(appRoot, "agent")));
-        const rollBack = async () => {
-          for (const file of listFiles(join(appRoot, "agent"))) if (!before.has(file)) rmSync(file, { force: true });
-          for (const [path, text] of kept) writeFileSync(path, text);
-          await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
-        };
-        const added = await exec("npx", ["--yes", "eve", "add", "@kybernesis/payments", "--yes"], { cwd: appRoot, timeoutMs: 600_000 });
-        if (added.code !== 0 || !dependencies(appRoot).has("@kybernesis/payments")) {
-          await rollBack();
-          return fail(502, "The wallet could not be added, and the agent was left as it was. Try again later or contact support.");
-        }
-        const built = await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
-        if (built.code !== 0) {
-          await rollBack();
-          return fail(502, "The agent did not build with the wallet, so it was left as it was. Contact support.");
-        }
-        const restart = restarter.request();
-        return {
-          status: 200,
-          body: { ok: true, state: "added", restart, note: "The wallet is added. Sign in to Link once the agent has restarted." },
-        };
-      } finally {
-        addingWallet = false;
-      }
+      const added = await addItem("payments", () => dependencies(appRoot).has("@kybernesis/payments"), {
+        busy: "The wallet is already being added. Check again in a minute.",
+        notAdded: "The wallet could not be added, and the agent was left as it was. Try again later or contact support.",
+        notBuilt: "The agent did not build with the wallet, so it was left as it was. Contact support.",
+      });
+      if (added) return added;
+      return {
+        status: 200,
+        body: { ok: true, state: "added", restart: restarter.request(), note: "The wallet is added. Sign in to Link once the agent has restarted." },
+      };
+    },
+
+    /**
+     * Add the iMessage channel to an agent that was built without it: the
+     * linq registry item (agent/channels/linq.ts), a rebuild, and a safe
+     * restart. The line itself (linq.signup, linq.verify) can come before or
+     * after; its webhook already points at /eve/v1/linq, which answers once the
+     * channel is live. Same rollback as the wallet.
+     */
+    "linq.add": async () => {
+      if (hasLinqChannel(appRoot)) return { status: 200, body: { ok: true, state: "done", note: "iMessage is already added." } };
+      const added = await addItem("linq", () => hasLinqChannel(appRoot), {
+        busy: "iMessage is already being added. Check again in a minute.",
+        notAdded: "iMessage could not be added, and the agent was left as it was. Try again later or contact support.",
+        notBuilt: "The agent did not build with iMessage, so it was left as it was. Contact support.",
+      });
+      if (added) return added;
+      const line = Boolean(readEnvFile(envPath).get("LINQ_API_KEY"));
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: "added",
+          restart: restarter.request(),
+          note: line
+            ? "iMessage is added. It answers texts to its line once the agent has restarted."
+            : "iMessage is added. Get it a number next.",
+        },
+      };
     },
 
     /** Step one of an iMessage line: Linq emails the owner a six-digit code. */
@@ -1079,7 +1141,7 @@ export function createSetupActions(input: {
           at: new Date((options.now ?? Date.now)()).toISOString(),
         };
       });
-      const channel = channelFiles(appRoot).some((f) => /^linq\.(ts|js|mjs)$/.test(f));
+      const channel = hasLinqChannel(appRoot);
       return {
         status: 200,
         body: {
@@ -1087,7 +1149,7 @@ export function createSetupActions(input: {
           number,
           channelInstalled: channel,
           restart: restarter.request(),
-          ...(channel ? {} : { note: "The line is ready, but this agent has no Linq channel installed to answer it." }),
+          ...(channel ? {} : { note: "The line is ready. Add iMessage to this agent so it can answer it." }),
         },
       };
     },
