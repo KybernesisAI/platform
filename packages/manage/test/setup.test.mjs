@@ -318,6 +318,81 @@ test("wallet.add: refused without a computer to pay on", async () => {
   assert.equal((await actions.run({ action: "wallet.add" })).status, 409);
 });
 
+test("linq.add: adds the iMessage channel to an agent built without it, keeps the line, restarts after a good build", async () => {
+  const dir = agentDir({ "@kybernesis/exe": "^0.17.0" });
+  mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+  writeFileSync(join(dir, "agent", "channels", "kyb.ts"), "export default 1;");
+  writeFileSync(join(dir, ".env.local"), 'LINQ_API_KEY="k"\nLINQ_WEBHOOK_SECRET="whsec_x"\n');
+  const calls = [];
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    agent: "planner",
+    options: {
+      exec: async (file, args) => {
+        calls.push([file, ...args].join(" "));
+        if (args.includes("add")) writeFileSync(join(dir, "agent", "channels", "linq.ts"), "export default 2;");
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => (restarts++, { restart: "waiting", inFlight: 1, note: "waiting" }) },
+  });
+  const { status, body } = await actions.run({ action: "linq.add" });
+  assert.equal(status, 200);
+  assert.equal(body.state, "added");
+  assert.match(body.note, /answers texts/);
+  assert.deepEqual(calls, ["npx --yes eve add @kybernesis/linq --yes", "npx eve build"]);
+  assert.equal(restarts, 1);
+  assert.equal((await actions.run({ action: "linq.add" })).body.state, "done", "a second press changes nothing");
+  assert.equal(calls.length, 2);
+});
+
+test("linq.add: a failed build removes the channel, puts env back and never restarts", async () => {
+  const dir = agentDir({});
+  writeFileSync(join(dir, ".env.local"), 'LINQ_API_KEY="k"\n');
+  let builds = 0;
+  let restarts = 0;
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (_file, args) => {
+        if (args.includes("add")) {
+          mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+          writeFileSync(join(dir, "agent", "channels", "linq.ts"), "x");
+          writeFileSync(join(dir, ".env.local"), 'LINQ_API_KEY="k"\nKYBERNESIS_AGENT=\n');
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        builds++;
+        return { code: builds === 1 ? 1 : 0, stdout: "", stderr: "type error" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  const { status } = await actions.run({ action: "linq.add" });
+  assert.equal(status, 502);
+  assert.equal(existsSync(join(dir, "agent", "channels", "linq.ts")), false);
+  assert.equal(readFileSync(join(dir, ".env.local"), "utf8"), 'LINQ_API_KEY="k"\n');
+  assert.equal(builds, 2);
+  assert.equal(restarts, 0);
+});
+
+test("imessage item: offers linq.add while the channel is missing, with or without a line", async () => {
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const item = async (dir) => (await setupStatus({ appRoot: dir, options: {}, restarter })).items.find((i) => i.id === "imessage");
+  const dir = agentDir({});
+  assert.deepEqual((await item(dir)).actions, ["linq.signup", "linq.verify", "linq.add"]);
+  writeFileSync(join(dir, ".env.local"), 'LINQ_API_KEY="k"\nLINQ_WEBHOOK_SECRET="whsec_x"\n');
+  const lineOnly = await item(dir);
+  assert.equal(lineOnly.done, false);
+  assert.deepEqual(lineOnly.actions, ["linq.contacts", "linq.contact.add", "linq.contact.remove", "linq.add"]);
+  assert.match(lineOnly.detail, /cannot answer it until iMessage is added/);
+  mkdirSync(join(dir, "agent", "channels"), { recursive: true });
+  writeFileSync(join(dir, "agent", "channels", "linq.ts"), "x");
+  const both = await item(dir);
+  assert.equal(both.done, true);
+  assert.deepEqual(both.actions, ["linq.contacts", "linq.contact.add", "linq.contact.remove"]);
+});
+
 test("wallet item: add it when there is a computer, sign in once added, sign out once signed in", async () => {
   const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
   const auth = join(mkdtempSync(join(tmpdir(), "kyb-link-")), "config.json");
