@@ -18,6 +18,15 @@ import { run, yellow } from "./util.js";
 const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
 const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
+/**
+ * The registry items install the newest release of each third-party
+ * extension, and those are built on a later eve than the certified one, which
+ * eve then refuses at discovery ("has no compile or runtime usage") and the
+ * agent never boots. These are the releases proven on the certified eve.
+ * Move them with the eve certification, never on their own.
+ */
+export const ENGINEER_EXTENSION_PINS = ["@agent-browser/eve@0.34.0", "@github-tools/eve-extension@0.8.0"] as const;
+
 function write(dir: string, path: string, content: string): void {
   const full = join(dir, path);
   mkdirSync(join(full, ".."), { recursive: true });
@@ -52,6 +61,12 @@ export function applyEngineer(dir: string, host: HostKind, model: ModelScaffoldC
     if (item === "extension/github-tools") finalizeGithubToolsRegistryMount(dir, ok);
     if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
   }
+  // --legacy-peer-deps: both declare peer ranges that trail the certified eve.
+  const pinned = run("npm", ["install", "--save-exact", "--legacy-peer-deps", ...ENGINEER_EXTENSION_PINS, "--no-audit", "--no-fund"], {
+    cwd: dir,
+    allowFail: true,
+  });
+  if (!pinned) console.log(yellow(`  ! could not pin ${ENGINEER_EXTENSION_PINS.join(" ")} — install them by hand or discovery refuses the newer ones`));
   for (const file of plan.files) write(dir, file.path, file.content);
   // A declared subagent sees none of the root's skills, so the memory skills
   // its instructions name are copied in beside it.
