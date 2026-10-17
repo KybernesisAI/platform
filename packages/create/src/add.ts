@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { bold, dim, green, red, run, yellow } from "./util.js";
 import { addBuzz } from "./buzz.js";
+import { applyDispatch, applyEngineer, modelConfigOf } from "./capabilities.js";
 import { CHANNEL_KINDS, arcanaMemorySlotTs, channelPlan, type ChannelKind, type HostKind } from "./templates.js";
 
 /**
@@ -25,11 +26,14 @@ export async function add(what: string | undefined, rest: string[]): Promise<voi
   // Buzz is a bridge and a key, not a channel file; "add channel buzz" is what
   // the provisioner and people naturally type, so both spellings land here.
   if (what === "buzz" || (what === "channel" && rest.find((a) => !a.startsWith("-")) === "buzz")) return addBuzz();
+  if (what === "dispatch" || what === "engineer") return addCapability(what);
   if (what !== "channel") {
     console.error(red(`kyb add: don't know how to add "${what ?? ""}".`));
     console.log(dim(`  kyb add channel <${CHANNEL_KINDS.filter((k) => k !== "none").join("|")}>`));
     console.log(dim(`  kyb add memory   ${dim("— an eve 0.49 memory slot backed by Arcana (recall before every turn)")}`));
     console.log(dim(`  kyb add buzz     ${dim("— the agent's own Buzz identity, tools and bridge, ready for its owner's community")}`));
+    console.log(dim(`  kyb add dispatch ${dim("— call and be called by the agents the control plane allows (governed edges)")}`));
+    console.log(dim(`  kyb add engineer ${dim("— the builder subagent: workshop sandbox, vision dev loop, file delivery")}`));
     process.exitCode = 1;
     return;
   }
@@ -154,4 +158,33 @@ export function addMemory(cwd = resolve(process.cwd())): void {
   console.log(green("  + agent/memory/arcana.ts"));
   console.log(dim(`    recall before every turn from ARCANA_COMPANY_WORKSPACE; capture off; ${extensionMounted ? "tools from the extension" : "remember/recall/search as memory__* tools"}`));
   console.log(dim("    needs eve >= 0.49 and @kybernesis/arcana >= 0.4 — kyb upgrade carries both. Then: npx eve info"));
+}
+
+/**
+ * `kyb add dispatch` / `kyb add engineer` — what `kyb init` now builds in, put
+ * on an agent scaffolded before it did. Same code path as init, so an added
+ * capability is the same files a new agent gets.
+ */
+function addCapability(what: "dispatch" | "engineer"): void {
+  const dir = resolve(process.cwd());
+  if (!existsSync(join(dir, "package.json")) || !existsSync(join(dir, "agent"))) {
+    console.error(red(`kyb add ${what}: run this inside an agent directory.`));
+    process.exitCode = 1;
+    return;
+  }
+  const host: HostKind = existsSync(join(dir, "scripts/eve-server.sh")) ? "exe" : "vercel";
+  console.log(bold(`kyb add ${what}`));
+  console.log(dim(`  agent: ${agentNameOf(dir)}\n  host:  ${host}`));
+  if (what === "dispatch") {
+    for (const file of applyDispatch(dir)) console.log(green(`  + ${file}`));
+  } else {
+    if (existsSync(join(dir, "agent/subagents/builder"))) {
+      console.log(yellow("  agent/subagents/builder already exists — leaving it alone."));
+      return;
+    }
+    const { files, steps } = applyEngineer(dir, host, modelConfigOf(dir));
+    for (const file of files) console.log(green(`  + ${file}`));
+    if (steps.length) console.log(`\n${bold("Then:")}\n${steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n")}`);
+  }
+  console.log(dim("\n  Type-check, build and restart the agent for it to take effect."));
 }

@@ -383,7 +383,7 @@ async function subscriptionState(port: number): Promise<"signed-in" | "signed-ou
 }
 
 export interface SetupItem {
-  id: "identity" | "model" | "computer" | "slack" | "imessage" | "buzz" | "wallet";
+  id: "identity" | "model" | "computer" | "slack" | "imessage" | "buzz" | "wallet" | "voice";
   required: boolean;
   done: boolean;
   detail: string;
@@ -627,6 +627,19 @@ export async function setupStatus(input: {
       actions: ["buzz.add"],
       env: [],
       ...(running ? { busy: true } : {}),
+    });
+  }
+  if (deps.has("@kybernesis/voice")) {
+    // Voice is installed on every company agent; it answers calls once the
+    // owner has given it their own OpenAI key.
+    const voiceKey = has("KYBERNESIS_VOICE_OPENAI_KEY");
+    items.push({
+      id: "voice",
+      required: false,
+      done: voiceKey,
+      detail: voiceKey ? "Answers voice calls with your OpenAI key." : "Voice calls need your OpenAI key.",
+      actions: [],
+      env: ["KYBERNESIS_VOICE_OPENAI_KEY"],
     });
   }
   if (deps.has("@kybernesis/payments")) {

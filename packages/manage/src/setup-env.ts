@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 /** What a client may write through `POST /setup/env`, and how each value is checked. */
 export interface SetupEnvKey {
   /** The setup item it belongs to, for the status checklist. */
-  item: "model" | "slack";
+  item: "model" | "slack" | "voice";
   /** A secret is reported as set or not, never read back. */
   secret: boolean;
   /** What a valid value looks like, in words a person can act on. */
@@ -91,6 +91,14 @@ export const SETUP_ENV_KEYS: Record<string, SetupEnvKey> = {
   },
   OPENAI_API_KEY: {
     item: "model",
+    secret: true,
+    expects: "an OpenAI API key (sk-…)",
+    valid: (v) => /^sk-[A-Za-z0-9_-]{20,300}$/.test(v),
+  },
+  // Voice calls: the owner's own OpenAI key, which @kybernesis/voice uses to
+  // open each realtime session. It never leaves the agent.
+  KYBERNESIS_VOICE_OPENAI_KEY: {
+    item: "voice",
     secret: true,
     expects: "an OpenAI API key (sk-…)",
     valid: (v) => /^sk-[A-Za-z0-9_-]{20,300}$/.test(v),

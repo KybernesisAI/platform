@@ -21,7 +21,6 @@ import {
   type HostKind,
   channelPlan,
   computerPlan,
-  engineerPlan,
   envExample,
   evalFileTs,
   exeEvalConfigTs,
@@ -36,6 +35,7 @@ import {
   subagentInstructionsMd,
 } from "./templates.js";
 import { suiteDir } from "./skills.js";
+import { applyDispatch, applyEngineer } from "./capabilities.js";
 import { configureArcana } from "./arcana.js";
 import { upsertEnv } from "./envfile.js";
 import { systemdRestartCommand } from "./systemd.js";
@@ -55,11 +55,6 @@ const CORE_ITEMS = ["enterprise", "arcana", "evals", "identity"] as const;
 // Vercel function cannot keep a desktop alive, so there — and only there —
 // both are skipped, and init says so out loud.
 const CORE_EXE_ITEMS = ["vault"] as const;
-// Official eve-registry limbs installed with the engineer subagent.
-// connection/vercel is Vercel-Connect-backed, so it is VERCEL-HOST ONLY: on a
-// self-hosted agent it cannot get an OIDC token and the agent fails to boot.
-const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
-const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
 /**
  * Replace Eve's freshly installed registry mount with the Kybernesis-managed
@@ -219,6 +214,9 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   for (const item of CORE_ITEMS) {
     run("npx", ["eve", "add", `@kybernesis/${item}`, "--overwrite"], { cwd: dir });
   }
+  // Core too: other agents the company allows can call this one, and it can
+  // call them, governed by edges granted in the control plane.
+  applyDispatch(dir);
 
   // Anthropic is always the exe eval judge. Both providers are installed on
   // every exe agent: exeModelReach can be switched to any route at boot, and
@@ -271,16 +269,10 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     }
   }
 
-  const engPlan = engineer ? engineerPlan(host, model) : null;
-  if (engPlan) {
+  let engSteps: string[] = [];
+  if (engineer) {
     console.log(bold("\n2c   Engineer subagent: workshop sandbox + vision dev loop …"));
-    run("npm", ["install", ...engPlan.deps, "--no-audit", "--no-fund"], { cwd: dir, allowFail: true });
-    const engItems = [...ENGINEER_ITEMS_ALL, ...(host === "vercel" ? ENGINEER_ITEMS_VERCEL : [])];
-    for (const item of engItems) {
-      const ok = run("npx", ["eve", "add", item, "--overwrite"], { cwd: dir, allowFail: true });
-      if (item === "extension/github-tools") finalizeGithubToolsRegistryMount(dir, ok);
-      if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
-    }
+    engSteps = applyEngineer(dir, host, model).steps;
   }
 
   const compPlan = host === "exe" ? computerPlan(name) : null;
@@ -482,13 +474,6 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     writeFileSync(full, file.content);
   }
 
-  if (engPlan) {
-    for (const file of engPlan.files) {
-      const full = join(dir, file.path);
-      mkdirSync(join(full, ".."), { recursive: true });
-      writeFileSync(full, file.content);
-    }
-  }
   if (compPlan) {
     for (const file of compPlan.files) {
       const full = join(dir, file.path);
@@ -516,6 +501,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
 
   const parts = [
     "governed (enterprise)",
+    "agent-to-agent (dispatch)",
     "remembering (arcana)",
     "self-testing (evals)",
     channel === "none" ? null : `${channel} channel`,
@@ -532,7 +518,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     `Arcana: create workspaces (${name}-company, ${name}-eval${depts.map((d) => `, ${name}-${d}`).join("")}) + scoped kb_ keys; fill .env.local from .env.example`,
     ...hostSteps(host, name, model),
     ...plan.steps,
-    ...(engPlan?.steps ?? []),
+    ...engSteps,
     ...(compPlan?.steps ?? []),
     `Control plane: register agent "${name}" at ${issuer}/agents + grant the pilot cohort`,
     `npm run eval → green → deploy → live smoke + the revoke demo`,

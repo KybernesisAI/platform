@@ -39,7 +39,9 @@ Both require the caller's control-plane grant for this agent (verified with
 `@kybernesis/enterprise`), the same identity every other door uses.
 
 - `GET /eve/v1/voice/manifest` — `{ ok, enabled, voice, displayName }`. Studio
-  calls this per agent to decide whether to show the orb.
+  calls this per agent to decide whether to show the orb. `enabled` is false
+  until the agent has an OpenAI key (`KYBERNESIS_VOICE_OPENAI_KEY`), which the
+  owner adds from the web app's Channels page.
 - `POST /eve/v1/voice/session` — body `{ sdp }` (the browser's WebRTC offer);
   mints an OpenAI Live session with this agent's key, configured for client
   delegation, and returns `{ ok, sdp }` (the answer). The key never leaves the
