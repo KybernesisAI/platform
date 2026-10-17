@@ -41,6 +41,18 @@ export interface HostPreflightOptions {
   claudeProxyUrl?: string;
 }
 
+/**
+ * Where the agent serves its own deliveries, as the engineer's deliver tool
+ * computes it: only without a custom directory, and only when the agent knows
+ * its public address.
+ */
+function agentFilesBase(): string | undefined {
+  if (process.env.DELIVER_DIR) return undefined;
+  const vm = process.env.EXE_VM_NAME?.trim();
+  const origin = process.env.EVE_PUBLIC_URL?.trim() || (vm ? `https://${vm}.exe.xyz` : "");
+  return origin ? `${origin.replace(/\/$/, "")}/eve/v1/kyb/files` : undefined;
+}
+
 async function probe(url: string, init?: RequestInit): Promise<Response | null> {
   try {
     return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
@@ -259,13 +271,28 @@ export async function hostPreflight(
           `${deliverDir} and handed to people as links that go nowhere, while the agent ` +
           `reports success. Serve that directory, or use BLOB_READ_WRITE_TOKEN instead.`,
     });
+  } else if (agentFilesBase()) {
+    // The agent serves deliveries itself (@kybernesis/manage). The same rule
+    // as above: probe the route rather than trust that the package is there.
+    // Asked of the local server, which is the process that will serve them.
+    const base = agentFilesBase()!;
+    const served = await probe(`${eve}/eve/v1/kyb/files`);
+    checks.push({
+      name: "file delivery configured",
+      ok: Boolean(served?.ok),
+      detail: served?.ok
+        ? `the agent serves delivered files at ${base}`
+        : `${base} does not answer, so delivered files would be links that go nowhere. ` +
+          `Install @kybernesis/manage 0.21 or later, or set BLOB_READ_WRITE_TOKEN.`,
+    });
   } else {
     checks.push({
       name: "file delivery configured",
       ok: false,
       detail:
         "no delivery target. The agent can WRITE a file and still have no way to give it " +
-        "to anyone: set BLOB_READ_WRITE_TOKEN, or DELIVER_DIR with DELIVER_BASE_URL. " +
+        "to anyone: set EXE_VM_NAME so the agent serves files itself, BLOB_READ_WRITE_TOKEN, " +
+        "or DELIVER_DIR with DELIVER_BASE_URL. " +
         "This is usually what a platform supplied for free before the agent moved here.",
     });
   }

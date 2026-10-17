@@ -9,6 +9,7 @@ import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
 import { memoryRoutes, type MemoryOptions } from "./memory.js";
+import { fileRoutes, type FilesOptions } from "./files.js";
 
 /**
  * Management routes, so a client can actually CHANGE an agent.
@@ -214,6 +215,13 @@ export interface ManageOptions {
    * by default; they answer 404 when the agent has no memory configured.
    */
   memory?: MemoryOptions | false;
+  /**
+   * Files the agent delivered (the engineer's `deliver` tool), served under
+   * /eve/v1/kyb/files/<id>/<name>. Public by link: the id is 128 random bits
+   * and nothing lists the directory. On by default; answers 404 for anything
+   * that was not delivered.
+   */
+  files?: FilesOptions | false;
 }
 
 /**
@@ -395,6 +403,7 @@ export function manageChannel(options: ManageOptions = {}) {
       ...(options.computer === false
         ? []
         : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
+      ...(options.files === false ? [] : fileRoutes({ prefix: PREFIX, options: options.files ?? {} })),
       ...(options.memory === false
         ? []
         : memoryRoutes({ prefix: PREFIX, options: options.memory ?? {}, authorize: (req) => authorize(req, options, "manage") })),
@@ -858,6 +867,7 @@ export function routineTools(options: ManageOptions = {}) {
 }
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
+export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export { memoryRoutes, memoryConfig, callMemory, contentOf, MEMORY_MCP_URL, type MemoryOptions } from "./memory.js";
 
 /** The name `eve add` needs: bare catalog names belong to the Kybernesis registry. */

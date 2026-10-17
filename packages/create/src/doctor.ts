@@ -715,11 +715,13 @@ export async function doctor(): Promise<void> {
       add("pass", "file delivery via Vercel Blob");
     } else if (env.DELIVER_DIR && env.DELIVER_BASE_URL) {
       add("pass", `file delivery via host directory (${env.DELIVER_DIR})`);
+    } else if (!env.DELIVER_DIR && (env.EVE_PUBLIC_URL || env.EXE_VM_NAME)) {
+      add("pass", "file delivery served by the agent itself (@kybernesis/manage /eve/v1/kyb/files)");
     } else {
       add(
         "warn",
         "file delivery not configured — the agent cannot hand over artifacts",
-        "set BLOB_READ_WRITE_TOKEN (the CLIENT's blob store) or DELIVER_DIR + DELIVER_BASE_URL",
+        "set EXE_VM_NAME or EVE_PUBLIC_URL (the agent serves files itself), BLOB_READ_WRITE_TOKEN, or DELIVER_DIR + DELIVER_BASE_URL",
       );
     }
   }
