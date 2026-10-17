@@ -1036,3 +1036,30 @@ test("buzz.add: a failed build puts the agent back, never restarts, and the item
   const interrupted = (await setupStatus({ appRoot: dir, options: {}, restarter: new SafeRestarter({ appRoot: "/nonexistent" }) })).items.find((i) => i.id === "buzz");
   assert.match(interrupted.detail, /interrupted/);
 });
+
+test("voice item: shown once voice is installed, done once the owner's key is stored", async () => {
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const key = `sk-proj-${"v".repeat(40)}`;
+  const previous = process.env.KYBERNESIS_VOICE_OPENAI_KEY;
+  delete process.env.KYBERNESIS_VOICE_OPENAI_KEY;
+  try {
+    const voice = async (dir) => (await setupStatus({ appRoot: dir, options: {}, restarter })).items.find((i) => i.id === "voice");
+    assert.equal(await voice(agentDir({})), undefined, "no voice package, no voice item");
+    const dir = agentDir({ "@kybernesis/voice": "^0.2.1" });
+    const before = await voice(dir);
+    assert.deepEqual([before.done, before.env], [false, ["KYBERNESIS_VOICE_OPENAI_KEY"]]);
+    // The provisioner leaves the key empty until the owner adds it.
+    writeFileSync(join(dir, ".env.local"), 'KYBERNESIS_VOICE_OPENAI_KEY=""\n');
+    assert.equal((await voice(dir)).done, false);
+    const update = validateEnvUpdate({ set: { KYBERNESIS_VOICE_OPENAI_KEY: key } });
+    assert.equal(update.ok, true);
+    writeEnvFile(join(dir, ".env.local"), update.update);
+    const after = await voice(dir);
+    assert.equal(after.done, true);
+    assert.doesNotMatch(JSON.stringify(after), new RegExp(key));
+    assert.equal(validateEnvUpdate({ set: { KYBERNESIS_VOICE_OPENAI_KEY: "not-a-key" } }).ok, false);
+  } finally {
+    if (previous === undefined) delete process.env.KYBERNESIS_VOICE_OPENAI_KEY;
+    else process.env.KYBERNESIS_VOICE_OPENAI_KEY = previous;
+  }
+});

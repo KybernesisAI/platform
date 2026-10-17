@@ -228,7 +228,7 @@ ${bold("kyb")} ${dim(VERSION)} — Kybernesis agent scaffolder & FDE toolkit
 ${dim("  Every command below exists in this build. If one is missing, the install is older than the docs:")}
 ${dim("  npm i -g @kybernesis/create@latest")}
 
-  ${bold("kyb init [name]")}     scaffold a Kybernesis eve agent (core: enterprise + arcana + evals)
+  ${bold("kyb init [name]")}     scaffold a Kybernesis eve agent (core: enterprise + arcana + dispatch + evals)
       --channel=<kind>  ${dim("none|slack|imessage|telegram|discord|web  (default: none)")}
       --host=<kind>     ${dim("vercel|exe                                (default: vercel)")}
       --subagents=a,b   ${dim("department subagents                      (default: none)")}
@@ -241,6 +241,8 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       ${dim("slack|imessage|telegram|discord|web — writes the channel, deps and env")}
   ${bold("kyb add buzz")}        ${dim("the agent's own Buzz identity, tools and bridge (connected from the Channels page)")}
   ${bold("kyb add memory")}      ${dim("eve 0.49 memory slot backed by Arcana: recall before every turn")}
+  ${bold("kyb add dispatch")}    ${dim("agent-to-agent: governed door + control-plane peers as tools")}
+  ${bold("kyb add engineer")}    ${dim("the builder subagent: workshop sandbox, vision dev loop, delivery")}
   ${bold("kyb doctor")}          preflight checks (keys, issuer, envs, discovery)
   ${bold("kyb skills")}          install/refresh the FDE skill suite for Claude Code
       --global          ${dim("install to ~/.claude/skills instead of this repo")}

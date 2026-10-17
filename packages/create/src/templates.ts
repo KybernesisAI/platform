@@ -554,6 +554,66 @@ export function hostSteps(host: HostKind, name: string, model: ModelScaffoldConf
   ];
 }
 
+// ── Agent-to-agent (dispatch) ───────────────────────────────────────────
+// Every agent is reachable by the agents its company allows, and can call
+// them, with nothing named in code: the edge is granted in the control plane.
+// The receiving side is the eve channel itself, so it REPLACES the plain
+// governed channel the enterprise item writes; people still come in through
+// kybernesisAuth in the same walk.
+
+/** agent/channels/eve.ts: people, granted agents, and the local eval runner, through one door. */
+export function dispatchEveChannelTs(): string {
+  return `import { localDev } from "eve/channels/auth";
+import { dispatchChannel } from "@kybernesis/dispatch";
+import { kybernesisAuth } from "@kybernesis/enterprise";
+
+// One door, three kinds of caller, each its own decision:
+// - people, through KYBER Studio, the phone and the web app: kybernesisAuth
+//   admits only an identity session holding a grant on this agent;
+// - other agents: dispatchChannel's governed walk admits a short-lived A2A
+//   token minted for an edge granted in the control plane naming this agent
+//   as callee. Nothing is listed here; the grant lives in the control plane;
+// - the eval runner: localDev() accepts loopback only and is inert in
+//   production. Local evals send no credentials at all.
+//
+// KYBERNESIS_AGENT must match the control-plane registration exactly,
+// including case: the mint checks the callee by name.
+export default dispatchChannel({
+  governed: {
+    issuer: process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
+    agent: process.env.KYBERNESIS_AGENT!,
+  },
+  extraAuth: [
+    kybernesisAuth({
+      issuer: process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
+      agent: process.env.KYBERNESIS_AGENT!,
+    }),
+    localDev(),
+  ],
+});
+`;
+}
+
+/** agent/tools/peers.ts: every agent this one may call, as tools, resolved per turn. */
+export function dispatchPeersTs(): string {
+  return `import { governedPeers } from "@kybernesis/dispatch";
+
+// Every agent this one is ALLOWED to call, as tools, resolved from the control
+// plane at the start of each turn. Granting an edge there is the whole job:
+// the tool appears on the next turn and goes when the edge is revoked, with no
+// file to write and no redeploy.
+//
+// These calls carry THIS agent's identity. Where a peer holds personal data and
+// should answer as the person instead, declare it with remotePeer() under
+// agent/subagents/ (it forwards the principal) and list its name in
+// \`declared\` here so it is not offered twice.
+export default governedPeers();
+`;
+}
+
+/** Pinned to the eve line the scaffold certifies, like every other @kybernesis dep it installs. */
+export const DISPATCH_DEP = "@kybernesis/dispatch@^0.7.0";
+
 // ── Engineer subagent ───────────────────────────────────────────────────
 // `--engineer` scaffolds a DECLARED SUBAGENT that owns the build capability,
 // rather than granting it to the root agent. The root stays whatever it is to
@@ -679,6 +739,102 @@ export default defineSandbox(() =>
 `;
 }
 
+/**
+ * What the builder is told. A declared subagent inherits nothing from the
+ * root, instructions included, so without this it builds with no idea it is
+ * briefed second-hand, that it remembers, or where its authority stops.
+ * Agent-facing prose: no agent or company names, it ships to every customer.
+ */
+export function builderInstructionsMd(): string {
+  return `# Identity
+
+You are the builder. You write and ship software: prototypes, deliverables,
+internal tools and fixes. You have the workshop: a sandbox with a shell, a
+filesystem, a browser you can see through, and file delivery.
+
+You receive fully briefed tasks from the agent you work for and never see the
+original conversation. Treat the message as the whole brief.
+
+# How you work
+
+Verify by looking. You can screenshot what you built. A page you have not
+looked at is a page you have not finished.
+
+Start dev servers detached. A foreground server blocks the turn and hangs the
+whole task.
+
+Say what you actually ran: commands, versions, what passed. "Should work" is not
+a report.
+
+Deliver, don't describe. When the output is a file, deliver it and give the
+plain URL. Markdown around a link breaks it in some chat apps.
+
+Stop at production. Preview deploys are yours; promoting to production is
+always a person's decision.
+
+# Memory
+
+You share the company's long-term memory (Arcana) through the \`arcana\`
+connection: recall, search, timeline, remember and brain notes.
+
+- Look it up before you start. Never claim something is unknown without
+  searching; an empty entity recall is not enough, so escalate to search.
+- Record what you built, what you tried that failed, and the decisions behind a
+  stack choice. A project shipped and forgotten teaches nobody.
+- Long-form material goes in a brain note: \`arcana_brain_write\` and
+  \`arcana_brain_add\`, always both, or nothing can find it.
+- Load the \`recall\`, \`remember\` or \`brain-note\` skill when the task
+  is more than one obvious call.
+
+# When the brief is thin
+
+Build anyway. You cannot ask anyone; the person who asked is one step removed.
+Take the most reasonable reading, say plainly what you assumed at the top, and
+build what that reading deserves.
+`;
+}
+
+/**
+ * The builder's memory: the company brain the root uses, not a workspace of
+ * its own. A company agent has one brain, and the agent that builds was the one
+ * remembering nothing about what it built. ARCANA_BUILDER_WORKSPACE splits it
+ * off for an agent that wants a separate one.
+ */
+export function builderArcanaTs(): string {
+  return `import { defineMcpClientConnection } from "eve/connections";
+
+// The company brain, shared with the root agent by design: knowing and doing
+// are different jobs, the memory is not. No placeholder: a builder quietly
+// addressing a workspace nobody owns is amnesia that looks like a model
+// problem. Set it with \`kyb arcana\`.
+const workspace = process.env.ARCANA_BUILDER_WORKSPACE ?? process.env.ARCANA_COMPANY_WORKSPACE;
+if (!workspace) {
+  throw new Error("ARCANA_COMPANY_WORKSPACE is not set — run \`kyb arcana\` to set the workspace and its key.");
+}
+
+export default defineMcpClientConnection({
+  url: "https://mcp.arcana.kybernesis.ai/mcp",
+  description:
+    "The company's long-term memory (Arcana), shared with the agent you work for: what was built, what was tried, what failed, and the decisions behind it.",
+  auth: {
+    getToken: async () => {
+      // The eval brain is a different workspace with its own key (Arcana keys
+      // answer 403 outside their own workspace), recognised by name.
+      const evalWorkspace = process.env.ARCANA_EVAL_WORKSPACE;
+      const isEval = evalWorkspace ? workspace === evalWorkspace : workspace.endsWith("-eval");
+      const token =
+        (isEval ? process.env.ARCANA_EVAL_API_KEY : undefined) ??
+        process.env.ARCANA_BUILDER_API_KEY ??
+        process.env.ARCANA_API_KEY;
+      if (!token) throw new Error("ARCANA_API_KEY is not set.");
+      return { token };
+    },
+  },
+  headers: { "X-Kyberagent-Agent": async () => workspace },
+});
+`;
+}
+
 export function engineerPlan(host: HostKind, model: ModelScaffoldConfig): EngineerPlan {
   const onExe = host === "exe";
   const renderedModel = agentModelTemplate(host, model);
@@ -732,6 +888,8 @@ export { default } from "@kybernesis/engineer";
       path: "agent/subagents/builder/sandbox/sandbox.ts",
       content: workshopSandbox(host),
     },
+    { path: "agent/subagents/builder/instructions.md", content: builderInstructionsMd() },
+    { path: "agent/subagents/builder/connections/arcana.ts", content: builderArcanaTs() },
   ];
 
   if (onExe) {

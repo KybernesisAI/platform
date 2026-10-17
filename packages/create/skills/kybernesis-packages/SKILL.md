@@ -89,7 +89,9 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   it also carries the owner's setup routes (`GET /eve/v1/kyb/setup`,
   `POST .../setup/env`, `POST .../setup/action`): a `manage` grant only;
   allowlisted env (`EXE_MODEL`, `EXE_LLM_URL`, `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`) and the actions
+  `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, and since 0.20
+  `KYBERNESIS_VOICE_OPENAI_KEY`, the owner's key for voice calls, with a `voice`
+  setup item shown when @kybernesis/voice is installed) and the actions
   `claude.login` (link, then the code on stdin), `linq.signup`/`linq.verify`, `linq.contacts`/`linq.contact.add`/`linq.contact.remove` (who can text a shared line, 0.15),
   `link.login`/`link.logout`, `wallet.add` (0.16: adds the payments item to an agent with a computer, rebuilds, rolls back on a failed build, restarts only after a good one), `linq.add` (0.18: the same for the iMessage channel, offered while `agent/channels/linq.ts` is missing, so an agent built without iMessage can answer the line it signs up), `slack.add` (0.19: the control-plane Slack channel via `kyb add channel slack`, offered to a registered agent on its own host with no Slack channel; the client then asks the control plane to make the agent's Slack app), `buzz.add` (0.19: `kyb add buzz` plus a build, answered 202 at once because the Buzz CLI build takes minutes; the `buzz` item reports `busy`, then the Buzz card or why it failed) and `vnc.password`. Every change applies at one restart that
   waits until no conversation is in flight (deploy.sh's count). A BYOK key only
@@ -129,7 +131,12 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   token, grants the person who ran it, idempotent by name),
   `deploy` (copy + install + restart + PROVE it; `eve deploy` on Vercel),
   `doctor`, `upgrade` (carries eve to the Kybernesis-CERTIFIED pin, never
-  blind latest), `skills`. Ships THIS skill suite.
+  blind latest), `skills`. Ships THIS skill suite. Since 0.23 every `init`
+  carries dispatch (the governed `agent/channels/eve.ts` plus
+  `agent/tools/peers.ts` = `governedPeers()`), and `--engineer` writes a
+  declared `builder` subagent with its own instructions, the company Arcana
+  connection and the memory skills. `kyb add dispatch` and `kyb add engineer`
+  retrofit an agent built before that.
 
 ## Gotchas that each cost a real debugging session
 

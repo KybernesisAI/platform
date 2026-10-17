@@ -130,13 +130,15 @@ export function voiceChannel(options: VoiceOptions) {
   return defineChannel({
     routes: [
       /**
-       * Say this agent is voice-capable, and how it should sound. Studio calls
-       * this per agent to decide whether to show the orb at all.
+       * Say whether this agent can take a call, and how it should sound. Studio
+       * calls this per agent to decide whether to show the orb at all, so an
+       * agent whose owner has not added their OpenAI key yet says `enabled:
+       * false` rather than offering a call that cannot connect.
        */
       GET(PREFIX + "/manifest", async (req) => {
         const denied = await authorize(req, options);
         if (denied) return denied;
-        return Response.json({ ok: true, enabled: true, voice, displayName });
+        return Response.json({ ok: true, enabled: Boolean(options.openaiApiKey), voice, displayName });
       }),
 
       /**
