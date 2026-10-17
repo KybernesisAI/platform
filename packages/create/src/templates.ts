@@ -914,7 +914,7 @@ export { default } from "@kybernesis/engineer";
       ? [
           "Enable Docker on the host (some images ship it disabled): sudo systemctl enable --now docker",
           "Preview server (so the agent can show you what it built):\n       mkdir -p ~/preview && setsid python3 -m http.server 3456 --directory ~/preview &\n       then open https://<vm>.exe.xyz:3456/<file> (account-gated, not public)",
-          "File delivery needs object storage: set BLOB_READ_WRITE_TOKEN (Vercel Blob) or DELIVER_DIR + DELIVER_BASE_URL to serve from this host",
+          "File delivery: the agent serves delivered files itself at https://<vm>.exe.xyz/eve/v1/kyb/files (needs @kybernesis/manage 0.21+); set BLOB_READ_WRITE_TOKEN to use Vercel Blob instead",
           "Public deploys need the client's own Vercel token — Vercel Connect does NOT work off-Vercel",
         ]
       : [

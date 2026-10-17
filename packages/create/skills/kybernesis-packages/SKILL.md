@@ -34,9 +34,11 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   `surface: "channel"|"dm"` attribute + helpers from package root), `/new` DM
   reset. Slack-only today.
 - **engineer** — build + ship. Extension: `screenshot` (renders in in-sandbox
-  Chromium, returns pixels the model SEES) + `deliver` (sandbox file → public
-  Blob URL; needs BLOB_READ_WRITE_TOKEN — one-liner:
-  `vercel blob create-store <name>-deliverables --access public --yes`) +
+  Chromium, returns pixels the model SEES) + `deliver` (sandbox file → a link
+  with a 128-bit random id; on exe the agent serves it itself at
+  `https://<vm>.exe.xyz/eve/v1/kyb/files/<id>/<name>` via manage 0.21+, so a
+  customer's files stay on the customer's agent; BLOB_READ_WRITE_TOKEN switches
+  it to Vercel Blob, DELIVER_DIR + DELIVER_BASE_URL to an operator-served dir) +
   six skills (dev-loop, scaffold, visual-qa, git-discipline, ship,
   architecture-notes). The registry item ALSO writes
   `agent/sandbox/sandbox.ts` — the workshop: Playwright baked into the
