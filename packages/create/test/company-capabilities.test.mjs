@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ENGINEER_EXTENSION_PINS } from "../dist/capabilities.js";
 import { wireArpAuth } from "../dist/init.js";
 import {
   builderArcanaTs,
@@ -45,4 +46,8 @@ test("agent-facing builder text names no agent and uses no em dashes", () => {
   const text = builderInstructionsMd();
   assert.doesNotMatch(text, /—/);
   assert.doesNotMatch(text, /\b(Kyber|Sid|Ava|Foreman|Kybernesis)\b/);
+});
+
+test("the engineer pins the third-party extensions to releases the certified eve accepts", () => {
+  assert.deepEqual([...ENGINEER_EXTENSION_PINS], ["@agent-browser/eve@0.34.0", "@github-tools/eve-extension@0.8.0"]);
 });
