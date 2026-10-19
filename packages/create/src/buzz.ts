@@ -22,7 +22,7 @@ import { bold, capture, dim, green, red, run, yellow } from "./util.js";
  * agent's profile and starts the bridge.
  */
 
-export const BUZZ_PACKAGE = "@kybernesis/buzz@^0.10.2";
+export const BUZZ_PACKAGE = "@kybernesis/buzz@^0.11.0";
 
 export const BUZZ_EXTENSION_MOUNT =
   `// The agent's hands in Buzz: projects, issues, pull requests, patches, repos,\n` +

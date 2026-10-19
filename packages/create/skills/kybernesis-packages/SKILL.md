@@ -95,7 +95,7 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   `KYBERNESIS_VOICE_OPENAI_KEY`, the owner's key for voice calls, with a `voice`
   setup item shown when @kybernesis/voice is installed) and the actions
   `claude.login` (link, then the code on stdin), `linq.signup`/`linq.verify`, `linq.contacts`/`linq.contact.add`/`linq.contact.remove` (who can text a shared line, 0.15),
-  `link.login`/`link.logout`, `wallet.add` (0.16: adds the payments item to an agent with a computer, rebuilds, rolls back on a failed build, restarts only after a good one), `linq.add` (0.18: the same for the iMessage channel, offered while `agent/channels/linq.ts` is missing, so an agent built without iMessage can answer the line it signs up), `slack.add` (0.19: the control-plane Slack channel via `kyb add channel slack`, offered to a registered agent on its own host with no Slack channel; the client then asks the control plane to make the agent's Slack app), `buzz.add` (0.19: `kyb add buzz` plus a build, answered 202 at once because the Buzz CLI build takes minutes; the `buzz` item reports `busy`, then the Buzz card or why it failed) and `vnc.password`. Every change applies at one restart that
+  `link.login`/`link.logout`, `wallet.add` (0.16: adds the payments item to an agent with a computer, rebuilds, rolls back on a failed build, restarts only after a good one), `linq.add` (0.18: the same for the iMessage channel, offered while `agent/channels/linq.ts` is missing, so an agent built without iMessage can answer the line it signs up), `slack.add` (0.19: the control-plane Slack channel via `kyb add channel slack`, offered to a registered agent on its own host with no Slack channel; the client then asks the control plane to make the agent's Slack app), `buzz.add` (0.19: `kyb add buzz` plus a build, answered 202 at once because the Buzz CLI build takes minutes; the `buzz` item reports `busy`, then the Buzz card or why it failed), `buzz.profile` (0.22: sends the owner's name and picture to every Buzz community now; advertised only when the installed `@kybernesis/buzz` is 0.11+) and `vnc.password`. Every change applies at one restart that
   waits until no conversation is in flight (deploy.sh's count). A BYOK key only
   takes effect when `agent/agent.ts` uses that provider; status says so.
   Since 0.12 it also takes `KYB_MODEL_REACH` (`gateway`, `byok`,
@@ -120,7 +120,13 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   (kind 7). Wire gotchas: reactions and dm-open go over HTTP with NIP-98 auth,
   NOT the socket (a socket reaction is accepted and then never appears), and
   command acks come back as `response:{…}` — parse without stripping that prefix
-  and a working call reads as a failure.
+  and a working call reads as a failure. Its face (0.11): the bridge keeps each
+  community's profile in step with the name and picture the OWNER set (control
+  plane `GET /api/agent/profile`, agent credential), the `.agent` name filling
+  the gaps, every 15 min; the picture (a data URL) is uploaded to the community's
+  Blossom store once per change. `profile --sync` runs it now; manage 0.22
+  `buzz.profile` is the app's Sync profile button. Below 0.11 the name sync put
+  the `.agent` picture back over the owner's.
 
 - **evals** — QA. `kybernesisBaseline({ agentDisplayName, routing, engineer?,
   safety? })` = smoke + 5 memory + 1 safety (quoted content is data, on by

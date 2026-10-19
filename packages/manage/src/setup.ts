@@ -18,9 +18,11 @@ import {
 import {
   bridgeState,
   bridgeUnitName,
+  buzzFollowsOwner,
   buzzIdentity,
   buzzKeyFile,
   installBridgeUnit,
+  installedBuzzVersion,
   parseProfileOutput,
   parseRelays,
   type BridgeState,
@@ -264,6 +266,13 @@ function writeSetupState(appRoot: string, patch: (s: SetupState) => void): void 
   const tmp = `${stateFile(appRoot)}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   renameSync(tmp, stateFile(appRoot));
+}
+
+/** What the Buzz CLI needs to read the owner's face from the control plane. */
+function controlPlaneEnv(get: (key: string) => string | undefined): Record<string, string> {
+  const credential = get("KYBERNESIS_AGENT_CREDENTIAL");
+  const issuer = get("KYBERNESIS_ISSUER");
+  return { ...(credential ? { KYBERNESIS_AGENT_CREDENTIAL: credential } : {}), ...(issuer ? { KYBERNESIS_ISSUER: issuer } : {}) };
 }
 
 function dependencies(appRoot: string): Set<string> {
@@ -605,7 +614,8 @@ export async function setupStatus(input: {
           : members.length < relays.length
             ? `Waiting for an admin to add its key in ${hosts(relays.filter((r) => !members.includes(r)))}, then connect again.`
             : `In Buzz (${hosts(relays)}).`,
-      actions: ["buzz.join", "buzz.leave"],
+      // 0.11 sends the owner's name and picture; the Sync profile button needs it.
+      actions: ["buzz.join", "buzz.leave", ...(buzzFollowsOwner(installedBuzzVersion(appRoot)) ? ["buzz.profile"] : [])],
       env: [],
     });
   } else if (onOwnHost(appRoot)) {
@@ -1373,11 +1383,16 @@ export function createSetupActions(input: {
       if (!identity) return fail(502, "Could not read the agent's Buzz key (npx kybernesis-buzz init).");
 
       const changed = writeEnvFile(envPath, { set: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile }, unset: [] });
-      const profileArgs = ["kybernesis-buzz", "profile", "--name", name, ...(picture ? ["--picture", picture] : [])];
+      // A Buzz that follows the owner publishes the name and picture set in the app; an older one,
+      // or a join that names its own, publishes what it was given.
+      const followsOwner = buzzFollowsOwner(installedBuzzVersion(appRoot)) && typeof body.name !== "string" && !picture;
+      const profileArgs = followsOwner
+        ? ["kybernesis-buzz", "profile", "--sync"]
+        : ["kybernesis-buzz", "profile", "--name", name, ...(picture ? ["--picture", picture] : [])];
       const published = await exec("npx", profileArgs, {
         cwd: appRoot,
         timeoutMs: 90_000,
-        env: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile },
+        env: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile, ...controlPlaneEnv(get) },
       });
       const outcomes: RelayOutcome[] = parseProfileOutput(`${published.stdout}\n${published.stderr}`, relays);
 
@@ -1414,6 +1429,46 @@ export function createSetupActions(input: {
             : "Connected. Mention it in any channel it has been added to.",
         },
       };
+    },
+
+    /**
+     * Send the agent's name and picture to every Buzz community it is in, now.
+     *
+     * The bridge keeps them in step on its own every few minutes; this is the
+     * owner's Sync profile button, and the app calls it after a profile save so
+     * the change shows straight away. The face comes from the control plane (what
+     * the owner set in the app or KYBER Studio), so nothing is taken from the body.
+     */
+    "buzz.profile": async () => {
+      if (!dependencies(appRoot).has("@kybernesis/buzz")) {
+        return fail(409, "Buzz is not installed on this agent.");
+      }
+      if (!buzzFollowsOwner(installedBuzzVersion(appRoot))) {
+        return fail(409, "This agent's Buzz is too old to send its profile. Update @kybernesis/buzz on its host.");
+      }
+      const env = readEnvFile(envPath);
+      const get = (key: string) => env.get(key) || process.env[key];
+      const relays = (get("BUZZ_RELAY") ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+      if (!relays.length) return fail(409, "It is not in a Buzz community yet. Connect it on the Channels page first.");
+      const keyFile = buzzKeyFile(get);
+      if (!existsSync(keyFile)) return fail(409, "It has no Buzz key yet. Connect it on the Channels page first.");
+
+      const published = await exec("npx", ["kybernesis-buzz", "profile", "--sync"], {
+        cwd: appRoot,
+        timeoutMs: 90_000,
+        env: { BUZZ_RELAY: relays.join(","), BUZZ_KEYFILE: keyFile, ...controlPlaneEnv(get) },
+      });
+      const text = `${published.stdout}\n${published.stderr}`;
+      if (published.code !== 0) {
+        const why = text.trim().split("\n").filter(Boolean).pop()?.trim() ?? "";
+        return fail(502, `The profile could not be sent${why ? `: ${why}` : "."}`);
+      }
+      const outcomes: RelayOutcome[] = parseProfileOutput(text, relays);
+      const members = outcomes.filter((o) => o.member).map((o) => o.url);
+      writeSetupState(appRoot, (s) => {
+        if (s.buzz) s.buzz = { ...s.buzz, members };
+      });
+      return { status: 200, body: { ok: true, relays: outcomes, sent: members.length } };
     },
 
     /** Take the agent out of Buzz: the bridge stops and stays off, the key is kept for next time. */
