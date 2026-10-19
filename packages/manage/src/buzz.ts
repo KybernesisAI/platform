@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "./setup.js";
@@ -90,11 +90,34 @@ WantedBy=multi-user.target
 export function parseProfileOutput(text: string, relays: string[]): RelayOutcome[] {
   return relays.map((url) => {
     const line = text.split("\n").find((l) => l.includes(url)) ?? "";
-    if (/✓/.test(line)) return { url, member: true };
+    if (/✓/.test(line)) {
+      const picture = /picture not sent: (.+)$/.exec(line)?.[1]?.trim();
+      return picture ? { url, member: true, detail: `The picture did not go: ${picture}` } : { url, member: true };
+    }
     if (/not a member yet/i.test(line)) return { url, member: false, detail: "Not a member yet: an admin adds the agent's key." };
     const why = line.split("—").slice(1).join("—").trim();
     return { url, member: false, detail: why || "Could not reach this community." };
   });
+}
+
+/** The @kybernesis/buzz this agent actually has installed, or null. */
+export function installedBuzzVersion(appRoot: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(appRoot, "node_modules", "@kybernesis", "buzz", "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this Buzz takes its face from the owner: `kybernesis-buzz profile --sync`, and a
+ * bridge that keeps the name and picture set in the app in step on its own (0.11).
+ */
+export function buzzFollowsOwner(version: string | null): boolean {
+  const [major, minor] = (version ?? "").split(".").map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return false;
+  return major! > 0 || minor! >= 11;
 }
 
 export async function bridgeState(exec: Exec, cwd: string, unit: string): Promise<BridgeState> {

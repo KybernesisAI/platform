@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { bridgeUnit, parseProfileOutput, parseRelays } from "../dist/buzz.js";
+import { bridgeUnit, buzzFollowsOwner, parseProfileOutput, parseRelays } from "../dist/buzz.js";
 import { parseEnv } from "../dist/setup-env.js";
 import { createSetupActions, setupStatus } from "../dist/setup.js";
 
@@ -179,4 +179,70 @@ test("buzz status: absent without the package; a fresh agent shows its key and i
 test("buzz.join: refused when Buzz is not installed", async () => {
   const actions = createSetupActions({ appRoot: agentDir({}), agent: "planner", options: { exec: fakeHost().exec }, restarter: restarter() });
   assert.equal((await actions.run({ action: "buzz.join", relay: "wss://team.example" })).status, 409);
+});
+
+/** An agent whose installed @kybernesis/buzz is `version`. */
+function withInstalledBuzz(dir, version) {
+  mkdirSync(join(dir, "node_modules", "@kybernesis", "buzz"), { recursive: true });
+  writeFileSync(join(dir, "node_modules", "@kybernesis", "buzz", "package.json"), JSON.stringify({ name: "@kybernesis/buzz", version }));
+}
+
+test("buzz follows the owner from 0.11", () => {
+  assert.equal(buzzFollowsOwner("0.10.2"), false);
+  assert.equal(buzzFollowsOwner("0.11.0"), true);
+  assert.equal(buzzFollowsOwner("1.0.0"), true);
+  assert.equal(buzzFollowsOwner(null), false);
+});
+
+test("buzz.join on a Buzz that follows the owner publishes the owner's face, with the agent's credential", async () => {
+  const dir = agentDir({ "@kybernesis/buzz": "^0.11.0" });
+  withInstalledBuzz(dir, "0.11.0");
+  writeFileSync(join(dir, ".env.local"), "KYBERNESIS_AGENT_CREDENTIAL=cred\nKYBERNESIS_ISSUER=https://cp.example\n");
+  const host = fakeHost();
+  const actions = createSetupActions({ appRoot: dir, agent: "planner", options: { exec: host.exec }, restarter: restarter() });
+  assert.equal((await actions.run({ action: "buzz.join", relay: "wss://team.example" })).status, 200);
+  const profile = host.calls.find((c) => c.argv.includes("profile"));
+  assert.deepEqual(profile.argv.slice(3), ["--sync"]);
+  assert.equal(profile.env.KYBERNESIS_AGENT_CREDENTIAL, "cred");
+  assert.equal(profile.env.KYBERNESIS_ISSUER, "https://cp.example");
+});
+
+test("buzz.profile: sends the face to every community, advertised only on a Buzz that can", async () => {
+  const dir = agentDir({ "@kybernesis/buzz": "^0.11.0" });
+  const host = fakeHost({ member: (r) => r.includes("team"), unit: "loaded" });
+  const r = restarter();
+  const actions = createSetupActions({ appRoot: dir, agent: "planner", options: { exec: host.exec }, restarter: r });
+
+  withInstalledBuzz(dir, "0.10.2");
+  assert.equal((await actions.run({ action: "buzz.profile" })).status, 409, "an older Buzz cannot");
+  const keyFile = join(dir, "key.json");
+  writeFileSync(keyFile, '{"secretKey":[1]}');
+  writeFileSync(join(dir, ".env.local"), `BUZZ_KEYFILE=${keyFile}\nKYBERNESIS_AGENT_CREDENTIAL=cred\n`);
+  const old = await setupStatus({ appRoot: dir, agent: "planner", options: { exec: host.exec }, restarter: r });
+  assert.deepEqual(old.items.find((i) => i.id === "buzz").actions, ["buzz.join", "buzz.leave"]);
+
+  withInstalledBuzz(dir, "0.11.0");
+  const notJoined = await actions.run({ action: "buzz.profile" });
+  assert.equal(notJoined.status, 409);
+  assert.match(notJoined.body.error, /Channels page/);
+
+  writeFileSync(join(dir, ".env.local"), `BUZZ_KEYFILE=${keyFile}\nKYBERNESIS_AGENT_CREDENTIAL=cred\nBUZZ_RELAY=wss://team.example,wss://other.example\n`);
+  const sent = await actions.run({ action: "buzz.profile", name: "ignored" });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(sent.body.sent, 1);
+  assert.deepEqual(sent.body.relays.map((o) => [o.url, o.member]), [["wss://team.example", true], ["wss://other.example", false]]);
+  const call = host.calls.find((c) => c.argv.includes("profile"));
+  assert.deepEqual(call.argv.slice(3), ["--sync"], "the face comes from the control plane, never from the body");
+  assert.equal(call.env.KYBERNESIS_AGENT_CREDENTIAL, "cred");
+  assert.equal(r.requested, 0, "sending a profile never restarts the agent");
+
+  const status = await setupStatus({ appRoot: dir, agent: "planner", options: { exec: host.exec }, restarter: r });
+  assert.deepEqual(status.items.find((i) => i.id === "buzz").actions, ["buzz.join", "buzz.leave", "buzz.profile"]);
+  assert.deepEqual(status.buzz.members, ["wss://team.example"]);
+});
+
+test("profile output: a picture that did not go is said, and the community still counts", () => {
+  const [a] = parseProfileOutput("  ✓ wss://a — picture not sent: the community refused the image: 413\n", ["wss://a"]);
+  assert.equal(a.member, true);
+  assert.match(a.detail, /picture did not go.*413/);
 });

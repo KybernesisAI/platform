@@ -13,4 +13,5 @@ export {
 export { asHexPubkey, loadKey, loadOrCreateKey, npubEncode, type AgentKey } from "./keys.js";
 export * as profile from "./profile.js";
 export type { Profile } from "./profile.js";
+export { fetchControlPlaneFace, profileFromFace, resolveFace, syncProfile, type Face } from "./face.js";
 export { readSurfaceManifest, surfaceWriter, surfacesDir, type SurfaceManifest } from "./surface.js";

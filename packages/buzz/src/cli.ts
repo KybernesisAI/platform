@@ -6,6 +6,7 @@ import { buzzBridge } from "./bridge.js";
 import { asHexPubkey, loadKey, loadOrCreateKey, npubEncode } from "./keys.js";
 import * as profile from "./profile.js";
 import { nameFromDid, syncProfileFromName, type SyncOutcome } from "./agentid.js";
+import { resolveFace, syncProfile } from "./face.js";
 
 /**
  * Setup and operation for an agent that lives in a workspace.
@@ -66,6 +67,25 @@ function identityDid(): string | null {
   }
 }
 
+/** One line per community, in the shape the Channels page reads back. */
+function printOutcomes(outcomes: SyncOutcome[]): void {
+  for (const { relay, outcome, detail } of outcomes) {
+    if (outcome === "updated") console.log(`  ✓ ${relay}${detail ? ` — ${detail}` : ""}`);
+    else if (outcome === "unchanged") console.log(`  ✓ ${relay} — already up to date`);
+    else if (outcome === "not-member") console.log(`  · ${relay} — not a member yet, so nothing to be known as there`);
+    else console.log(`  ✕ ${relay} — ${detail}`);
+  }
+}
+
+/** Where the face comes from: the control plane when this host has a credential, and the `.agent` name. */
+function faceSources(name: string | null): { name: string | null; issuer: string; credential?: string } {
+  return {
+    name,
+    issuer: process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
+    ...(process.env.KYBERNESIS_AGENT_CREDENTIAL ? { credential: process.env.KYBERNESIS_AGENT_CREDENTIAL } : {}),
+  };
+}
+
 /**
  * Say who this agent is, in every community it belongs to.
  *
@@ -83,6 +103,25 @@ async function setProfile(): Promise<void> {
     console.log(`\n  Copied ${copied.display_name ?? copied.name ?? "the profile"} from ${source} to:\n`);
     for (const url of urls.filter((url) => url !== source)) console.log(`    ${url}`);
     console.log();
+    return;
+  }
+
+  // The face its owner chose (the control plane), over its `.agent` name: what the bridge
+  // keeps in step on its own, run now. The Sync profile button in the app runs this.
+  if (process.argv.includes("--sync")) {
+    const did = identityDid();
+    const name = did ? nameFromDid(did) : null;
+    let outcomes: SyncOutcome[];
+    try {
+      const face = await resolveFace(faceSources(name));
+      outcomes = await syncProfile({ face, relays: urls, key });
+    } catch (error) {
+      console.error(`\n  ${(error as Error).message}\n`);
+      process.exit(1);
+    }
+    printOutcomes(outcomes);
+    const reached = outcomes.filter((o) => o.outcome === "updated" || o.outcome === "unchanged").length;
+    console.log(reached > 0 ? `\n  ${key.npub.slice(0, 20)}… now looks the way its owner set it.\n` : "\n  Nothing published — invite this key to a community first.\n");
     return;
   }
 
@@ -109,12 +148,7 @@ async function setProfile(): Promise<void> {
       console.error(`\n  ${(error as Error).message}\n`);
       process.exit(1);
     }
-    for (const { relay, outcome, detail } of outcomes) {
-      if (outcome === "updated") console.log(`  ✓ ${relay}`);
-      else if (outcome === "unchanged") console.log(`  ✓ ${relay} — already matches the name`);
-      else if (outcome === "not-member") console.log(`  · ${relay} — not a member yet, so nothing to be known as there`);
-      else console.log(`  ✕ ${relay} — ${detail}`);
-    }
+    printOutcomes(outcomes);
     const reached = outcomes.filter((o) => o.outcome === "updated" || o.outcome === "unchanged").length;
     console.log(reached > 0 ? `\n  ${name}.agent is ${key.npub.slice(0, 20)}… — profile taken from the name.\n` : "\n  Nothing published — invite this key to a community first.\n");
     return;
@@ -123,6 +157,7 @@ async function setProfile(): Promise<void> {
   const name = flag("name");
   if (!name) {
     console.error("usage: kybernesis-buzz profile --name <name> [--about …] [--picture <file|url>]");
+    console.error("   or: kybernesis-buzz profile --sync");
     console.error("   or: kybernesis-buzz profile --from-agentid [<name>.agent]");
     console.error("   or: kybernesis-buzz profile --copy-from <wss://…>");
     process.exit(1);
@@ -209,20 +244,23 @@ function run(): void {
       : {}),
   });
 
-  // How the agent presents itself follows its `.agent` name: checked on start and then every
-  // BUZZ_PROFILE_SYNC_MS (default six hours, 0 turns it off), and written only where a
-  // community's copy differs. A new picture or a moved address needs no command on this host.
+  // How the agent presents itself follows the face its owner chose (name and picture, from the
+  // control plane), with its `.agent` name filling the gaps: checked on start and then every
+  // BUZZ_PROFILE_SYNC_MS (default fifteen minutes, 0 turns it off), and written only where a
+  // community's copy differs. A new picture or name needs no command on this host.
   const did = identityDid();
   const name = did ? nameFromDid(did) : null;
-  const every = Number(process.env.BUZZ_PROFILE_SYNC_MS ?? 6 * 60 * 60 * 1000);
+  const every = Number(process.env.BUZZ_PROFILE_SYNC_MS ?? 15 * 60 * 1000);
   const timers: NodeJS.Timeout[] = [];
-  if (name && every > 0) {
+  const sources = faceSources(name);
+  if ((name || sources.credential) && every > 0) {
     const log = (message: string) => console.log(new Date().toISOString().slice(11, 19), message);
     const sync = () =>
-      syncProfileFromName({ name, relays: relayList(), key: loadKey(KEY_FILE) })
+      resolveFace(sources)
+        .then((face) => syncProfile({ face, relays: relayList(), key: loadKey(KEY_FILE) }))
         .then((outcomes) => {
           for (const { relay, outcome, detail } of outcomes) {
-            if (outcome === "updated") log(`profile: ${relay} updated from ${name}.agent`);
+            if (outcome === "updated") log(`profile: ${relay} updated${detail ? ` (${detail})` : ""}`);
             if (outcome === "failed") log(`profile: ${relay} not updated — ${detail}`);
           }
         })
@@ -399,8 +437,9 @@ else if (command === "id") {
     BUZZ_SESSIONS_FILE             channel-to-session continuity store
     BUZZ_AGENT_SILENCE_TIMEOUT_MS   maximum silence before a turn is acknowledged (default 300000ms)
     BUZZ_AGENT_WORK_TIMEOUT_MS      ceiling on a turn once acknowledged (default 3600000ms)
-    BUZZ_PROFILE_SYNC_MS           how often the profile is re-checked against the .agent name
-                                   (default 21600000ms, six hours; 0 turns it off)
+    BUZZ_PROFILE_SYNC_MS           how often the profile is re-checked against the name and
+                                   picture its owner set (default 900000ms, fifteen
+                                   minutes; 0 turns it off)
     KYBERNESIS_ISSUER              the control plane
     KYBERNESIS_AGENT_CREDENTIAL    this agent's credential
 `);
