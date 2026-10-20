@@ -1,6 +1,9 @@
 import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
+import { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
 import { type McpServer, callMcpTool, listMcpTools } from "./mcp.js";
+
+export { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
 
 /** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -48,6 +51,12 @@ export interface ConnectorToolsOptions {
   sessionOnly?: boolean;
   /** How long a resolved tool list is reused before asking again. */
   cacheMs?: number;
+  /**
+   * Largest tool result the model is handed, in characters of serialized JSON.
+   * Larger results are shortened (encoded data dropped, long text and lists
+   * cut) with a note saying so. Defaults to 60,000. See `boundResult`.
+   */
+  maxResultChars?: number;
 }
 
 interface RemoteTool {
@@ -317,7 +326,7 @@ async function runTool(
     // invites it to retry the same call.
     throw new Error(body.error ?? `The connector call failed (${res.status}).`);
   }
-  return body.result;
+  return boundResult(body.result, options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS);
 }
 
 /** Tools for every service the current principal has connected. */
@@ -360,8 +369,11 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
             }),
             execute: defineDurableCallback({
               closure: { server: server as unknown as JsonObject, tool: tool.name },
-              callback: ({ server, tool }, input: Record<string, unknown>) =>
-                callMcpTool(server as unknown as McpServer, tool, input),
+              callback: async ({ server, tool }, input: Record<string, unknown>) =>
+                boundResult(
+                  await callMcpTool(server as unknown as McpServer, tool, input),
+                  mounted.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS,
+                ),
             }),
           }),
         ]);
