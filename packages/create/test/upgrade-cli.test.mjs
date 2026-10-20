@@ -525,6 +525,36 @@ test("reachable subscription proxy and exe judge preserve the local eval gate", 
   }
 });
 
+test("a judge provider made inline in the eval config resolves to the exe route", () => {
+  const fix = fixture({
+    eveInstalled: "0.68.0",
+    eveRange: "^0.68.0",
+    agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
+    compiledRouting: { kind: "external", provider: "anthropic" },
+    claudeProxyReady: true,
+    judgeConfig: `import { createAnthropic } from "@ai-sdk/anthropic";
+import { defineEvalConfig } from "eve/evals";
+export default defineEvalConfig({
+  judge: {
+    model: createAnthropic({
+      baseURL: process.env.EXE_LLM_URL ?? "https://llm.int.exe.xyz/v1",
+      apiKey: "exe-integration",
+    }).evaluationModel(process.env.EXE_JUDGE_MODEL ?? "judge"),
+  },
+});
+`,
+    envLocal: "EXE_LLM_URL=data:application/json,%7B%7D\n",
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(result.stdout, /judge route could not be resolved/);
+    assert.equal(commandLog(fix).match(/^npm run eval$/gm)?.length, 1);
+  } finally {
+    fix.cleanup();
+  }
+});
+
 test("bare --host uses deploy defaults and the remote gate exit decides the verdict", () => {
   const green = fixture({ eveInstalled: "0.68.0", eveRange: "^0.68.0", envLocal: "EXE_VM_NAME=fixture-vm\n" });
   try {
