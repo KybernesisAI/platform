@@ -296,6 +296,30 @@ test("--check on an agent already current says so", () => {
   }
 });
 
+test("an agent already current but with eve saved as a range gets eve pinned exactly, and nothing else", () => {
+  const fix = fixture({ allCurrent: true, eveRange: "^0.68.0" });
+  try {
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const installs = commandLog(fix).split("\n").filter((line) => line.startsWith("npm install"));
+    assert.deepEqual(installs, ["npm install --save-exact eve@0.68.0"]);
+    assert.match(result.stdout, /eve pinned exactly to 0\.68\.0/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("an agent already current with eve pinned exactly installs nothing", () => {
+  const fix = fixture({ allCurrent: true });
+  try {
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(commandLog(fix), /^npm install/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
 test("--allow-stale prints the warning and continues through install and validation", () => {
   const fix = fixture({ createVersion: newerCreateVersion });
   try {
@@ -552,6 +576,8 @@ test("same-major/minor Eve state uses the in-place package install without bridg
     assert.equal(result.status, 0, result.stderr);
     const log = commandLog(fix);
     assert.match(log, /^npm install @kybernesis\/buzz@0\.9\.0 @kybernesis\/enterprise@0\.8\.0 @kybernesis\/evals@0\.6\.2$/m);
+    // The caret range on an unchanged eve is pinned exactly in the same pass.
+    assert.match(log, /^npm install --save-exact eve@0\.68\.0$/m);
     assert.match(log, /install-state node_modules=yes lock=yes/);
     assert.match(log, /^npm ls eve$/m);
     assert.doesNotMatch(log, /systemctl/);

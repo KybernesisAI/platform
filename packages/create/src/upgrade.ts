@@ -1100,6 +1100,11 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
       (installedMajorMinor[0] !== targetMajorMinor[0] || installedMajorMinor[1] !== targetMajorMinor[1]),
   );
 
+  // eve already at the pin but saved as a range (an agent scaffolded before
+  // the pin was exact, or installed by hand): pin it in place. The version
+  // does not move, so this is not a change to plan or approve.
+  const loosePin = Boolean(eveTarget && eveInstalled === eveTarget && targets.some((target) => target.name === "eve" && target.currentRange !== eveTarget));
+
   const changed = [...new Set(targets
     .filter((target) => target.installedVersion !== target.targetVersion && !(target.name === "eve" && versionLt(target.targetVersion, target.installedVersion)))
     .map((target) => `${target.name}@${target.targetVersion}`))];
@@ -1124,6 +1129,15 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairLocalQueueTimeouts(cwd, deps);
 
   if (changed.length === 0) {
+    if (loosePin) {
+      const pinned = commandResult("npm", ["install", "--save-exact", `eve@${eveTarget}`], cwd);
+      if (pinned.status !== 0) {
+        console.log(red(`\nCould not pin eve exactly to ${eveTarget}:\n${pinned.stderr.trim()}`));
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`  ${green("✓")} eve pinned exactly to ${eveTarget} ${dim("(was a range)")}`);
+    }
     console.log(`\n${green("Everything is at latest certified versions.")}\n`);
     repairBuzzSetup(cwd, deps);
     repairRemovedDefaultTools(cwd);
@@ -1160,7 +1174,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   // Outside a clean install, eve goes in with --save-exact for the same
   // reason rewriteManifest pins it: npm would save a caret by default.
-  const eveChange = changed.find((spec) => spec.startsWith("eve@"));
+  const eveChange = changed.find((spec) => spec.startsWith("eve@")) ?? (loosePin ? `eve@${eveTarget}` : undefined);
   const others = changed.filter((spec) => spec !== eveChange);
 
   /**
