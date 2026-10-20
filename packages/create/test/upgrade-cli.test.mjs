@@ -257,6 +257,45 @@ test("a known-stale kyb refuses before project reads, mutation, or downstream co
   }
 });
 
+test("--check prints the plan as one json line and changes nothing, even when kyb is stale", () => {
+  const fix = fixture({ createVersion: newerCreateVersion, bridgeState: "active" });
+  try {
+    const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const line = result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN "));
+    const plan = JSON.parse(line.slice("KYB_UPGRADE_PLAN ".length));
+    assert.equal(plan.ok, true);
+    assert.equal(plan.resetsConversations, true);
+    assert.deepEqual(plan.eve, { installed: "0.38.3", certified: EVE_VERSION });
+    assert.deepEqual(plan.changes.map((c) => `${c.name} ${c.from} ${c.to}`).sort(), [
+      "@kybernesis/buzz 0.8.0 0.9.0",
+      "@kybernesis/enterprise 0.7.0 0.8.0",
+      "@kybernesis/evals 0.6.1 0.6.2",
+      `eve 0.38.3 ${EVE_VERSION}`,
+    ]);
+    assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
+    assert.equal(readFileSync(join(fix.dir, "package-lock.json"), "utf8"), "original lock\n");
+    assert.doesNotMatch(commandLog(fix), /^npm (install|ls|run)/m);
+    assert.doesNotMatch(commandLog(fix), /^(sudo|systemctl) /m);
+    assert.doesNotMatch(commandLog(fix), /^npx (?!eve info --json$)/m, "only the read-only eve info");
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("--check on an agent already current says so", () => {
+  const fix = fixture({ allCurrent: true });
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual([plan.changes, plan.resetsConversations], [[], false]);
+  } finally {
+    fix.cleanup();
+  }
+});
+
 test("--allow-stale prints the warning and continues through install and validation", () => {
   const fix = fixture({ createVersion: newerCreateVersion });
   try {

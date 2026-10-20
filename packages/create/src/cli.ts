@@ -87,7 +87,7 @@ const COMMANDS: Record<string, string> = {
   credential: "Write the agent credential onto a host (--local to stay here).",
   register: "Register this agent with the control plane (--name, --url).",
   deploy: "Deploy this agent to its host (--no-env to leave the env file alone).",
-  upgrade: "Bring @kybernesis packages and eve to certified versions (--host, --skip-eval, --allow-stale, --yes).",
+  upgrade: "Bring @kybernesis packages and eve to certified versions (--check, --host, --skip-eval, --allow-stale, --yes).",
   tui: "Talk to your agents in the terminal.",
   version: "Print the version of this tool.",
 };
@@ -119,6 +119,7 @@ function usage(command?: string): void {
       --host[=<target>]     ${dim("run the eval gate over ssh; defaults like kyb deploy")}
       --skip-eval           ${dim("skip the eval gate")}
       --allow-stale         ${dim("continue even when this kyb is behind the published version")}
+      --check               ${dim("print what would change (one KYB_UPGRADE_PLAN json line) and change nothing")}
       --yes, -y             ${dim("confirm an eve version change noninteractively")}
 `);
     }
@@ -185,6 +186,7 @@ switch (command) {
   case "upgrade":
     await upgrade({
       allowStale: rest.includes("--allow-stale"),
+      check: rest.includes("--check"),
       host: optionalValueFlag(rest, "host"),
       skipEval: rest.includes("--skip-eval"),
       yes: rest.includes("--yes") || rest.includes("-y"),

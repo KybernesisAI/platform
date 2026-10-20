@@ -116,6 +116,12 @@ run and upgrade exits with status 2, prints that the gate can only run on the
 host, and gives the exact ssh command. It does not print "Do NOT deploy" because
 no eval exercised the code.
 
+`kyb upgrade --check` plans only: it prints what would change as one
+`KYB_UPGRADE_PLAN {"ok":true,"changes":[{"name","from","to"}],"resetsConversations":false}`
+line and installs, repairs and renews nothing. `@kybernesis/manage` reads it for
+the owner's Update card, and runs the real upgrade (with its eval gate, then a
+rebuild and a safe restart, or everything put back) from that card.
+
 Use `kyb upgrade --host` to run the gate over ssh after the upgrade. The target
 uses the same defaults as `kyb deploy`: `EVE_SSH_HOST`, then
 `$EXE_VM_NAME.exe.xyz`; `--host=<ssh-target>` overrides them. The remote project
