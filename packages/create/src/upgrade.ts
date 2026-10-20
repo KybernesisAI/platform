@@ -864,6 +864,11 @@ function newestBuildForEve(name: string, eve: string): string | undefined {
   const candidates: Candidate[] = [];
   for (const version of ordered) {
     const peer = targetEvePeer(name, version);
+    // A package whose newest build declares no eve peer at all (this CLI,
+    // @kybernesis/create) is not built per eve line: its newest is the answer.
+    // Without this, every agent that keeps kyb in its own package.json could
+    // never plan an upgrade (`kyb upgrade --check` reported it unresolved).
+    if (!peer && candidates.length === 0) return version;
     candidates.push({ version, ...(peer ? { peer } : {}) });
     const hit = newestOnLine(candidates, eve);
     if (hit) return hit;
