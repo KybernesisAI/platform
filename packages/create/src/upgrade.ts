@@ -562,6 +562,12 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
 
 export interface UpgradeOptions {
   allowStale?: boolean;
+  /**
+   * Plan only: print what an upgrade would change as one `KYB_UPGRADE_PLAN <json>`
+   * line and touch nothing (no install, no repair, no renewal of kyb itself).
+   * The owner's Update card reads it through @kybernesis/manage.
+   */
+  check?: boolean;
   host?: true | string;
   skipEval?: boolean;
   yes?: boolean;
@@ -944,6 +950,13 @@ function startStoppedBridge(cwd: string, unit: string): boolean {
   return false;
 }
 
+/** The one line `kyb upgrade --check` prints for a program to read; everything else it prints is for people. */
+export const UPGRADE_PLAN_PREFIX = "KYB_UPGRADE_PLAN ";
+
+function printPlan(plan: Record<string, unknown>): void {
+  console.log(`${UPGRADE_PLAN_PREFIX}${JSON.stringify(plan)}`);
+}
+
 export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   console.log(bold("\nkyb upgrade — checking @kybernesis/* and eve against npm\n"));
   const cwd = process.cwd();
@@ -955,7 +968,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   };
 
   const selfVersion = checkSelfVersion();
-  if (selfVersion.kind === "stale" && !options.allowStale) {
+  if (selfVersion.kind === "stale" && !options.allowStale && !options.check) {
     /**
      * A stale kyb that is the PROJECT's own dependency renews itself.
      *
@@ -1054,6 +1067,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   }
 
   if (unresolved.size > 0) {
+    if (options.check) printPlan({ ok: false, unresolved: [...unresolved].sort(), changes: [], resetsConversations: false });
     fail(
       `\nUpgrade planning failed for ${[...unresolved].sort().join(", ")}. ` +
         `No manifest, dependency tree, or service state was changed.`,
@@ -1089,6 +1103,18 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   const changed = [...new Set(targets
     .filter((target) => target.installedVersion !== target.targetVersion && !(target.name === "eve" && versionLt(target.targetVersion, target.installedVersion)))
     .map((target) => `${target.name}@${target.targetVersion}`))];
+
+  if (options.check) {
+    printPlan({
+      ok: true,
+      eve: { installed: eveInstalled ?? null, certified: EVE_VERSION },
+      changes: [...new Map(targets
+        .filter((target) => changed.includes(`${target.name}@${target.targetVersion}`))
+        .map((target) => [target.name, { name: target.name, from: target.installedVersion, to: target.targetVersion }])).values()],
+      resetsConversations: eveChanged,
+    });
+    return;
+  }
 
   if (eveChanged && !(await approveEveChange(cwd, options.yes === true, Boolean(deps["@kybernesis/buzz"])))) {
     process.exitCode = 1;

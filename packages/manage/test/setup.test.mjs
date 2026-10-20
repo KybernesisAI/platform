@@ -1063,3 +1063,199 @@ test("voice item: shown once voice is installed, done once the owner's key is st
     else process.env.KYBERNESIS_VOICE_OPENAI_KEY = previous;
   }
 });
+
+// ── Updating to the newest certified packages ─────────────────────────────
+
+function installed(dir, name, version) {
+  mkdirSync(join(dir, "node_modules", name), { recursive: true });
+  writeFileSync(join(dir, "node_modules", name, "package.json"), JSON.stringify({ name, version }));
+}
+
+function updatableAgent() {
+  const dir = hostedAgentDir({ eve: "0.68.0", "@kybernesis/manage": "^0.22.0", "@kybernesis/buzz": "^0.10.0", zod: "^4.0.0" });
+  writeFileSync(join(dir, "package-lock.json"), "old lock\n");
+  mkdirSync(join(dir, "agent", "tools"), { recursive: true });
+  writeFileSync(join(dir, "agent", "agent.ts"), "export default {};\n");
+  installed(dir, "eve", "0.68.0");
+  installed(dir, "@kybernesis/manage", "0.22.0");
+  installed(dir, "@kybernesis/buzz", "0.10.0");
+  return dir;
+}
+
+const PLAN = (changes, resetsConversations = false) =>
+  `kyb upgrade — checking\nKYB_UPGRADE_PLAN ${JSON.stringify({ ok: true, eve: { installed: "0.68.0", certified: "0.68.0" }, changes, resetsConversations })}\n`;
+
+/** What `kyb upgrade` does to the files: new ranges, a new lock, a repaired tool, newer node_modules. */
+function upgradeFiles(dir) {
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  pkg.dependencies["@kybernesis/manage"] = "^0.23.0";
+  pkg.dependencies["@kybernesis/buzz"] = "^0.11.0";
+  writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+  writeFileSync(join(dir, "package-lock.json"), "new lock\n");
+  writeFileSync(join(dir, "agent", "agent.ts"), "export default { repaired: true };\n");
+  writeFileSync(join(dir, "agent", "tools", "added.ts"), "export default {};\n");
+  installed(dir, "@kybernesis/manage", "0.23.0");
+  installed(dir, "@kybernesis/buzz", "0.11.0");
+}
+
+test("update.check: asks kyb for its plan with a clean environment, keeps it, and the item shows it until the agent changes", async () => {
+  const dir = updatableAgent();
+  const restarter = new SafeRestarter({ appRoot: "/nonexistent" });
+  const status = async () => setupStatus({ appRoot: dir, options: {}, restarter });
+  assert.equal((await status()).update.changes, null);
+  assert.deepEqual((await status()).update.installed.map((p) => `${p.name}@${p.version}`), ["eve@0.68.0", "@kybernesis/buzz@0.10.0", "@kybernesis/manage@0.22.0"]);
+  assert.match((await status()).items.find((i) => i.id === "update").detail, /Not checked/);
+
+  const calls = [];
+  const actions = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (file, args, opts) => {
+        calls.push({ cmd: [file, ...args].join(" "), clean: opts.clean });
+        return { code: 0, stdout: PLAN([{ name: "@kybernesis/manage", from: "0.22.0", to: "0.23.0" }]), stderr: "" };
+      },
+    },
+    restarter,
+  });
+  const checked = await actions.run({ action: "update.check" });
+  assert.equal(checked.status, 200);
+  assert.equal(checked.body.state, "available");
+  assert.deepEqual(calls, [{ cmd: "npx --yes --package=@kybernesis/create@>=0.24.0 kyb upgrade --check", clean: true }]);
+  const after = await status();
+  assert.deepEqual(after.update.changes, [{ name: "@kybernesis/manage", from: "0.22.0", to: "0.23.0" }]);
+  assert.match(after.items.find((i) => i.id === "update").detail, /An update is ready: manage/);
+
+  installed(dir, "@kybernesis/manage", "0.22.1");
+  assert.equal((await status()).update.changes, null, "someone updated it by hand: the old check no longer holds");
+
+  const broken = createSetupActions({ appRoot: dir, options: { exec: async () => ({ code: 1, stdout: "nope", stderr: "" }) }, restarter });
+  assert.equal((await broken.run({ action: "update.check" })).status, 502);
+
+  assert.equal((await setupStatus({ appRoot: agentDir(), options: {}, restarter })).update, undefined, "not on its own host: no update");
+});
+
+test("update.run: answers at once, upgrades with the eval gate, builds, restarts once (and the bridge, since Buzz moved)", async () => {
+  const dir = updatableAgent();
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const restarts = [];
+  const actions = createSetupActions({
+    appRoot: dir,
+    agent: "acme",
+    options: {
+      exec: async (file, args, opts) => {
+        const cmd = [file, ...args].join(" ");
+        calls.push(cmd);
+        if (cmd.includes("systemctl show")) return { code: 0, stdout: "loaded\n", stderr: "" };
+        if (cmd.includes("systemctl is-active")) return { code: 0, stdout: "active\n", stderr: "" };
+        if (cmd.includes("kyb upgrade")) {
+          assert.equal(opts.clean, true, "PORT from the agent's own process would collide with the eval's dev server");
+          await gate;
+          upgradeFiles(dir);
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: (before) => (restarts.push(before), { restart: "scheduled" }) },
+  });
+  const first = await actions.run({ action: "update.run" });
+  assert.equal(first.status, 202);
+  const item = async () => (await setupStatus({ appRoot: dir, options: {}, restarter: new SafeRestarter({ appRoot: "/nonexistent" }) })).items.find((i) => i.id === "update");
+  assert.equal((await item()).busy, true);
+  assert.equal((await actions.run({ action: "update.run" })).status, 202, "a second press starts nothing");
+  assert.equal((await actions.run({ action: "linq.add" })).status, 409, "nothing is added during an update");
+  release();
+  await settle(() => restarts.length === 1);
+  assert.ok(calls.includes("npx --yes --package=@kybernesis/create@>=0.24.0 kyb upgrade --yes"), "no --skip-eval");
+  assert.ok(!calls.some((c) => c.includes("--skip-eval")));
+  assert.equal(calls.filter((c) => c === "npx eve build").length, 1);
+  assert.deepEqual(restarts, ["sudo -n systemctl try-restart acme-buzz-bridge"]);
+  await settle(() => readSetupState(dir).update?.startedAt === undefined);
+  const state = readSetupState(dir).update;
+  assert.deepEqual(state.updated.map((c) => `${c.name} ${c.from} ${c.to}`), ["@kybernesis/buzz 0.10.0 0.11.0", "@kybernesis/manage 0.22.0 0.23.0"]);
+  const done = await item();
+  assert.equal(done.detail, "Up to date.");
+  assert.equal(done.busy, undefined);
+  assert.ok(existsSync(join(dir, ".kyb-update.log")));
+});
+
+test("update.run: failed evals put every file back, reinstall the old tree, rebuild, keep the bridge up, and never restart", async () => {
+  const dir = updatableAgent();
+  const pkgBefore = readFileSync(join(dir, "package.json"), "utf8");
+  const calls = [];
+  let restarts = 0;
+  let bridgeUp = true;
+  const actions = createSetupActions({
+    appRoot: dir,
+    agent: "acme",
+    options: {
+      exec: async (file, args) => {
+        const cmd = [file, ...args].join(" ");
+        calls.push(cmd);
+        if (cmd.includes("systemctl show")) return { code: 0, stdout: "loaded\n", stderr: "" };
+        if (cmd.includes("systemctl is-active")) return { code: 0, stdout: bridgeUp ? "active\n" : "inactive\n", stderr: "" };
+        if (cmd.includes("kyb upgrade")) {
+          upgradeFiles(dir);
+          bridgeUp = false;
+          return { code: 1, stdout: "✗ Evals failed after upgrade. Do NOT deploy", stderr: "" };
+        }
+        if (cmd.startsWith("sudo -n systemctl start")) bridgeUp = true;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  assert.equal((await actions.run({ action: "update.run" })).status, 202);
+  await settle(() => Boolean(readSetupState(dir).update?.error));
+  assert.match(readSetupState(dir).update.error, /did not pass the agent's checks/);
+  assert.equal(readFileSync(join(dir, "package.json"), "utf8"), pkgBefore);
+  assert.equal(readFileSync(join(dir, "package-lock.json"), "utf8"), "old lock\n");
+  assert.equal(readFileSync(join(dir, "agent", "agent.ts"), "utf8"), "export default {};\n");
+  assert.equal(existsSync(join(dir, "agent", "tools", "added.ts")), false);
+  assert.equal(readFileSync(join(dir, ".env.local"), "utf8"), 'KYBERNESIS_AGENT_CREDENTIAL="cred"\n');
+  const after = calls.slice(calls.findIndex((c) => c.includes("kyb upgrade")) + 1);
+  assert.deepEqual(after.filter((c) => !c.includes("systemctl show") && !c.includes("is-active")), [
+    "npm ci --no-audit --no-fund",
+    "npx eve build",
+    "sudo -n systemctl start acme-buzz-bridge",
+  ]);
+  assert.equal(restarts, 0);
+  assert.equal(bridgeUp, true);
+  const item = (await setupStatus({ appRoot: dir, options: {}, restarter: new SafeRestarter({ appRoot: "/nonexistent" }) })).items.find((i) => i.id === "update");
+  assert.match(item.detail, /did not pass/);
+});
+
+test("update.run: a failed build is put back; an update that changed nothing neither builds nor restarts", async () => {
+  const dir = updatableAgent();
+  let restarts = 0;
+  let builds = 0;
+  const failing = createSetupActions({
+    appRoot: dir,
+    options: {
+      exec: async (_file, args) => {
+        if (args.includes("upgrade")) upgradeFiles(dir);
+        if (args.includes("build")) builds++;
+        return { code: args.includes("build") && builds === 1 ? 1 : 0, stdout: "", stderr: "" };
+      },
+    },
+    restarter: { request: () => restarts++ },
+  });
+  await failing.run({ action: "update.run" });
+  await settle(() => Boolean(readSetupState(dir).update?.error));
+  assert.match(readSetupState(dir).update.error, /did not build/);
+  assert.equal(readFileSync(join(dir, "package-lock.json"), "utf8"), "old lock\n");
+  assert.equal(restarts, 0);
+
+  const quiet = [];
+  const nothing = createSetupActions({
+    appRoot: updatableAgent(),
+    options: { exec: async (file, args) => (quiet.push([file, ...args].join(" ")), { code: 0, stdout: "Everything is at latest certified versions.", stderr: "" }) },
+    restarter: { request: () => restarts++ },
+  });
+  await nothing.run({ action: "update.run" });
+  await settle(() => quiet.length >= 1);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(!quiet.includes("npx eve build"));
+  assert.equal(restarts, 0);
+});

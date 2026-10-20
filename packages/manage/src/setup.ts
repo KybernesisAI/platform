@@ -28,6 +28,17 @@ import {
   type BridgeState,
   type RelayOutcome,
 } from "./buzz.js";
+import {
+  KYB_UPDATE,
+  changeWords,
+  installedStamp,
+  installedVersions,
+  parseUpgradePlan,
+  restoreSnapshot,
+  takeSnapshot,
+  unchangedSince,
+  type PackageChange,
+} from "./update.js";
 
 /**
  * Setup routes: the steps that used to need a terminal on the agent's host,
@@ -77,7 +88,17 @@ export interface ExecResult {
 export type Exec = (
   file: string,
   args: string[],
-  opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> },
+  opts: {
+    cwd: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
+    /**
+     * Start from a login's environment, not the agent's: the agent's own
+     * process carries PORT and its runtime's settings, and an eval's dev
+     * server reading PORT would collide with the live agent.
+     */
+    clean?: boolean;
+  },
 ) => Promise<ExecResult>;
 export type Start = (file: string, args: string[], opts: { cwd: string }) => ChildProcessWithoutNullStreams;
 export type Launch = (script: string, cwd: string) => void;
@@ -102,14 +123,20 @@ function viaLoginShell(file: string, args: string[]): [string, string[]] {
   return [process.env.SHELL ?? "/bin/bash", ["-lc", 'exec "$0" "$@"', file, ...args]];
 }
 
+/** What a login over ssh starts with; the login shell's profile fills in the rest. */
+const LOGIN_ENV = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR", "XDG_RUNTIME_DIR"];
+
 export const defaultExec: Exec = (file, args, opts) =>
   new Promise((resolve) => {
     const [shell, argv] = viaLoginShell(file, args);
+    const base = opts.clean
+      ? Object.fromEntries(LOGIN_ENV.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]]])))
+      : process.env;
     // stdin closed: every CLI here takes its non-interactive path.
     const child = spawn(shell, argv, {
       cwd: opts.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", NO_UPDATE_NOTIFIER: "1", ...opts.env },
+      env: { ...base, NO_COLOR: "1", NO_UPDATE_NOTIFIER: "1", ...opts.env },
     });
     let stdout = "";
     let stderr = "";
@@ -246,6 +273,19 @@ interface SetupState {
   buzz?: { keyFile?: string; npub?: string; hex?: string; relays?: string[]; members?: string[]; at?: string };
   /** A `buzz.add` that has started: the process running it, and why it stopped if it failed. */
   buzzAdd?: { startedAt?: string; pid?: number; error?: string };
+  /** The last update check, the update running or how the last one ended. */
+  update?: {
+    checkedAt?: string;
+    /** What was installed when it checked; a check is trusted only while this still holds. */
+    stamp?: string;
+    changes?: PackageChange[];
+    resetsConversations?: boolean;
+    startedAt?: string;
+    pid?: number;
+    error?: string;
+    updatedAt?: string;
+    updated?: PackageChange[];
+  };
 }
 
 function stateFile(appRoot: string): string {
@@ -392,7 +432,7 @@ async function subscriptionState(port: number): Promise<"signed-in" | "signed-ou
 }
 
 export interface SetupItem {
-  id: "identity" | "model" | "computer" | "slack" | "imessage" | "buzz" | "wallet" | "voice";
+  id: "identity" | "model" | "computer" | "slack" | "imessage" | "buzz" | "wallet" | "voice" | "update";
   required: boolean;
   done: boolean;
   detail: string;
@@ -424,6 +464,26 @@ export interface SetupStatus {
   items: SetupItem[];
   /** Present when the agent has Buzz installed (`kyb add buzz`). */
   buzz?: BuzzStatus;
+  /** Present on an agent on its own host, which can update itself (manage 0.23). */
+  update?: UpdateStatus;
+}
+
+export interface UpdateStatus {
+  /** eve and each @kybernesis package, as installed now. */
+  installed: Array<{ name: string; version: string | null }>;
+  /** When `update.check` last looked; null when it has not, or when the agent changed since. */
+  checkedAt: string | null;
+  /** What an update would change, from that check; null until there is one. */
+  changes: PackageChange[] | null;
+  /** The update moves eve, which ends conversations still open. */
+  resetsConversations: boolean;
+  /** `update.run` is working (it takes minutes: install, the agent's checks, a rebuild). */
+  running: boolean;
+  /** Why the last update did not go through; the agent was put back as it was. */
+  error: string | null;
+  /** When the last update went through, and what it changed. */
+  updatedAt: string | null;
+  updated: PackageChange[];
 }
 
 export interface BuzzStatus {
@@ -639,6 +699,40 @@ export async function setupStatus(input: {
       ...(running ? { busy: true } : {}),
     });
   }
+  let update: UpdateStatus | undefined;
+  if (onOwnHost(appRoot)) {
+    const u = saved.update ?? {};
+    const running = Boolean(u.startedAt && !u.error && u.pid === process.pid);
+    const interrupted = Boolean(u.startedAt && !running && !u.error);
+    const current = u.stamp !== undefined && u.stamp === installedStamp(appRoot);
+    update = {
+      installed: installedVersions(appRoot),
+      checkedAt: current ? (u.checkedAt ?? null) : null,
+      changes: current ? (u.changes ?? null) : null,
+      resetsConversations: current ? Boolean(u.resetsConversations) : false,
+      running,
+      error: u.error ?? (interrupted ? "The last update was interrupted. Check that the agent answers, then try again or contact support." : null),
+      updatedAt: u.updatedAt ?? null,
+      updated: u.updated ?? [],
+    };
+    items.push({
+      id: "update",
+      required: false,
+      done: !running && update.changes?.length === 0,
+      detail: running
+        ? "Updating. It installs the new packages, checks the agent still works, then restarts it once."
+        : update.error
+          ? update.error
+          : update.changes === null
+            ? "Not checked for updates yet."
+            : update.changes.length
+              ? `An update is ready: ${changeWords(update.changes)}.`
+              : "Up to date.",
+      actions: ["update.check", "update.run"],
+      env: [],
+      ...(running ? { busy: true } : {}),
+    });
+  }
   if (deps.has("@kybernesis/voice")) {
     // Voice is installed on every company agent; it answers calls once the
     // owner has given it their own OpenAI key.
@@ -695,6 +789,7 @@ export async function setupStatus(input: {
     restart: { ...input.restarter.state(), configured: Boolean(input.restartCommand), owed: owed || input.restarter.pending },
     items,
     ...(buzz ? { buzz } : {}),
+    ...(update ? { update } : {}),
   };
 }
 
@@ -847,6 +942,61 @@ export function createSetupActions(input: {
   const addItem = (item: string, isAdded: () => boolean, words: { busy: string; notAdded: string; notBuilt: string }) =>
     addWith(["--yes", "eve", "add", `@kybernesis/${item}`, "--yes"], isAdded, words);
   let buzzAdding = false;
+  let updating = false;
+
+  /**
+   * One update, start to finish. Everything `kyb upgrade` may touch is copied
+   * first; if the upgrade, its eval gate or the rebuild fails, the copy goes
+   * back, the old tree is reinstalled from the old lock and rebuilt, and a
+   * Buzz bridge that was running is running again. Nothing restarts unless
+   * the new build succeeded; then it is the usual safe restart (and the
+   * bridge's own, when Buzz moved).
+   */
+  const runUpdate = async (): Promise<{ error?: string; updated: PackageChange[] }> => {
+    const snap = takeSnapshot(appRoot);
+    const before = installedVersions(appRoot);
+    const fileEnv = readEnvFile(envPath);
+    const name = agentName(appRoot, input.agent, (k) => fileEnv.get(k) || process.env[k]);
+    const bridge = dependencies(appRoot).has("@kybernesis/buzz") && name ? bridgeUnitName(name) : null;
+    const bridgeWas = bridge ? await bridgeState(exec, appRoot, bridge) : null;
+    const putBack = async () => {
+      restoreSnapshot(appRoot, snap);
+      const lock = existsSync(join(appRoot, "package-lock.json"));
+      await exec("npm", [lock ? "ci" : "install", "--no-audit", "--no-fund"], { cwd: appRoot, timeoutMs: 30 * 60_000, clean: true });
+      await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+      if (bridge && bridgeWas === "active" && (await bridgeState(exec, appRoot, bridge)) !== "active") {
+        await exec("sudo", ["-n", "systemctl", "start", bridge], { cwd: appRoot, timeoutMs: 30_000 });
+      }
+    };
+
+    // No --skip-eval: the agent's own eval suite is the gate, as for any deploy.
+    const upgraded = await exec("npx", [...KYB_UPDATE, "upgrade", "--yes"], { cwd: appRoot, timeoutMs: 90 * 60_000, clean: true });
+    writeUpdateLog(appRoot, upgraded);
+    if (upgraded.code !== 0) {
+      await putBack();
+      const said = `${upgraded.stdout}\n${upgraded.stderr}`;
+      return {
+        updated: [],
+        error: /Evals failed/.test(said)
+          ? "The update did not pass the agent's checks, so the agent was put back as it was. Contact support."
+          : /eval gate for this agent can only run/i.test(said)
+            ? "The agent's checks could not run, so the update was not kept and the agent was put back as it was. Contact support."
+            : "The update could not be installed, so the agent was left as it was. Try again later or contact support.",
+      };
+    }
+    if (unchangedSince(appRoot, snap)) return { updated: [] };
+    const built = await exec("npx", ["eve", "build"], { cwd: appRoot, timeoutMs: 600_000 });
+    if (built.code !== 0) {
+      await putBack();
+      return { updated: [], error: "The agent did not build after the update, so it was put back as it was. Contact support." };
+    }
+    const updated = installedVersions(appRoot).flatMap((p) => {
+      const was = before.find((b) => b.name === p.name)?.version;
+      return was && p.version && was !== p.version ? [{ name: p.name, from: was, to: p.version }] : [];
+    });
+    restarter.request(bridge && updated.some((c) => c.name === "@kybernesis/buzz") ? `sudo -n systemctl try-restart ${bridge}` : undefined);
+    return { updated };
+  };
 
   const endClaudeLogin = () => {
     if (!claudeLogin) return;
@@ -1201,6 +1351,82 @@ export function createSetupActions(input: {
         })
         .finally(() => {
           buzzAdding = false;
+        });
+      return started;
+    },
+
+    /**
+     * What an update would change: `kyb upgrade --check` looks up the newest
+     * build of each @kybernesis package for the certified eve, and the
+     * certified eve itself, and changes nothing. The answer is kept so the
+     * card can show it without asking npm again, until something changes
+     * what is installed.
+     */
+    "update.check": async () => {
+      if (!onOwnHost(appRoot)) return fail(409, "Only an agent on its own host can update itself from here.");
+      if (updating) return { status: 200, body: { ok: true, state: "updating" } };
+      const stamp = installedStamp(appRoot);
+      const checked = await exec("npx", [...KYB_UPDATE, "upgrade", "--check"], { cwd: appRoot, timeoutMs: 300_000, clean: true });
+      const plan = parseUpgradePlan(checked.stdout);
+      if (!plan?.ok) return fail(502, "Could not check for updates right now. Try again later.");
+      const checkedAt = new Date((options.now ?? Date.now)()).toISOString();
+      writeSetupState(appRoot, (s) => {
+        s.update = { ...s.update, checkedAt, stamp, changes: plan.changes, resetsConversations: plan.resetsConversations };
+      });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: plan.changes.length ? "available" : "current",
+          changes: plan.changes,
+          resetsConversations: plan.resetsConversations,
+          checkedAt,
+        },
+      };
+    },
+
+    /**
+     * Update the agent to the newest certified packages: `kyb upgrade` with
+     * its eval gate, a rebuild and one safe restart, or everything put back
+     * as it was. It takes minutes, so this answers 202 at once and the update
+     * runs on; GET /setup reports it (`update.running`, then `update.error`
+     * or `update.updatedAt`). One at a time, and never beside an add.
+     */
+    "update.run": async () => {
+      if (!onOwnHost(appRoot)) return fail(409, "Only an agent on its own host can update itself from here.");
+      const started = {
+        status: 202,
+        body: { ok: true, state: "updating", note: "Updating. It installs the new packages, checks the agent still works, then restarts it once." },
+      };
+      if (updating) return started;
+      if (adding) return fail(409, "Something is being added to this agent. Update it once that has finished.");
+      updating = true;
+      adding = true;
+      const at = () => new Date((options.now ?? Date.now)()).toISOString();
+      writeSetupState(appRoot, (s) => {
+        const { error: _error, ...rest } = s.update ?? {};
+        s.update = { ...rest, startedAt: at(), pid: process.pid };
+      });
+      const settle = (outcome: { error?: string; updated: PackageChange[] }) =>
+        writeSetupState(appRoot, (s) => {
+          const { startedAt: _s, pid: _p, error: _e, ...rest } = s.update ?? {};
+          s.update = outcome.error
+            ? { ...rest, error: outcome.error }
+            : {
+                ...rest,
+                checkedAt: at(),
+                stamp: installedStamp(appRoot),
+                changes: [],
+                resetsConversations: false,
+                ...(outcome.updated.length ? { updatedAt: at(), updated: outcome.updated } : {}),
+              };
+        });
+      void runUpdate()
+        .then(settle)
+        .catch(() => settle({ updated: [], error: "The update stopped part way. Check that the agent answers, then contact support." }))
+        .finally(() => {
+          updating = false;
+          adding = false;
         });
       return started;
     },
@@ -1690,6 +1916,19 @@ export function createSetupActions(input: {
       return action(body);
     },
   };
+}
+
+/** The last update's own words, kept on the host for whoever looks into a failed one. */
+function writeUpdateLog(appRoot: string, result: ExecResult): void {
+  try {
+    writeFileSync(
+      join(appRoot, ".kyb-update.log"),
+      `${new Date().toISOString()} kyb upgrade exited ${result.code}\n\n${result.stdout}\n--- stderr ---\n${result.stderr}\n`,
+      { mode: 0o600 },
+    );
+  } catch {
+    /* a log is a courtesy */
+  }
 }
 
 function parseList(text: string): Array<Record<string, unknown> & { id?: unknown; target_url?: unknown; url?: unknown }> {
