@@ -12,6 +12,7 @@ import { dockerPruneCronArtifact } from "./docker-prune-cron.js";
 import { newestOnLine, type Candidate } from "./on-line-version.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
+import { repairExeClaudeRoute } from "./exe-claude-route.js";
 import { repairOptInTools, repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
@@ -86,6 +87,26 @@ function repairLocalQueueTimeouts(cwd: string, deps: Record<string, string>): vo
       `    ${dim("A delivery holds one connection open for the whole turn. Below this, any turn")}\n` +
       `    ${dim("slower than 30s was redelivered and its steps re-run — the agent answered twice.")}\n` +
       `    ${dim("Takes effect on the next server restart.")}\n`,
+  );
+}
+
+/** Route Claude ids through the gateway's Messages API wherever an agent builds an exe model (see exe-claude-route.ts). */
+function repairExeClaudeRoutes(cwd: string, deps: Record<string, string>): void {
+  if (!deps["@kybernesis/exe"]) return;
+  const changed = repairExeClaudeRoute(cwd);
+  if (changed.length === 0) return;
+  if (!deps["@ai-sdk/anthropic"]) {
+    const added = commandResult("npm", ["install", "@ai-sdk/anthropic"], cwd);
+    if (added.status !== 0) {
+      console.log(red(`  ✗ could not install @ai-sdk/anthropic for the Claude route:\n${added.stderr.trim()}`));
+      process.exitCode = 1;
+      return;
+    }
+  }
+  console.log(
+    `  ${green("+")} passed createAnthropic to exeModel in ${changed.join(", ")}\n` +
+      `    ${dim("Claude on the exe gateway is served on its Messages API; with only createOpenAI")}\n` +
+      `    ${dim("a Claude id has no route, and exe 0.17+ refuses it when the agent loads.")}\n`,
   );
 }
 
@@ -639,7 +660,10 @@ function exeJudgeUrl(cwd: string, env: Record<string, string>): string | null | 
   const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*(?:\.evaluationModel\s*)?\(/.exec(source)?.[1];
   if (!judgeProvider) return null;
   const escaped = judgeProvider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const providerBody = new RegExp(`(?:const|let)\\s+${escaped}\\s*=\\s*create[A-Za-z]+\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*\\)`).exec(source)?.[1];
+  // The provider may be made inline (`model: createAnthropic({ … }).evaluationModel(…)`)
+  // as well as bound to a name first; both carry the base URL in the same object.
+  const inline = /judge\s*:\s*\{[\s\S]*?model\s*:\s*create[A-Za-z]+\s*\(\s*\{([\s\S]*?)\}\s*\)/.exec(source)?.[1];
+  const providerBody = inline ?? new RegExp(`(?:const|let)\\s+${escaped}\\s*=\\s*create[A-Za-z]+\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*\\)`).exec(source)?.[1];
   if (!providerBody) return /EXE_LLM_URL|llm\.int\.exe\.xyz/.test(source) ? undefined : null;
   if (/EXE_LLM_URL/.test(providerBody)) return env.EXE_LLM_URL || DEFAULT_EXE_MODELS_URL;
   const baseUrl = /baseURL\s*:\s*["']([^"']+)["']/.exec(providerBody)?.[1];
@@ -1153,6 +1177,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairNotifySetup(cwd, deps);
     repairReasoningSandboxes(cwd, deps);
     repairManageRestart(cwd, deps);
+    repairExeClaudeRoutes(cwd, deps);
     return;
   }
 
@@ -1249,6 +1274,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairNotifySetup(cwd, deps);
   repairReasoningSandboxes(cwd, deps);
   repairManageRestart(cwd, deps);
+  repairExeClaudeRoutes(cwd, deps);
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {
