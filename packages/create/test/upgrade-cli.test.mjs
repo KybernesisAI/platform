@@ -65,7 +65,11 @@ function fixture(options = {}) {
       eve: options.eveRange ?? (options.allCurrent ? "0.68.0" : "0.38.3"),
       zod: "4.4.3",
     },
-    devDependencies: { "@kybernesis/enterprise": options.allCurrent ? "^0.8.0" : "0.7.0", typescript: "7.0.2" },
+    devDependencies: {
+      ...(options.ownKyb ? { "@kybernesis/create": "^0.20.0" } : {}),
+      "@kybernesis/enterprise": options.allCurrent ? "^0.8.0" : "0.7.0",
+      typescript: "7.0.2",
+    },
   }, null, 2) + "\n");
 
   executable(join(bin, "node"), `#!/bin/sh
@@ -79,6 +83,8 @@ case "$*" in
   *"@kybernesis/exe/package.json"*) echo 0.12.1 ;;
   *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.68.0" : "^0.38.0"}" ;;
   *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
+  *"@kybernesis/create/package.json"*peerDependencies*) echo "" ;;
+  *"@kybernesis/create/package.json"*) echo 0.20.0 ;;
   *) exec ${JSON.stringify(process.execPath)} "$@" ;;
 esac
 `);
@@ -101,6 +107,8 @@ if [ "$1" = view ]; then
     "@kybernesis/evals versions") echo '["0.6.2","0.6.3"]' ;;
     "@kybernesis/exe versions") echo '["0.12.1","0.12.2"]' ;;
     "@kybernesis/enterprise versions") echo '["0.8.0","0.8.1"]' ;;
+    # The CLI declares no eve peer on any build: it is not built per eve line.
+    "@kybernesis/create versions") echo '["0.20.0","${installedCreateVersion}"]' ;;
     "@kybernesis/buzz@0.9.1 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
     "@kybernesis/evals@0.6.3 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
     "@kybernesis/exe@0.12.2 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
@@ -315,6 +323,19 @@ test("an agent already current with eve pinned exactly installs nothing", () => 
     const result = runUpgrade(fix);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.doesNotMatch(commandLog(fix), /^npm install/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("--check plans an agent that keeps kyb in its own package.json (no eve peer on create)", () => {
+  const fix = fixture({ allCurrent: true, ownKyb: true });
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.equal(plan.ok, true, result.stdout);
+    assert.deepEqual(plan.changes, [{ name: "@kybernesis/create", from: "0.20.0", to: installedCreateVersion }]);
   } finally {
     fix.cleanup();
   }
