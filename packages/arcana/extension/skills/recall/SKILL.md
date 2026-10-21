@@ -8,8 +8,8 @@ This is the **primary memory retrieval path**. The Arcana brain (entity graph,
 timeline, fact store, embeddings) is the authoritative knowledge store. The
 tools live on the memory connection; their remote names are `arcana_recall`,
 `arcana_search`, `arcana_timeline`, and `arcana_brain_stats`. Call them by the
-qualified name your session surfaces (use `connection_search` for "memory" or
-"arcana" if they are not yet loaded).
+qualified name your session surfaces; if they are not in your tool list, find
+them with `eve__search` (query `arcana_recall`) and call them with `eve__tool`.
 
 ## When to Fire
 

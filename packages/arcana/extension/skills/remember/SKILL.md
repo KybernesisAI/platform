@@ -7,7 +7,8 @@ description: "Persist important information from this conversation to long-term 
 Stores information into the workspace brain's full memory pipeline — timeline,
 entity graph, fact store, and embeddings. The tool's remote name is
 `arcana_remember` on the memory connection; call it by the qualified name your
-session surfaces (`connection_search` for "memory" or "arcana" if needed).
+session surfaces, or find it with `eve__search` (query `arcana_remember`) and
+call it with `eve__tool`.
 
 ## When to Fire
 
