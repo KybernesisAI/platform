@@ -1,0 +1,79 @@
+{
+  "name": "payments",
+  "type": "registry:item",
+  "title": "Kybernesis Payments",
+  "description": "A Link wallet for the agent on its owner's behalf: Stripe Link's tools (spend requests, approval links, reports) mounted behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and pay_on_computer, which types the approved one-time card into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
+  "dependencies": [
+    "@kybernesis/payments@eve-0.81",
+    "@kybernesis/computer@eve-0.81"
+  ],
+  "envVars": {},
+  "files": [
+    {
+      "path": "registry/payments-retrieve_user_info.ts",
+      "type": "registry:file",
+      "target": "agent/tools/retrieve_user_info.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `retrieve_user_info`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"retrieve_user_info\");\n"
+    },
+    {
+      "path": "registry/payments-list_payment_methods.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_payment_methods.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `list_payment_methods`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"list_payment_methods\");\n"
+    },
+    {
+      "path": "registry/payments-list_spend_requests.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_spend_requests.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `list_spend_requests`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"list_spend_requests\");\n"
+    },
+    {
+      "path": "registry/payments-create_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/create_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `create_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"create_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-cancel_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/cancel_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `cancel_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"cancel_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-request_spend_approval.ts",
+      "type": "registry:file",
+      "target": "agent/tools/request_spend_approval.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `request_spend_approval`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"request_spend_approval\");\n"
+    },
+    {
+      "path": "registry/payments-retrieve_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/retrieve_spend_request.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `retrieve_spend_request`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"retrieve_spend_request\");\n"
+    },
+    {
+      "path": "registry/payments-create_report.ts",
+      "type": "registry:file",
+      "target": "agent/tools/create_report.ts",
+      "content": "import { linkTool } from \"@kybernesis/payments\";\n\n// Stripe Link's `create_report`, behind the owner's link-cli sign-in on this host.\nexport default linkTool(\"create_report\");\n"
+    },
+    {
+      "path": "registry/payments-approve_spend_request.ts",
+      "type": "registry:file",
+      "target": "agent/tools/approve_spend_request.ts",
+      "content": "import { defineWorkflowTool } from \"eve/tools\";\nimport { z } from \"zod\";\n// The driver body may only import pure modules (eve bundles it without Node);\n// the Link calls come from the steps entry and are reached only inside \"use step\".\nimport { APPROVE_SPEND_REQUEST_DESCRIPTION, interpretSpendRequestAnswer, spendRequestAsk, type SpendRequestSnapshot } from \"@kybernesis/payments/ask\";\nimport { cancelSpendRequest, spendRequestApprovalLink, spendRequestSettledStatus, spendRequestSnapshot } from \"@kybernesis/payments/steps\";\n\n// The approval moment as one durable call: shows the purchase (merchant, total,\n// Approve-in-Link button), waits for the person, returns Link's real status.\n// Runs as a task: the question stays open through any other message the person\n// sends (an `execute` call's question is withdrawn by one, which would cancel\n// the purchase), and the result reaches the model later in the conversation.\n// Authored here because eve compiles \"use workflow\" / \"use step\" from source.\nexport default defineWorkflowTool({\n  description: APPROVE_SPEND_REQUEST_DESCRIPTION,\n  inputSchema: z.object({ spend_request_id: z.string().min(1).max(200) }),\n  async task(input, ctx) {\n    \"use workflow\";\n    const current = await snapshot(input.spend_request_id);\n    if (!current) return { status: \"not_found\", note: \"That spend request does not exist.\" };\n    if (current.status === \"approved\") return { status: \"approved\", note: \"Already approved. Proceed to pay_on_computer.\" };\n    if (current.status !== \"pending_approval\" && current.status !== \"created\") {\n      return { status: current.status, note: `This request is ${current.status}; create a new one if the purchase should still happen.` };\n    }\n    const approval_url = current.approval_url ?? (await approvalLink(current.id));\n    const answer = await ctx.ask(spendRequestAsk({ ...current, approval_url }));\n    if (interpretSpendRequestAnswer(answer) === \"cancel\") {\n      await cancel(current.id);\n      return { status: \"canceled\", note: \"The person cancelled. Do not buy this.\" };\n    }\n    const status = await settled(current.id);\n    if (status === \"approved\") return { status, note: \"Approved in Link. Call pay_on_computer with this spend request id.\" };\n    return { status, note: `Link reports ${status}. If it is still pending, the person may not have finished in the Link app; ask once, do not create another request.` };\n  },\n});\n\nasync function snapshot(id: string): Promise<SpendRequestSnapshot | null> {\n  \"use step\";\n  return spendRequestSnapshot(id);\n}\nasync function approvalLink(id: string): Promise<string | undefined> {\n  \"use step\";\n  return spendRequestApprovalLink(id);\n}\nasync function settled(id: string): Promise<string> {\n  \"use step\";\n  return spendRequestSettledStatus(id);\n}\nasync function cancel(id: string): Promise<void> {\n  \"use step\";\n  await cancelSpendRequest(id);\n}\n"
+    },
+    {
+      "path": "registry/payments-pay-on-computer.ts",
+      "type": "registry:file",
+      "target": "agent/tools/pay_on_computer.ts",
+      "content": "import { payOnComputerTool } from \"@kybernesis/payments\";\n\n// Types the one-time card of an APPROVED spend request into the checkout open\n// in the agent's own browser. The card goes Link → page; the model only learns\n// which fields were filled.\nexport default payOnComputerTool();\n"
+    },
+    {
+      "path": "registry/payments-instructions.ts",
+      "type": "registry:file",
+      "target": "agent/instructions/payments.ts",
+      "content": "import { defineInstructions } from \"eve/instructions\";\nimport { PAYMENTS_INSTRUCTIONS } from \"@kybernesis/payments\";\n\n// Agree the exact total first, ask (spend request), wait for Link's approval,\n// fill the card without seeing it, screenshot, submit, report.\nexport default defineInstructions({ content: PAYMENTS_INSTRUCTIONS });\n"
+    }
+  ]
+}

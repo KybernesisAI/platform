@@ -1,0 +1,26 @@
+{
+  "name": "linq",
+  "type": "registry:item",
+  "title": "Kybernesis iMessage (Linq)",
+  "description": "Answer texts on an iMessage line through Linq. Every sender is resolved to their control-plane person by number: linked people run as themselves, an unlinked number gets one claim link, refused senders get silence. Connect the line from Studio setup.",
+  "dependencies": [
+    "@kybernesis/exe@eve-0.81",
+    "@kybernesis/enterprise@eve-0.81"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": "",
+    "KYBERNESIS_AGENT_CREDENTIAL": "",
+    "LINQ_API_KEY": "",
+    "LINQ_WEBHOOK_SECRET": ""
+  },
+  "files": [
+    {
+      "path": "registry/linq-channel.ts",
+      "type": "registry:file",
+      "target": "agent/channels/linq.ts",
+      "content": "import { channelIdentity } from \"@kybernesis/enterprise\";\nimport { linqEnvCredentials, linqSenderIdentity } from \"@kybernesis/exe/linq\";\nimport { linqChannel } from \"eve/channels/linq\";\n\n// iMessage and SMS via Linq. Inbound is a signed webhook at /eve/v1/linq, so it\n// works on any host with a public HTTPS URL and needs no forwarder. The owner\n// connects a line from KYBER Studio's setup (or the manage `linq.verify`\n// action), which writes LINQ_API_KEY and LINQ_WEBHOOK_SECRET and registers\n// https://<this-host>/eve/v1/linq for message.received, reaction.added and\n// reaction.removed.\n//\n// A sender is a control-plane person, never a phone number: each text resolves\n// the number through the same link flow every channel uses. An unlinked number\n// gets one text with a claim link and nothing else; receiving it is what proves\n// they control the number. A linked person whose grant on this agent is revoked\n// stops within one token lifetime, with no redeploy.\nconst issuer = process.env.KYBERNESIS_ISSUER ?? \"https://agent.kybernesis.ai\";\nconst credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;\nconst agentName = process.env.KYBERNESIS_AGENT;\n\nexport default linqChannel({\n  credentials: linqEnvCredentials(),\n  ...(agentName ? { userName: agentName } : {}),\n  onMessage: linqSenderIdentity({\n    issuer,\n    agentName,\n    identity: credential ? channelIdentity({ issuer, credential }) : null,\n  }),\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}
