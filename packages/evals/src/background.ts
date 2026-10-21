@@ -8,9 +8,11 @@ import type { EveEvalContext, EveEvalTurn } from "eve/evals";
  * acknowledgement. Follow up to `maxHops` such turns and return the last one
  * that settled; a turn with no pending work is returned as is.
  *
- * Pending work shows in two shapes: `subagent.called` without a matching
- * `subagent.completed` (declared subagents), or a tool result carrying
- * `status: "working"` (remote peers through @kybernesis/dispatch).
+ * eve ≥0.69 holds the turn open while its tasks work, so a declared
+ * subagent's answer usually lands in the same turn. Pending work still shows
+ * in two shapes: a `task.started` with no `task.settled` for the same call
+ * (a turn that ended or timed out while a task worked), or a tool result
+ * carrying `status: "working"` (remote peers through @kybernesis/dispatch).
  */
 export async function settleBackgroundWork(
   t: EveEvalContext,
@@ -39,9 +41,10 @@ export async function settleBackgroundWork(
 }
 
 export function hasPendingWork(turn: EveEvalTurn): boolean {
-  const delegated = turn.events.some((event) => event.type === "subagent.called");
-  const reported = turn.events.some((event) => event.type === "subagent.completed");
-  if (delegated && !reported) return true;
+  const settled = new Set<unknown>();
+  for (const event of turn.events) if (event.type === "task.settled") settled.add(event.data.callId);
+  const unsettled = turn.events.some((event) => event.type === "task.started" && !settled.has(event.data.callId));
+  if (unsettled) return true;
   return turn.toolCalls.some((call) => {
     const output = call.output;
     return typeof output === "object" && output !== null && !Array.isArray(output) && (output as { status?: unknown }).status === "working";

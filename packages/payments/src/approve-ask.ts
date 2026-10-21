@@ -55,7 +55,10 @@ export interface SpendRequestSnapshot {
   approval_url?: string;
 }
 
-/** What the agent's tool file passes to `ctx.ask` once it has a snapshot. The tool itself is authored in `agent/tools/` — eve compiles `"use workflow"` from source. */
+/**
+ * What the agent's tool file passes to `ctx.ask` once it has a snapshot. The tool itself is authored in `agent/tools/` — eve compiles `"use workflow"` from source.
+ * Author it as `task(input, ctx)`, not `execute`: on eve ≥0.69 a new message withdraws a question asked from an `execute` call, and the tool would cancel the purchase in Link.
+ */
 export function spendRequestAsk(current: SpendRequestSnapshot) {
   return {
     prompt: spendRequestPrompt(current),
@@ -82,4 +85,4 @@ export function interpretSpendRequestAnswer(answer: { status: string; optionId?:
 }
 
 export const APPROVE_SPEND_REQUEST_DESCRIPTION =
-  "Put a spend request in front of the person for approval and wait for their answer. Call this right after create_spend_request. It shows them the merchant, the total and the Link approval button, pauses until they confirm or cancel, then returns the request's real status from Link. Only proceed to pay_on_computer when it returns approved.";
+  "Put a spend request in front of the person for approval and wait for their answer. Call this right after create_spend_request. It shows them the merchant, the total and the Link approval button, keeps the question open until they confirm or cancel (even if they write about something else meanwhile), then returns the request's real status from Link. The result comes back to you later in the conversation. Only proceed to pay_on_computer when it returns approved.";

@@ -7,11 +7,14 @@ import { cancelSpendRequest, spendRequestApprovalLink, spendRequestSettledStatus
 
 // The approval moment as one durable call: shows the purchase (merchant, total,
 // Approve-in-Link button), waits for the person, returns Link's real status.
+// Runs as a task: the question stays open through any other message the person
+// sends (an `execute` call's question is withdrawn by one, which would cancel
+// the purchase), and the result reaches the model later in the conversation.
 // Authored here because eve compiles "use workflow" / "use step" from source.
 export default defineWorkflowTool({
   description: APPROVE_SPEND_REQUEST_DESCRIPTION,
   inputSchema: z.object({ spend_request_id: z.string().min(1).max(200) }),
-  async execute(input, ctx) {
+  async task(input, ctx) {
     "use workflow";
     const current = await snapshot(input.spend_request_id);
     if (!current) return { status: "not_found", note: "That spend request does not exist." };

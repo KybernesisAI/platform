@@ -55,7 +55,7 @@ export default multiplayerSlackChannel({
 | `continuation` | `"subscribed-threads"` | `"subscribed-threads"`: mentions + any message in an active thread. `"mention-only"`: explicit mentions only. Subscribed mode needs the `message.channels` trigger + `channels:history` scope on the connector (private channels: `message.groups` + `groups:history`). |
 | `dmReset` | `"/new"` | DM command that starts a fresh session; `false` disables |
 | `threadContext` | `"incremental"` | `"incremental"`: inject messages since the agent's last reply. `"full"`: whole thread each mention. `false`: triggering message only. Needs the matching history scope. |
-| `events` | — | Event-handler overrides passed through to the underlying eve Slack channel |
+| `renderers` | — | Renderers passed through to the underlying eve Slack channel; each wraps eve's default rendering |
 
 ### Surface helpers (package root)
 

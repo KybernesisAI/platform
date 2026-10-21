@@ -51,8 +51,8 @@ export interface MultiplayerSlackOptions {
    * Requires the matching Slack history scope.
    */
   threadContext?: "incremental" | "full" | false;
-  /** Optional event-handler overrides, passed through to the underlying channel. */
-  events?: SlackChannelInput["events"];
+  /** Optional renderers, passed through to the underlying channel; each wraps eve's default rendering. */
+  renderers?: SlackChannelInput["renderers"];
   /**
    * Run every message as a control-plane person instead of a bare Slack user.
    * Pass `channelIdentity({ issuer, credential })` from `@kybernesis/enterprise`.
@@ -162,7 +162,7 @@ export function multiplayerSlackChannel(options: MultiplayerSlackOptions) {
                 : ("thread-root" as const),
           },
         }),
-    ...(options.events ? { events: options.events } : {}),
+    ...(options.renderers ? { renderers: options.renderers } : {}),
     // With identity on, a button answer runs as the person who pressed it,
     // and someone who is not linked cannot answer for someone who is.
     ...(asPerson
