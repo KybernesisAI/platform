@@ -166,7 +166,7 @@ function recipeHash(): string {
 // Kept in step with package.json by a test. Not read from package.json at run
 // time: eve bundles the agent's modules, so a relative require of
 // "../package.json" resolves inside eve's build output and throws.
-export const COMPUTER_VERSION = "0.2.3";
+export const COMPUTER_VERSION = "0.3.0";
 
 /** Identifies what a bake contains: this package's prepare and eve's computer-use stack. */
 export function bakeKey(): string {
@@ -340,9 +340,9 @@ function handleFor(session: SandboxSession): SandboxProviderHandle<SandboxSessio
   return {
     sandbox: session,
     // The computer outlives every session on purpose; nothing is torn down.
-    async onSessionStop() {},
+    async onSandboxStop() {},
     async onRuntimeShutdown() {},
-    async onSessionDelete() {},
+    async onSandboxDelete() {},
   };
 }
 
