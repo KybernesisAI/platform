@@ -268,6 +268,17 @@ async function drainUnread(
 const isTurnBoundary = (type: string): boolean =>
   type === "session.waiting" || type === "session.completed" || type === "session.failed";
 
+/**
+ * eve ≥0.69 no longer ends a turn at a question or sign-in from inside a tool:
+ * it emits `turn.waiting` with `on: "input"` and holds the turn open, and the
+ * answer resumes that same turn. For the bridge that is where this send stops,
+ * as `session.waiting` did before, with the questions to relay. eve's own
+ * `result()` stops at the same event. `on: "tasks"` is not a stop: delegated
+ * work is running and the reply is still to come.
+ */
+const isHeldForInput = (event: { type: string; data?: unknown }): boolean =>
+  event.type === "turn.waiting" && (event.data as { on?: unknown } | undefined)?.on === "input";
+
 async function collectResponse(
   response: MessageResponse,
   watchdog: SilenceWatchdog,
@@ -318,18 +329,19 @@ async function collectResponse(
       message = event.data.message ?? "";
     } else if (event.type === "input.requested") {
       inputRequests.push(...event.data.requests);
-    } else if (event.type === "session.waiting") {
+    } else if (event.type === "session.waiting" || isHeldForInput(event)) {
       status = "waiting";
     } else if (event.type === "session.failed") {
       status = "failed";
     } else if (event.type === "session.completed") {
       status = "completed";
     }
-    if (isTurnBoundary(event.type) && !staleBoundaryFirst) {
+    const ends = isTurnBoundary(event.type) || isHeldForInput(event);
+    if (ends && !staleBoundaryFirst) {
       endedAtOwnBoundary = true;
       return true;
     }
-    if (isTurnBoundary(event.type) && staleBoundaryFirst && sawTurnStart) {
+    if (ends && staleBoundaryFirst && sawTurnStart) {
       endedAtOwnBoundary = true;
       return true;
     }
