@@ -55,6 +55,10 @@ function fixture(options = {}) {
   writeFileSync(join(dir, "agent/agent.ts"), options.agentSource ?? "export default {};\n");
   if (options.judgeConfig) writeFileSync(join(dir, "evals/evals.config.ts"), options.judgeConfig);
   if (options.envLocal) writeFileSync(join(dir, ".env.local"), options.envLocal);
+  for (const [path, content] of Object.entries(options.files ?? {})) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), content);
+  }
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     name: "fixture",
     scripts: { typecheck: "true", eval: "ARCANA_COMPANY_WORKSPACE=fixture-eval eve eval --strict" },
@@ -62,9 +66,11 @@ function fixture(options = {}) {
       "@kybernesis/buzz": options.allCurrent ? "^0.9.0" : "~0.8.0",
       ...(options.exeHost ? { "@kybernesis/exe": "^0.12.1" } : {}),
       "@kybernesis/evals": options.allCurrent ? "^0.6.2" : "0.6.1",
-      eve: options.eveRange ?? (options.allCurrent ? "0.68.0" : "0.38.3"),
+      eve: options.eveRange ?? (options.allCurrent ? EVE_VERSION : "0.38.3"),
       zod: "4.4.3",
+      ...options.extraDeps,
     },
+    ...(options.registries ? { registries: options.registries } : {}),
     devDependencies: {
       ...(options.ownKyb ? { "@kybernesis/create": "^0.20.0" } : {}),
       "@kybernesis/enterprise": options.allCurrent ? "^0.8.0" : "0.7.0",
@@ -74,14 +80,14 @@ function fixture(options = {}) {
 
   executable(join(bin, "node"), `#!/bin/sh
 case "$*" in
-  *"eve/package.json"*) echo "${options.eveInstalled ?? (options.allCurrent ? "0.68.0" : "0.38.3")}" ;;
-  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.68.0" : "^0.38.0"}" ;;
+  *"eve/package.json"*) echo "${options.eveInstalled ?? (options.allCurrent ? EVE_VERSION : "0.38.3")}" ;;
+  *"@kybernesis/buzz/package.json"*peerDependencies*) echo "${options.allCurrent ? `^${EVE_VERSION}` : "^0.38.0"}" ;;
   *"@kybernesis/buzz/package.json"*) echo ${options.allCurrent ? "0.9.0" : "0.8.0"} ;;
-  *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.68.0" : "^0.38.0"}" ;;
+  *"@kybernesis/evals/package.json"*peerDependencies*) echo "${options.allCurrent ? `^${EVE_VERSION}` : "^0.38.0"}" ;;
   *"@kybernesis/evals/package.json"*) echo ${options.allCurrent ? "0.6.2" : "0.6.1"} ;;
-  *"@kybernesis/exe/package.json"*peerDependencies*) echo "^0.68.0" ;;
+  *"@kybernesis/exe/package.json"*peerDependencies*) echo "^${EVE_VERSION}" ;;
   *"@kybernesis/exe/package.json"*) echo 0.12.1 ;;
-  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? "^0.68.0" : "^0.38.0"}" ;;
+  *"@kybernesis/enterprise/package.json"*peerDependencies*) echo "${options.allCurrent ? `^${EVE_VERSION}` : "^0.38.0"}" ;;
   *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
   *"@kybernesis/create/package.json"*peerDependencies*) echo "" ;;
   *"@kybernesis/create/package.json"*) echo 0.20.0 ;;
@@ -97,7 +103,7 @@ if [ "$1" = view ]; then
     "@kybernesis/evals version") echo 0.6.2 ;;
     "@kybernesis/exe version") echo 0.12.1 ;;
     "@kybernesis/enterprise version") echo 0.8.0 ;;
-    "eve version") echo 0.68.0 ;;
+    "eve version") echo ${EVE_VERSION} ;;
     # upgrade no longer asks for \`latest\`: a @kybernesis package ships one
     # build per eve line and the versions are not ordered by line, so it
     # enumerates and picks the newest build whose peer range covers the
@@ -113,10 +119,10 @@ if [ "$1" = view ]; then
     "@kybernesis/evals@0.6.3 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
     "@kybernesis/exe@0.12.2 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
     "@kybernesis/enterprise@0.8.1 peerDependencies.eve") echo ">=0.53.0 <0.54.0" ;;
-    "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^0.68.0" ;;
-    "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^0.68.0" ;;
-    "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^0.68.0" ;;
-    "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^0.68.0" ;;
+    "@kybernesis/buzz@0.9.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
+    "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
+    "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
+    "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -145,12 +151,14 @@ if [ "$1" = install ]; then
   exit 0
 fi
 if [ "$1 $2" = "run eval" ]; then
+  # The first boot on a new eve line deletes an older line's store.
+  [ "\${KYB_EVAL_WIPES_STORE:-}" = 1 ] && rm -rf .eve/.workflow-data
   exit "\${KYB_EVAL_STATUS:-0}"
 fi
 if [ "$1 $2" = "ls eve" ]; then
   [ "$KYB_LS_FAIL" = 1 ] && exit 1
   echo 'fixture@1.0.0'
-  echo 'eve@0.68.0'
+  echo 'eve@${EVE_VERSION}'
   exit 0
 fi
 exit 0
@@ -206,6 +214,7 @@ exit 0
     ...(options.startFail ? { KYB_START_FAIL: "1" } : {}),
     ...(options.sudoInstallFail ? { KYB_SUDO_INSTALL_FAIL: "1" } : {}),
     ...(options.evalStatus !== undefined ? { KYB_EVAL_STATUS: String(options.evalStatus) } : {}),
+    ...(options.evalWipesStore ? { KYB_EVAL_WIPES_STORE: "1" } : {}),
     ...(options.sshStatus !== undefined ? { KYB_SSH_STATUS: String(options.sshStatus) } : {}),
   };
   delete env.GITHUB_TOKEN;
@@ -305,13 +314,13 @@ test("--check on an agent already current says so", () => {
 });
 
 test("an agent already current but with eve saved as a range gets eve pinned exactly, and nothing else", () => {
-  const fix = fixture({ allCurrent: true, eveRange: "^0.68.0" });
+  const fix = fixture({ allCurrent: true, eveRange: `^${EVE_VERSION}` });
   try {
     const result = runUpgrade(fix);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const installs = commandLog(fix).split("\n").filter((line) => line.startsWith("npm install"));
-    assert.deepEqual(installs, ["npm install --save-exact eve@0.68.0"]);
-    assert.match(result.stdout, /eve pinned exactly to 0\.68\.0/);
+    assert.deepEqual(installs, [`npm install --save-exact eve@${EVE_VERSION}`]);
+    assert.match(result.stdout, new RegExp(`eve pinned exactly to ${escapeRe(EVE_VERSION)}`));
   } finally {
     fix.cleanup();
   }
@@ -485,8 +494,8 @@ export default defineEvalConfig({ judge: { model: exe("judge") } });
 
 test("an unreachable host-only model and judge stop before eval with distinct guidance", () => {
   const fix = fixture({
-    eveInstalled: "0.68.0",
-    eveRange: "^0.68.0",
+    eveInstalled: EVE_VERSION,
+    eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
     compiledRouting: { kind: "external", provider: "anthropic" },
     claudeProxyReady: false,
@@ -507,8 +516,8 @@ test("an unreachable host-only model and judge stop before eval with distinct gu
 
 test("reachable subscription proxy and exe judge preserve the local eval gate", () => {
   const fix = fixture({
-    eveInstalled: "0.68.0",
-    eveRange: "^0.68.0",
+    eveInstalled: EVE_VERSION,
+    eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
     compiledRouting: { kind: "external", provider: "anthropic" },
     claudeProxyReady: true,
@@ -527,8 +536,8 @@ test("reachable subscription proxy and exe judge preserve the local eval gate", 
 
 test("a judge provider made inline in the eval config resolves to the exe route", () => {
   const fix = fixture({
-    eveInstalled: "0.68.0",
-    eveRange: "^0.68.0",
+    eveInstalled: EVE_VERSION,
+    eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
     compiledRouting: { kind: "external", provider: "anthropic" },
     claudeProxyReady: true,
@@ -556,7 +565,7 @@ export default defineEvalConfig({
 });
 
 test("bare --host uses deploy defaults and the remote gate exit decides the verdict", () => {
-  const green = fixture({ eveInstalled: "0.68.0", eveRange: "^0.68.0", envLocal: "EXE_VM_NAME=fixture-vm\n" });
+  const green = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, envLocal: "EXE_VM_NAME=fixture-vm\n" });
   try {
     const result = runUpgradeWithEval(green, ["--yes", "--host"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -566,7 +575,7 @@ test("bare --host uses deploy defaults and the remote gate exit decides the verd
     green.cleanup();
   }
 
-  const red = fixture({ eveInstalled: "0.68.0", eveRange: "^0.68.0", sshStatus: 9 });
+  const red = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, sshStatus: 9 });
   try {
     const result = runUpgradeWithEval(red, ["--yes", "--host=ops@example"]);
     assert.equal(result.status, 1, result.stdout + result.stderr);
@@ -604,7 +613,7 @@ for (const flag of ["--yes", "-y"]) {
       assert.equal(pkg.dependencies["@kybernesis/buzz"], "^0.9.0");
       assert.equal(pkg.dependencies["@kybernesis/evals"], "^0.6.2");
       // Exact on purpose: the pin is the certification (a caret would pull 0.51.x).
-      assert.equal(pkg.dependencies.eve, "0.68.0");
+      assert.equal(pkg.dependencies.eve, EVE_VERSION);
       assert.equal(pkg.devDependencies["@kybernesis/enterprise"], "^0.8.0");
       assert.equal(pkg.dependencies.zod, "4.4.3");
       assert.equal(pkg.devDependencies.typescript, "7.0.2");
@@ -621,14 +630,14 @@ for (const flag of ["--yes", "-y"]) {
 }
 
 test("same-major/minor Eve state uses the in-place package install without bridge interruption", () => {
-  const fix = fixture({ eveInstalled: "0.68.0", eveRange: "^0.68.0", bridgeState: "active" });
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, bridgeState: "active" });
   try {
     const result = runUpgrade(fix);
     assert.equal(result.status, 0, result.stderr);
     const log = commandLog(fix);
     assert.match(log, /^npm install @kybernesis\/buzz@0\.9\.0 @kybernesis\/enterprise@0\.8\.0 @kybernesis\/evals@0\.6\.2$/m);
     // The caret range on an unchanged eve is pinned exactly in the same pass.
-    assert.match(log, /^npm install --save-exact eve@0\.68\.0$/m);
+    assert.match(log, new RegExp(`^npm install --save-exact eve@${escapeRe(EVE_VERSION)}$`, "m"));
     assert.match(log, /install-state node_modules=yes lock=yes/);
     assert.match(log, /^npm ls eve$/m);
     assert.doesNotMatch(log, /systemctl/);
@@ -707,9 +716,9 @@ test("ERESOLVE reports factual Eve peer-range changes and the complete remedy", 
     assert.equal(result.status, 1);
     const output = result.stdout + result.stderr;
     assert.match(output, /ERESOLVE/);
-    assert.match(output, /@kybernesis\/buzz: 0\.8\.0 peers on \^0\.38\.0; 0\.9\.0 peers on \^0\.68\.0/);
-    assert.match(output, /@kybernesis\/enterprise: 0\.7\.0 peers on \^0\.38\.0; 0\.8\.0 peers on \^0\.68\.0/);
-    assert.match(output, /@kybernesis\/evals: 0\.6\.1 peers on \^0\.38\.0; 0\.6\.2 peers on \^0\.68\.0/);
+    assert.match(output, new RegExp(`@kybernesis/buzz: 0\\.8\\.0 peers on \\^0\\.38\\.0; 0\\.9\\.0 peers on \\^${escapeRe(EVE_VERSION)}`));
+    assert.match(output, new RegExp(`@kybernesis/enterprise: 0\\.7\\.0 peers on \\^0\\.38\\.0; 0\\.8\\.0 peers on \\^${escapeRe(EVE_VERSION)}`));
+    assert.match(output, new RegExp(`@kybernesis/evals: 0\\.6\\.1 peers on \\^0\\.38\\.0; 0\\.6\\.2 peers on \\^${escapeRe(EVE_VERSION)}`));
     for (const command of ["rm -rf node_modules", "rm -f package-lock.json", "npm install", "npm ls eve"]) {
       assert.ok(output.includes(command), output);
     }
@@ -769,7 +778,7 @@ const publishedBehindPin = (() => {
   if (npmOffline) return false;
   const peer = spawnSync("npm", ["view", "@kybernesis/buzz@latest", "peerDependencies.eve"], { encoding: "utf8" });
   if (peer.status !== 0) return false;
-  return !peer.stdout.includes("0.68");
+  return !peer.stdout.includes(EVE_VERSION.split(".").slice(0, 2).join("."));
 })();
 test("[network] published Buzz 0.8 and Eve 0.38 upgrade to the certified peer tree", { skip: npmOffline || publishedBehindPin }, () => {
   const dir = mkdtempSync(join(tmpdir(), "kyb-upgrade-network-"));
@@ -900,6 +909,89 @@ test("a stale kyb that is the project's own dependency renews itself before anyt
     assert.doesNotMatch(result.stdout, /npm install -g/);
     assert.match(commandLog(fix), new RegExp(`^npm install @kybernesis/create@${escapeRe(newerCreateVersion)}`, "m"));
     assert.doesNotMatch(commandLog(fix), /^npm ls eve$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+const BROWSER_MOUNT = 'import browser from "@agent-browser/eve";\n\nexport default browser({});\n';
+const OLD_JUDGE = 'import { createAnthropic } from "@ai-sdk/anthropic";\nconst p = createAnthropic({ apiKey: "x" });\nexport default { judge: { model: p.evaluationModel("judge") } };\n';
+
+test("a hop to a new eve line moves the scaffold's third-party extensions, judge and registry, and keeps the conversations aside", () => {
+  const fix = fixture({
+    extraDeps: { "@agent-browser/eve": "0.34.0", "@github-tools/eve-extension": "^0.8.0" },
+    registries: { "@kybernesis": "https://registry.kybernesis.ai/r/{name}.json" },
+    files: { "agent/extensions/browser.ts": BROWSER_MOUNT, "evals/evals.config.ts": OLD_JUDGE, ".eve/sandbox-cache/old": "x" },
+  });
+  try {
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const pkg = JSON.parse(readFileSync(join(fix.dir, "package.json"), "utf8"));
+    assert.equal(pkg.dependencies["@agent-browser/eve"], undefined);
+    assert.equal(pkg.dependencies["@github-tools/eve-extension"], "0.8.1");
+    assert.equal(pkg.registries["@kybernesis"], "https://registry.kybernesis.ai/r/eve-0.81/{name}.json");
+    assert.equal(existsSync(join(fix.dir, "agent/extensions/browser.ts")), false);
+    assert.match(readFileSync(join(fix.dir, "evals/evals.config.ts"), "utf8"), /p\.decisionModel\("judge"\)/);
+    assert.equal(readFileSync(join(fix.dir, ".eve/.workflow-data.eve-0.38/runs/open.json"), "utf8"), readFileSync(join(fix.dir, ".eve/.workflow-data/runs/open.json"), "utf8"));
+    assert.equal(existsSync(join(fix.dir, ".eve/sandbox-cache")), false);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("--check lists the third-party moves with the package changes", () => {
+  const fix = fixture({ allCurrent: true, extraDeps: { "@agent-browser/eve": "0.34.0", "@github-tools/eve-extension": "^0.8.0" } });
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual(plan.changes, [
+      { name: "@agent-browser/eve", from: "0.34.0", to: "removed" },
+      { name: "@github-tools/eve-extension", from: "^0.8.0", to: "0.8.1" },
+    ]);
+    assert.doesNotMatch(commandLog(fix), /^npm install/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("a failed eval gate after a line hop puts the old line's conversations back", () => {
+  const fix = fixture({ evalStatus: 1, evalWipesStore: true });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /Evals failed/);
+    assert.equal(JSON.parse(readFileSync(join(fix.dir, ".eve/.workflow-data/runs/open.json"), "utf8")).runId, "run-open");
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("an agent on a newer eve line than this kyb is refused, with the kyb for its line", () => {
+  const fix = fixture({ allCurrent: true, eveInstalled: "0.99.0", eveRange: "0.99.0" });
+  try {
+    const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /npx --yes --package=@kybernesis\/create@eve-0\.99 kyb upgrade/);
+    assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
+    assert.doesNotMatch(commandLog(fix), /^npm (install|view @kybernesis\/buzz)/m);
+
+    const check = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    const plan = JSON.parse(check.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual(plan, { ok: false, unresolved: ["eve"], changes: [], resetsConversations: false });
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("the project's own kyb moves to the kyb running the upgrade, not the newest published", () => {
+  const fix = fixture({ allCurrent: true, ownKyb: true });
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual(plan.changes, [{ name: "@kybernesis/create", from: "0.20.0", to: installedCreateVersion }]);
+    assert.doesNotMatch(commandLog(fix), /^npm view @kybernesis\/create versions/m);
   } finally {
     fix.cleanup();
   }

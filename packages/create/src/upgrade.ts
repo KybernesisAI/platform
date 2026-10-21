@@ -15,7 +15,16 @@ import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairExeClaudeRoute } from "./exe-claude-route.js";
 import { repairOptInTools, repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
-import { EVE_VERSION, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
+import { EVE_VERSION, REGISTRY_URL, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
+import {
+  backUpWorkflowStore,
+  clearStaleEveCaches,
+  migrateManifest,
+  migrateSources,
+  restoreWorkflowStore,
+  workflowStoreBackup,
+  type ManifestMigration,
+} from "./line-hop.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { remoteProjectPath, sshTarget } from "./deploy.js";
 import { classifyModelReach } from "./model-reach.js";
@@ -657,10 +666,10 @@ function exeJudgeUrl(cwd: string, env: Record<string, string>): string | null | 
   const path = paths.find((candidate) => existsSync(candidate));
   if (!path) return null;
   const source = readFileSync(path, "utf8");
-  const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*(?:\.evaluationModel\s*)?\(/.exec(source)?.[1];
+  const judgeProvider = /judge\s*:\s*\{[\s\S]*?model\s*:\s*([A-Za-z_$][\w$]*)\s*(?:\.(?:decisionModel|evaluationModel)\s*)?\(/.exec(source)?.[1];
   if (!judgeProvider) return null;
   const escaped = judgeProvider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // The provider may be made inline (`model: createAnthropic({ … }).evaluationModel(…)`)
+  // The provider may be made inline (`model: createAnthropic({ … }).decisionModel(…)`)
   // as well as bound to a name first; both carry the base URL in the same object.
   const inline = /judge\s*:\s*\{[\s\S]*?model\s*:\s*create[A-Za-z]+\s*\(\s*\{([\s\S]*?)\}\s*\)/.exec(source)?.[1];
   const providerBody = inline ?? new RegExp(`(?:const|let)\\s+${escaped}\\s*=\\s*create[A-Za-z]+\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*\\)`).exec(source)?.[1];
@@ -717,12 +726,14 @@ function reportEvalGateUnavailable(cwd: string, target: string | null, reasons: 
   process.exitCode = EVAL_GATE_UNAVAILABLE_EXIT;
 }
 
-async function runUpgradeEvalGate(cwd: string, host: true | string | undefined): Promise<void> {
+type EvalGateOutcome = "green" | "failed" | "unavailable";
+
+async function runUpgradeEvalGate(cwd: string, host: true | string | undefined): Promise<EvalGateOutcome> {
   if (host !== undefined) {
     const target = sshTarget(cwd, typeof host === "string" && host.length > 0 ? host : undefined);
     if (!target) {
       reportEvalGateUnavailable(cwd, null, ["no ssh target is configured"]);
-      return;
+      return "unavailable";
     }
     console.log(bold(`\nRunning the eval gate on ${target} (${remoteProjectPath(cwd)}) — deploy only on green …\n`));
     const result = spawnSync("ssh", [target, `cd ${remoteProjectPath(cwd)} && npm run eval`], {
@@ -732,27 +743,28 @@ async function runUpgradeEvalGate(cwd: string, host: true | string | undefined):
     });
     if (result.status === 0) {
       console.log(`\n${green("✓ Upgrade green.")} Deploy with: ${bold("npx eve deploy")}\n`);
-    } else {
-      console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts on the host.\n`);
-      process.exitCode = 1;
+      return "green";
     }
-    return;
+    console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts on the host.\n`);
+    process.exitCode = 1;
+    return "failed";
   }
 
   const preflight = await preflightEvalGate(cwd);
   if (preflight.kind === "unavailable") {
     reportEvalGateUnavailable(cwd, sshTarget(cwd), preflight.reasons);
-    return;
+    return "unavailable";
   }
 
   console.log(bold("\nRunning the eval gate (npm run eval) — deploy only on green …\n"));
   const ok = run("npm", ["run", "eval"], { cwd, allowFail: true });
   if (ok) {
     console.log(`\n${green("✓ Upgrade green.")} Deploy with: ${bold("npx eve deploy")}\n`);
-  } else {
-    console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts.\n`);
-    process.exitCode = 1;
+    return "green";
   }
+  console.log(`\n${red("✗ Evals failed after upgrade.")} Do NOT deploy — inspect .eve/evals/ artifacts.\n`);
+  process.exitCode = 1;
+  return "failed";
 }
 
 function upgradeEnvironment(cwd: string): Record<string, string | undefined> {
@@ -979,6 +991,48 @@ function startStoppedBridge(cwd: string, unit: string): boolean {
   return false;
 }
 
+/**
+ * A third-party extension whose declared peer range trails the certified
+ * eve (the Vercel-owned @github-tools/eve-extension does) makes npm's
+ * default resolver ERESOLVE before it will write a tree at all. That is not
+ * a reason to abort the upgrade: retry the same install with
+ * --legacy-peer-deps so the tree is written, then let assessPeerTree judge
+ * WHO actually objects. A @kybernesis or root conflict still stops
+ * everything; only a stale third-party edge is tolerated (same principle as
+ * the KYB-548 peer-tree gate). KYB-561.
+ */
+function npmInstall(cwd: string, args: string[]): CommandResult {
+  let result = commandResult("npm", args, cwd);
+  if (result.status !== 0 && /ERESOLVE/i.test(`${result.stdout}\n${result.stderr}`)) {
+    console.log(yellow("\n  ! npm reported a peer conflict. Retrying with --legacy-peer-deps so the installed peer tree can be assessed."));
+    result = commandResult("npm", [...args, "--legacy-peer-deps"], cwd);
+  }
+  return result;
+}
+
+function manifestMoved(migration: ManifestMigration): boolean {
+  return migration.moves.length > 0 || migration.registry !== null;
+}
+
+function reportManifestMigration(migration: ManifestMigration): void {
+  for (const move of migration.moves) {
+    console.log(
+      move.to === null
+        ? `  ${green("-")} ${move.name} removed ${dim(`(${move.why})`)}`
+        : `  ${yellow("↑")} ${move.name}: ${move.from} → ${move.to} ${dim(`(${move.why})`)}`,
+    );
+  }
+  if (migration.registry) console.log(`  ${green("+")} @kybernesis registry → ${migration.registry.to} ${dim("(the items built for this eve line)")}`);
+}
+
+function reportSourceMigration(cwd: string): void {
+  const result = migrateSources(cwd);
+  for (const file of result.updated) console.log(`  ${green("+")} updated ${file} ${dim(`(for eve ${EVE_VERSION})`)}`);
+  for (const file of result.removed) console.log(`  ${green("-")} removed ${file} ${dim("(mounted an extension that does not run on this eve)")}`);
+  for (const { file, action } of result.manual) console.log(`  ${yellow("!")} ${file}: ${action}`);
+  if (result.updated.length || result.removed.length || result.manual.length) console.log();
+}
+
 /** The one line `kyb upgrade --check` prints for a program to read; everything else it prints is for people. */
 export const UPGRADE_PLAN_PREFIX = "KYB_UPGRADE_PLAN ";
 
@@ -1032,6 +1086,23 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   reportAgentInputLimit(cwd);
 
+  // An agent already on a newer eve line than this kyb was certified on must
+  // be upgraded by that line's kyb: from here every @kybernesis package would
+  // be "upgraded" to a build for the older eve.
+  const eveNow = installedPackageValue(cwd, "eve", ".version");
+  const nowLine = eveNow ? majorMinor(eveNow) : null;
+  const ownLine = majorMinor(EVE_VERSION);
+  if (nowLine && ownLine && (nowLine[0] > ownLine[0] || (nowLine[0] === ownLine[0] && nowLine[1] > ownLine[1]))) {
+    if (options.check) printPlan({ ok: false, unresolved: ["eve"], changes: [], resetsConversations: false });
+    fail(
+      `This agent runs eve ${eveNow}, a newer line than this kyb is certified for (${EVE_VERSION}). ` +
+        `Run the kyb for its line:\n  npx --yes --package=@kybernesis/create@eve-${nowLine[0]}.${nowLine[1]} kyb upgrade\n` +
+        `Nothing was changed.`,
+    );
+    return;
+  }
+  const selfInstalled = "installed" in selfVersion ? selfVersion.installed : undefined;
+
   const entries = dependencyEntries(pkg);
   const installedVersions = new Map<string, string>();
   const targetVersions = new Map<string, string>();
@@ -1052,12 +1123,17 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     // that supports the eve this host will be running — NOT npm's `latest`,
     // which for a per-eve-line package is routinely a build for a different
     // line and installs without complaint.
+    // kyb itself declares no eve peer, so the newest published kyb can belong
+    // to another eve line. The project carries the kyb doing this upgrade (a
+    // stale one renewed itself above), never a newer one.
     const target =
       name === "eve"
         ? EVE_VERSION
-        : name.startsWith("@kybernesis/")
-          ? newestBuildForEve(name, EVE_VERSION)
-          : capture("npm", ["view", name, "version"])?.trim();
+        : name === "@kybernesis/create"
+          ? selfInstalled && versionLt(installed, selfInstalled) ? selfInstalled : installed
+          : name.startsWith("@kybernesis/")
+            ? newestBuildForEve(name, EVE_VERSION)
+            : capture("npm", ["view", name, "version"])?.trim();
     if (!target) {
       console.log(
         `  ${yellow("!")} ${name}: ` +
@@ -1138,13 +1214,20 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     .filter((target) => target.installedVersion !== target.targetVersion && !(target.name === "eve" && versionLt(target.targetVersion, target.installedVersion)))
     .map((target) => `${target.name}@${target.targetVersion}`))];
 
+  // Third-party pins, dropped extensions and the registry namespace for this
+  // eve line. pkg now carries them; it is written below with the rest.
+  const manifest = migrateManifest(pkg, REGISTRY_URL);
+
   if (options.check) {
     printPlan({
       ok: true,
       eve: { installed: eveInstalled ?? null, certified: EVE_VERSION },
-      changes: [...new Map(targets
-        .filter((target) => changed.includes(`${target.name}@${target.targetVersion}`))
-        .map((target) => [target.name, { name: target.name, from: target.installedVersion, to: target.targetVersion }])).values()],
+      changes: [
+        ...new Map(targets
+          .filter((target) => changed.includes(`${target.name}@${target.targetVersion}`))
+          .map((target) => [target.name, { name: target.name, from: target.installedVersion, to: target.targetVersion }])).values(),
+        ...manifest.moves.map((move) => ({ name: move.name, from: move.from, to: move.to ?? "removed" })),
+      ],
       resetsConversations: eveChanged,
     });
     return;
@@ -1158,6 +1241,15 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairLocalQueueTimeouts(cwd, deps);
 
   if (changed.length === 0) {
+    if (manifestMoved(manifest)) {
+      reportManifestMigration(manifest);
+      writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+      const reinstalled = npmInstall(cwd, ["install"]);
+      if (reinstalled.status !== 0) {
+        fail("\nnpm install failed after the dependency moves above; package.json carries them, the tree may not.");
+        return;
+      }
+    }
     if (loosePin) {
       const pinned = commandResult("npm", ["install", "--save-exact", `eve@${eveTarget}`], cwd);
       if (pinned.status !== 0) {
@@ -1178,16 +1270,30 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairReasoningSandboxes(cwd, deps);
     repairManageRestart(cwd, deps);
     repairExeClaudeRoutes(cwd, deps);
+    reportSourceMigration(cwd);
     return;
   }
 
   console.log(bold(`\nInstalling: ${changed.join(", ")}\n`));
+  reportManifestMigration(manifest);
 
   let stoppedBridge: string | null = null;
   if (cleanInstall && deps["@kybernesis/buzz"]) {
     const stopped = stopActiveBridge(cwd, buzzBridgeUnit(cwd));
     if (stopped === false) return;
     stoppedBridge = stopped;
+  }
+
+  // A new eve line: keep the conversations aside before anything on it boots
+  // (its first boot deletes an older line's store, and the eval gate's dev
+  // server shares the store with production), and drop the old line's caches.
+  const storeLine = cleanInstall && installedMajorMinor ? installedMajorMinor.join(".") : null;
+  if (storeLine) {
+    const kept = backUpWorkflowStore(cwd, storeLine);
+    if (kept !== "none") {
+      console.log(`  ${green("+")} conversations from eve ${storeLine} kept at ${workflowStoreBackup(storeLine)}${kept === "kept" ? ` ${dim("(from an earlier attempt)")}` : ""}`);
+    }
+    for (const dir of clearStaleEveCaches(cwd)) console.log(`  ${green("-")} cleared ${dir} ${dim(`(built for eve ${storeLine})`)}`);
   }
 
   if (cleanInstall) {
@@ -1207,29 +1313,13 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   const eveChange = changed.find((spec) => spec.startsWith("eve@")) ?? (loosePin ? `eve@${eveTarget}` : undefined);
   const others = changed.filter((spec) => spec !== eveChange);
 
-  /**
-   * A third-party extension whose declared peer range trails the certified
-   * eve (the Vercel-owned @github-tools/eve-extension and @agent-browser/eve
-   * both do) makes npm's default resolver ERESOLVE before it will write a
-   * tree at all. That is not a reason to abort the upgrade: retry the same
-   * install with --legacy-peer-deps so the tree is written, then let
-   * assessPeerTree below judge WHO actually objects. A @kybernesis or root
-   * conflict still stops everything; only a stale third-party edge is
-   * tolerated (same principle as the KYB-548 peer-tree gate). KYB-561.
-   */
-  const npmInstall = (args: string[]): CommandResult => {
-    let result = commandResult("npm", args, cwd);
-    if (result.status !== 0 && /ERESOLVE/i.test(`${result.stdout}\n${result.stderr}`)) {
-      console.log(yellow("\n  ! npm reported a peer conflict. Retrying with --legacy-peer-deps so the installed peer tree can be assessed."));
-      result = commandResult("npm", [...args, "--legacy-peer-deps"], cwd);
-    }
-    return result;
-  };
+  if (!cleanInstall && manifestMoved(manifest)) writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
 
   const installArgs = cleanInstall ? ["install"] : ["install", ...others];
-  let installed: CommandResult = cleanInstall || others.length > 0 ? npmInstall(installArgs) : { status: 0, stdout: "", stderr: "" };
+  let installed: CommandResult =
+    cleanInstall || others.length > 0 || manifestMoved(manifest) ? npmInstall(cwd, installArgs) : { status: 0, stdout: "", stderr: "" };
   if (installed.status === 0 && !cleanInstall && eveChange) {
-    installed = npmInstall(["install", "--save-exact", eveChange]);
+    installed = npmInstall(cwd, ["install", "--save-exact", eveChange]);
   }
   if (installed.status !== 0) {
     const output = `${installed.stdout}\n${installed.stderr}`;
@@ -1275,6 +1365,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairReasoningSandboxes(cwd, deps);
   repairManageRestart(cwd, deps);
   repairExeClaudeRoutes(cwd, deps);
+  reportSourceMigration(cwd);
 
   run("npm", ["run", "typecheck"], { cwd });
   if (eveChanged) {
@@ -1287,5 +1378,9 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     return;
   }
 
-  await runUpgradeEvalGate(cwd, options.host);
+  const outcome = await runUpgradeEvalGate(cwd, options.host);
+  // Going back means the old line, and the old line needs its conversations.
+  if (outcome === "failed" && storeLine && restoreWorkflowStore(cwd, storeLine)) {
+    console.log(`  ${green("+")} conversations from eve ${storeLine} put back from ${workflowStoreBackup(storeLine)} ${dim("(for when the agent goes back to it)")}\n`);
+  }
 }

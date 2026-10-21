@@ -878,9 +878,10 @@ export { deliver as default } from "@kybernesis/engineer/tools";
 // that matters is host access, and the old wording blurred exactly the line
 // people read this comment to understand.
 //
-// The root DOES get a browser and GitHub tools — the engineer layer installs
-// extension/agent-browser and extension/github-tools at the root, deliberately,
-// because reading a page is not the same blast radius as running a command.
+// The root DOES get GitHub tools — the engineer layer installs
+// extension/github-tools at the root, deliberately, because reading a repo is
+// not the same blast radius as running a command. Pages are read on the
+// agent's own computer (open_browser).
 export { default } from "@kybernesis/engineer";
 `,
     },
@@ -951,8 +952,9 @@ export default defineEvalConfig({
   // Verified against the exe integration rather than assumed: it validates model
   // names and refuses one it does not carry, so a stale default here fails the
   // whole suite at the judge rather than at anything the agent did.
-  // eve ≥0.62 grades with an EVALUATION model, not a language model instance.
-  judge: { model: exe.evaluationModel(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-5") },
+  // eve ≥0.72 grades with a DECISION model (an evaluation model from 0.62),
+  // not a language model instance.
+  judge: { model: exe.decisionModel(process.env.EXE_JUDGE_MODEL ?? "claude-sonnet-5") },
   // Real model and real memory on every turn: generous timeout, gentle concurrency.
   timeoutMs: 300_000,
   maxConcurrency: 1,

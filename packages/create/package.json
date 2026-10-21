@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/create",
-  "version": "0.24.3",
+  "version": "0.25.0",
   "description": "The Kybernesis agent scaffolder and FDE toolkit: one command to a governed, remembering, multiplayer, self-testing eve agent \u2014 plus doctor and upgrade.",
   "license": "Apache-2.0",
   "type": "module",
@@ -46,7 +46,8 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "eve-0.81"
   },
   "peerDependencies": {}
 }

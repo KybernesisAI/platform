@@ -49,5 +49,5 @@ test("agent-facing builder text names no agent and uses no em dashes", () => {
 });
 
 test("the engineer pins the third-party extensions to releases the certified eve accepts", () => {
-  assert.deepEqual([...ENGINEER_EXTENSION_PINS], ["@agent-browser/eve@0.34.0", "@github-tools/eve-extension@0.8.0"]);
+  assert.deepEqual([...ENGINEER_EXTENSION_PINS], ["@github-tools/eve-extension@0.8.1"]);
 });
