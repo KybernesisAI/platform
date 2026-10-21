@@ -1032,6 +1032,23 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   reportAgentInputLimit(cwd);
 
+  // An agent already on a newer eve line than this kyb was certified on must
+  // be upgraded by that line's kyb: from here every @kybernesis package would
+  // be "upgraded" to a build for the older eve.
+  const eveNow = installedPackageValue(cwd, "eve", ".version");
+  const nowLine = eveNow ? majorMinor(eveNow) : null;
+  const ownLine = majorMinor(EVE_VERSION);
+  if (nowLine && ownLine && (nowLine[0] > ownLine[0] || (nowLine[0] === ownLine[0] && nowLine[1] > ownLine[1]))) {
+    if (options.check) printPlan({ ok: false, unresolved: ["eve"], changes: [], resetsConversations: false });
+    fail(
+      `This agent runs eve ${eveNow}, a newer line than this kyb is certified for (${EVE_VERSION}). ` +
+        `Run the kyb for its line:\n  npx --yes --package=@kybernesis/create@eve-${nowLine[0]}.${nowLine[1]} kyb upgrade\n` +
+        `Nothing was changed.`,
+    );
+    return;
+  }
+  const selfInstalled = "installed" in selfVersion ? selfVersion.installed : undefined;
+
   const entries = dependencyEntries(pkg);
   const installedVersions = new Map<string, string>();
   const targetVersions = new Map<string, string>();
@@ -1052,12 +1069,17 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     // that supports the eve this host will be running — NOT npm's `latest`,
     // which for a per-eve-line package is routinely a build for a different
     // line and installs without complaint.
+    // kyb itself declares no eve peer, so the newest published kyb can belong
+    // to another eve line. The project carries the kyb doing this upgrade (a
+    // stale one renewed itself above), never a newer one.
     const target =
       name === "eve"
         ? EVE_VERSION
-        : name.startsWith("@kybernesis/")
-          ? newestBuildForEve(name, EVE_VERSION)
-          : capture("npm", ["view", name, "version"])?.trim();
+        : name === "@kybernesis/create"
+          ? selfInstalled && versionLt(installed, selfInstalled) ? selfInstalled : installed
+          : name.startsWith("@kybernesis/")
+            ? newestBuildForEve(name, EVE_VERSION)
+            : capture("npm", ["view", name, "version"])?.trim();
     if (!target) {
       console.log(
         `  ${yellow("!")} ${name}: ` +

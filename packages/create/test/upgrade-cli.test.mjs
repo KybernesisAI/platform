@@ -904,3 +904,33 @@ test("a stale kyb that is the project's own dependency renews itself before anyt
     fix.cleanup();
   }
 });
+
+test("an agent on a newer eve line than this kyb is refused, with the kyb for its line", () => {
+  const fix = fixture({ allCurrent: true, eveInstalled: "0.99.0", eveRange: "0.99.0" });
+  try {
+    const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
+    const result = runUpgrade(fix);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /npx --yes --package=@kybernesis\/create@eve-0\.99 kyb upgrade/);
+    assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
+    assert.doesNotMatch(commandLog(fix), /^npm (install|view @kybernesis\/buzz)/m);
+
+    const check = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    const plan = JSON.parse(check.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual(plan, { ok: false, unresolved: ["eve"], changes: [], resetsConversations: false });
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("the project's own kyb moves to the kyb running the upgrade, not the newest published", () => {
+  const fix = fixture({ allCurrent: true, ownKyb: true });
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.deepEqual(plan.changes, [{ name: "@kybernesis/create", from: "0.20.0", to: installedCreateVersion }]);
+    assert.doesNotMatch(commandLog(fix), /^npm view @kybernesis\/create versions/m);
+  } finally {
+    fix.cleanup();
+  }
+});
