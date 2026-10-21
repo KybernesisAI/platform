@@ -569,3 +569,52 @@ test("a stream that starts this turn and ends at its own boundary needs no conti
   assert.equal(result.message, "direct");
   assert.equal(followed, 0);
 });
+
+test("eve 0.81: a question held inside a tool ends the send as waiting, without following the open turn", async () => {
+  const request = {
+    action: { callId: "c1", input: {}, kind: "tool-call", toolName: "approve_spend_request" },
+    kind: "question",
+    prompt: "Approve the purchase?",
+    requestId: "wrun_1-ask-1",
+  };
+  const store = storeWith();
+  let readPastHold = false;
+  const events = (async function* () {
+    yield { type: "turn.started", data: { turnId: "t" } };
+    yield { type: "message.completed", data: { finishReason: "stop", message: "I've put the purchase in front of you." } };
+    yield { type: "turn.waiting", data: { on: "tasks", turnId: "t" } };
+    yield { type: "input.requested", data: { requests: [request] } };
+    yield { type: "turn.waiting", data: { on: "input", turnId: "t" } };
+    // The turn is held open: nothing more comes until someone answers.
+    readPastHold = true;
+    await new Promise(() => {});
+  })();
+  const client = { sessions: { attach: (id) => ({
+    state: { sessionId: id, streamIndex: 9 },
+    async *stream() {},
+    async send() { return { sessionId: id, [Symbol.asyncIterator]: () => events }; },
+  }) } };
+
+  const outcome = await answerTurn(client, store, "channel", "buy it", "relay");
+  assert.equal(outcome.status, "waiting");
+  assert.deepEqual(outcome.inputRequests, [request]);
+  assert.equal(outcome.message, "I've put the purchase in front of you.");
+  assert.equal(readPastHold, false);
+});
+
+test("eve 0.81: a turn held for its tasks is read on to the final reply", async () => {
+  const store = storeWith();
+  const events = [
+    { type: "turn.started", data: { turnId: "t" } },
+    { type: "message.completed", data: { finishReason: "stop", message: "I've asked the researcher." } },
+    { type: "turn.waiting", data: { on: "tasks", turnId: "t" } },
+    { type: "task.settled", data: { callId: "c1", kind: "agent", name: "researcher", status: "completed", output: "Three." } },
+    { type: "message.completed", data: { finishReason: "stop", message: "The researcher found three." } },
+    { type: "turn.completed", data: { turnId: "t" } },
+    { type: "session.waiting", data: {} },
+  ];
+  const client = { sessions: { attach: (id) => attachedSession(id, async () => eventResponse(id, events)) } };
+  const outcome = await answerTurn(client, store, "channel", "how many?", "relay");
+  assert.equal(outcome.message, "The researcher found three.");
+  assert.deepEqual(outcome.inputRequests, []);
+});

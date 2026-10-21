@@ -227,6 +227,14 @@ async function ask(
           const detail = (event.data as { message?: string } | undefined)?.message;
           throw new Error(`${peer.name} failed to answer${detail ? `: ${detail}` : "."}`);
         }
+        // eve ≥0.69 holds the peer's turn open at a question from inside one of
+        // its tools instead of ending it. Nobody on this side can answer it, so
+        // say so now rather than waiting out the whole timeout.
+        if (event.type === "turn.waiting" && event.data?.on === "input") {
+          await reader.cancel().catch(() => {});
+          reply = ""; // what it said before the question is not its answer
+          throw new Error(`${peer.name} is waiting for someone on its side to answer a question or approve a step, so it cannot reply yet.`);
+        }
         if (event.type === "session.waiting" || event.type === "turn.completed") {
           await reader.cancel().catch(() => {});
           if (reply) return reply;
