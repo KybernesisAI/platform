@@ -3,7 +3,7 @@ import { TEMPLATE_CONTAINER_PROBE, parseTemplateContainers, templateContainerDoc
 import { join } from "node:path";
 
 import { pathToFileURL } from "node:url";
-import { bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
+import { EVE_VERSION, REGISTRY_URL, bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
 import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
@@ -11,6 +11,7 @@ import { countAbandonedRuns } from "./run-store.js";
 import { describeStaleSidecar, newestPackageChange, staleSidecars } from "./stale-sidecar.js";
 import { checkSelfVersion } from "./self-version.js";
 import { envUrlProblems } from "./env-urls.js";
+import { migrateManifest, migrateSources } from "./line-hop.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -36,6 +37,35 @@ export function githubToolsDoctorCheck(
     label: "GitHub tools off (no GITHUB_TOKEN)",
     detail: "set GITHUB_TOKEN in .env.local or the deployment environment, then rebuild and restart",
   };
+}
+
+/**
+ * What the agent still carries from an older eve line: everything `kyb
+ * upgrade` would move (reported, not done), and what it leaves to a person.
+ */
+export function lineHopDoctorChecks(cwd: string): Check[] {
+  const checks: Check[] = [];
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, unknown>;
+    const manifest = migrateManifest(pkg, REGISTRY_URL);
+    for (const move of manifest.moves) {
+      checks.push({
+        verdict: "warn",
+        label: move.to === null ? `${move.name} is installed` : `${move.name} is ${move.from}, not ${move.to}`,
+        detail: `${move.why}; kyb upgrade moves it`,
+      });
+    }
+    if (manifest.registry) {
+      checks.push({ verdict: "warn", label: "the @kybernesis registry is not the one for this eve line", detail: `kyb upgrade points it at ${manifest.registry.to}` });
+    }
+  } catch {
+    /* no readable package.json: the dependency checks say so */
+  }
+  const sources = migrateSources(cwd, { write: false });
+  for (const file of sources.updated) checks.push({ verdict: "warn", label: `${file} is written for an older eve`, detail: `kyb upgrade rewrites it for eve ${EVE_VERSION}` });
+  for (const file of sources.removed) checks.push({ verdict: "warn", label: `${file} mounts an extension that does not run on eve ${EVE_VERSION}`, detail: "kyb upgrade removes it" });
+  for (const { file, action } of sources.manual) checks.push({ verdict: "warn", label: `${file} needs a hand`, detail: action });
+  return checks;
 }
 
 /** The shape @kybernesis/exe's inspector returns; declared here so create keeps zero runtime deps. */
@@ -284,6 +314,7 @@ export async function doctor(): Promise<void> {
     env,
   );
   if (githubCheck) add(githubCheck.verdict, githubCheck.label, githubCheck.detail);
+  for (const check of lineHopDoctorChecks(cwd)) add(check.verdict, check.label, check.detail);
 
   // ── arcana keys: validate every key↔workspace pair read-only ───────────
   const arcanaPairs: Array<{ key: string; ws: string; label: string }> = [];

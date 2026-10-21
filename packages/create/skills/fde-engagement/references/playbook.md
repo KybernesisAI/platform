@@ -77,7 +77,7 @@ exactly §§2, 5, 6, and 7 of this playbook:
 | --- | --- | --- |
 | `npm create @kybernesis <name>` | Day 1, once | Same as `kyb init <name>` without installing anything first |
 | `kyb init <name>` | Day 1, once | eve scaffold (pinned version) + registry + all four packages + generated departments + eval wiring + env template + checklist |
-| `kyb init <name> --engineer` | When the pilot includes building software | Everything above PLUS the engineer layer: workshop sandbox (Playwright baked into the template), the vision screenshot tool, build/ship skills, and the official limbs (agent-browser, github-tools, vercel connection) |
+| `kyb init <name> --engineer` | When the pilot includes building software | Everything above PLUS the engineer layer: workshop sandbox (Playwright baked into the template), the vision screenshot tool, build/ship skills, and the official limbs (github-tools, vercel connection) |
 | `kyb doctor` | **Constantly** — after every human step, before every deploy, whenever anything is weird | Live preflight: every Arcana key↔workspace pair validated against the API (with the specific fix per failure: wrong-key 403 vs missing-workspace 404), issuer JWKS reachability, `KYBERNESIS_AGENT`, Slack connector env, `eve info` discovery, port-2000 conflict. Exit 1 on failure → usable in CI |
 | `kyb upgrade` | Maintenance visits / after Kybernesis ships a package update | Compares installed `@kybernesis/*` against npm **and eve against the Kybernesis-certified version** (never blindly npm-latest — we certify eve releases in the platform repo first), installs what's behind, typechecks (+ `eve info` after a framework bump), then **runs the eval suite as the gate** — tells you to deploy only on green |
 | `kyb upgrade --skip-eval` | Never for production changes | Same, without the gate |
@@ -613,8 +613,10 @@ six build/ship skills + engineering-conduct instructions) and
 `agent/sandbox/sandbox.ts` (the **workshop**: Playwright + Chromium baked into
 the sandbox template, domain allowlist on deployed sessions). Pair it with the
 official limbs if not using `kyb init --engineer`:
-`npx eve add extension/agent-browser extension/github-tools connection/vercel`
-(run individually).
+`npx eve add extension/github-tools connection/vercel` (run individually), then
+pin `@github-tools/eve-extension` to the release in `kyb`'s THIRD_PARTY_PINS.
+(extension/agent-browser does not mount on eve 0.81; the agent reads pages on
+its own computer with `open_browser`.)
 
 **Wire the Vercel connection** (preview deploys + a clickable link for every
 build — proven live 2026-08-06). After `vercel link` in the agent dir:
@@ -866,7 +868,7 @@ reach for the connection at all. Write it like a capability, name the systems.
 ### 4.3e Skills — teach the client's procedures (and mine skills.sh)
 
 A skill is a markdown procedure the model loads **on demand** (eve advertises
-each skill's description; the model calls `load_skill` when a turn matches).
+each skill's description; the model calls `eve__skill` when a turn matches).
 Anything the client's team does "the same way every time" — their release
 checklist, escalation path, report format — is a skill, not an always-on
 instruction. Keep always-on for identity and rules; skills for procedures.
@@ -1018,7 +1020,7 @@ this order — each line catches a different class of wiring mistake:
 1. **Identity**: "who are you, what can you do?" — does the persona match
    identity.md, and does it write chat-length answers?
 2. **Skill routing**: ask something a skill covers *without naming the skill*
-   — watch for the `load_skill` call. If it doesn't fire, the skill's
+   — watch for the `eve__skill` call. If it doesn't fire, the skill's
    `description` isn't written as a triggering task.
 3. **Delegation**: ask a department question — watch the subagent call and
    check the answer came back briefed (§4.4's "pack everything" rule).

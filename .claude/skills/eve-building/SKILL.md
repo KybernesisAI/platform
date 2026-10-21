@@ -60,7 +60,7 @@ Docs: `docs/connections/*`.
 
 ## Skills (agent/skills/)
 
-On-demand procedures (model calls `load_skill` when the description matches).
+On-demand procedures (model calls `eve__skill` when the description matches).
 Forms: flat `.md` (first line = routing description) → packaged dir with
 `SKILL.md` (+`references/`, description frontmatter required) → `defineSkill`
 (only for typed/generated content). The description is a ROUTING HINT — write
@@ -100,7 +100,7 @@ Instruct serial delegation ("one draft at a time, wait for each result").
 ## Test in eve dev
 
 `npx eve dev` boots the local runtime + chat TUI. Walk: identity → skill
-routing (watch load_skill) → delegation → memory round-trip → (engineer)
+routing (watch eve__skill) → delegation → memory round-trip → (engineer)
 screenshot turn. Local principal counts as a DM surface. Kill the dev server
 before `npm run eval`. The TUI is NOT the deployed agent — redeploy after
 every change.
