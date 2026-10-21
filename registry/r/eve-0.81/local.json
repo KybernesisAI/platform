@@ -1,0 +1,55 @@
+{
+  "name": "local",
+  "type": "registry:item",
+  "title": "Kybernesis Local",
+  "description": "Work on the user's own computer through KYBER Studio: search, read, edit, write, and run commands, with per-effect consent on the desktop.",
+  "dependencies": [
+    "@kybernesis/local@eve-0.81"
+  ],
+  "envVars": {},
+  "files": [
+    {
+      "path": "registry/local-tools.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_shell.ts",
+      "content": "import { localShellTool } from \"@kybernesis/local\";\n\n// The user's OWN machine, reached through KYBER Studio. Studio holds an\n// outbound connection to the control plane; these tools queue work on it and\n// wait for the answer, so nothing here connects to anything and no port opens.\n//\n// Consent lives on the desktop, per EFFECT rather than per tool: run-command,\n// read-file, write-file, list-directory. local_edit declares write-file and\n// local_search declares read-file for exactly that reason — two tools reaching\n// the same effect must not need two approvals, and must not be able to dodge\n// one.\n//\n// Sibling files: local_read.ts, local_list.ts, local_search.ts, local_edit.ts,\n// local_write.ts. Add only the ones this agent should have.\nexport default localShellTool();\n"
+    },
+    {
+      "path": "registry/local-read.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_read.ts",
+      "content": "import { localReadTool } from \"@kybernesis/local\";\n\n// Read a file from the user's machine.\nexport default localReadTool();\n"
+    },
+    {
+      "path": "registry/local-list.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_list.ts",
+      "content": "import { localListTool } from \"@kybernesis/local\";\n\n// List a directory on the user's machine.\nexport default localListTool();\n"
+    },
+    {
+      "path": "registry/local-search.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_search.ts",
+      "content": "import { localSearchTool } from \"@kybernesis/local\";\n\n// Search file contents on the user's machine. Declares the read-file effect.\nexport default localSearchTool();\n"
+    },
+    {
+      "path": "registry/local-edit.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_edit.ts",
+      "content": "import { localEditTool } from \"@kybernesis/local\";\n\n// Replace exact text in a file. Declares the write-file effect — same consequence as writing, so the same consent.\nexport default localEditTool();\n"
+    },
+    {
+      "path": "registry/local-write.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_write.ts",
+      "content": "import { localWriteTool } from \"@kybernesis/local\";\n\n// Write a file on the user's machine.\nexport default localWriteTool();\n"
+    },
+    {
+      "path": "registry/local-mcp.ts",
+      "type": "registry:file",
+      "target": "agent/tools/local_mcp.ts",
+      "content": "import { localMcpTools } from \"@kybernesis/local\";\n\n// Tools from MCP servers running on the user's OWN computer, reached through\n// KYBER Studio's outbound connection.\n//\n// This is the case a hosted connector cannot cover: a database inside a company\n// network, a private repository, an internal API with no ingress. The desktop\n// dials out, so nothing has to be exposed to reach it.\n//\n// Nothing here when the user has no servers set up, or when their desktop is\n// closed — a closed laptop means no local tools this turn, not a failed turn.\nexport default localMcpTools();\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

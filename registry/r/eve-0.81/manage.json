@@ -1,0 +1,47 @@
+{
+  "name": "manage",
+  "type": "registry:item",
+  "title": "Kybernesis Manage",
+  "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password. Gives the agent create_routine, list_routines and delete_routine, so a routine asked for in chat is real.",
+  "dependencies": [
+    "@kybernesis/manage@eve-0.81",
+    "@kybernesis/enterprise@eve-0.81"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT": ""
+  },
+  "files": [
+    {
+      "path": "registry/manage-channel.ts",
+      "type": "registry:file",
+      "target": "agent/channels/kyb.ts",
+      "content": "import { manageChannel } from \"@kybernesis/manage\";\n\n// Management routes for KYBER Studio and the web control plane: install a\n// registry item, write a schedule, rebuild, restart. Authorized by the caller's\n// control-plane identity and their grant on THIS agent — the same decision\n// that lets them talk to it.\n//\n// Setup routes (/eve/v1/kyb/setup) let the agent's OWNER (a manage grant)\n// finish setup with no terminal: model reach (the exe LLM gateway by default,\n// an Anthropic or OpenAI key, or a Claude subscription sign-in), Slack\n// credentials, an iMessage line, the Link wallet and the computer's screen\n// password. Changes apply at a restart that waits until no conversation is in\n// flight. Pass `setup: false` to leave them out.\n//\n// The agent edits its own repository, so this only works where the repo is\n// present and writable (a VM, a container with the working copy). On a\n// read-only serverless bundle the routes refuse with that reason rather than\n// reporting a success that vanishes on the next deploy.\n//\n// restartCommand is what makes an install take effect. Without it the response\n// says a restart is still required instead of claiming the change is live. On\n// exe hosts it is the agent's systemd unit; `kyb init --host=exe` wires it.\nexport default manageChannel({\n  // appRoot: \"/home/exedev/my-agent\",\n  // restartCommand: \"sudo -n systemctl restart my-agent-agent\",\n});\n"
+    },
+    {
+      "path": "registry/manage-routines.ts",
+      "type": "registry:file",
+      "target": "agent/lib/routines.ts",
+      "content": "import { readFileSync } from \"node:fs\";\nimport { join } from \"node:path\";\nimport { routineTools } from \"@kybernesis/manage\";\n\n// The agent's own routines, shared by create_routine, list_routines and\n// delete_routine. Same file-writing path as Studio's schedule route, so a\n// routine made by asking and one made from Studio are the same source file.\n//\n// The restart that makes a new routine live is read from agent/channels/kyb.ts,\n// the one place `kyb init` and install-service.sh keep it, so the two can never\n// disagree. Without one, a routine is written but only goes live at the next\n// restart, and the tool says so instead of claiming it is set.\nconst appRoot = process.env.EVE_APP_DIR ?? process.cwd();\n\nfunction restartCommand(): string | undefined {\n  try {\n    const source = readFileSync(join(appRoot, \"agent/channels/kyb.ts\"), \"utf8\");\n    const literal = /^\\s*restartCommand:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")/m.exec(source)?.[1];\n    return literal ? (JSON.parse(literal) as string) : undefined;\n  } catch {\n    return undefined;\n  }\n}\n\nexport const routines = routineTools({ appRoot, restartCommand: restartCommand() });\n"
+    },
+    {
+      "path": "registry/manage-create-routine.ts",
+      "type": "registry:file",
+      "target": "agent/tools/create_routine.ts",
+      "content": "import { defineTool } from \"eve/tools\";\nimport { z } from \"zod\";\nimport { routines } from \"../lib/routines.js\";\n\n// \"Remind me every morning at 8\" needs something behind it, or the agent\n// confirms a routine that does not exist.\nexport default defineTool({\n  description: routines.create_routine.description,\n  inputSchema: z.object({\n    name: z.string().describe(\"Short name, e.g. 'morning brief'\"),\n    cron: z.string().describe(\"5-field cron: every day at 10am is `0 10 * * *`\"),\n    instruction: z.string().describe(\"What to do each time, written to yourself with enough context to act on alone\"),\n  }),\n  execute: (input) => routines.create_routine.execute(input),\n});\n"
+    },
+    {
+      "path": "registry/manage-list-routines.ts",
+      "type": "registry:file",
+      "target": "agent/tools/list_routines.ts",
+      "content": "import { defineTool } from \"eve/tools\";\nimport { z } from \"zod\";\nimport { routines } from \"../lib/routines.js\";\n\nexport default defineTool({\n  description: routines.list_routines.description,\n  inputSchema: z.object({}),\n  execute: () => routines.list_routines.execute(),\n});\n"
+    },
+    {
+      "path": "registry/manage-delete-routine.ts",
+      "type": "registry:file",
+      "target": "agent/tools/delete_routine.ts",
+      "content": "import { defineTool } from \"eve/tools\";\nimport { z } from \"zod\";\nimport { routines } from \"../lib/routines.js\";\n\nexport default defineTool({\n  description: routines.delete_routine.description,\n  inputSchema: z.object({ name: z.string() }),\n  execute: (input) => routines.delete_routine.execute(input),\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

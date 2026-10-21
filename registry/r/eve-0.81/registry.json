@@ -1,0 +1,519 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "kybernesis",
+  "homepage": "https://kybernesis.ai",
+  "items": [
+    {
+      "name": "arcana",
+      "type": "registry:item",
+      "title": "Kybernesis Arcana",
+      "description": "Durable long-term memory for eve agents: Arcana MCP connection, recall/remember/brain-note skills, and recall-first instructions.",
+      "dependencies": [
+        "@kybernesis/arcana@eve-0.81"
+      ],
+      "envVars": {
+        "ARCANA_API_KEY": "",
+        "ARCANA_COMPANY_WORKSPACE": ""
+      },
+      "files": [
+        {
+          "path": "registry/arcana.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/arcana.ts"
+        }
+      ]
+    },
+    {
+      "name": "enterprise",
+      "type": "registry:item",
+      "title": "Kybernesis Enterprise",
+      "description": "Control-plane governance for eve agents: offline token verification and per-agent grant enforcement (invite / grant / revoke from the Kybernesis admin).",
+      "dependencies": [
+        "@kybernesis/enterprise@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": ""
+      },
+      "files": [
+        {
+          "path": "registry/enterprise.ts",
+          "type": "registry:file",
+          "target": "agent/channels/eve.ts"
+        }
+      ]
+    },
+    {
+      "name": "multiplayer",
+      "type": "registry:item",
+      "title": "Kybernesis Multiplayer",
+      "description": "Shared Slack threads with per-speaker verified identity, attributed context, no-re-mention continuation, and dual-surface (channel vs DM) sessions.",
+      "dependencies": [
+        "@kybernesis/multiplayer@eve-0.81",
+        "@vercel/connect"
+      ],
+      "envVars": {
+        "SLACK_CONNECTOR_UID": ""
+      },
+      "files": [
+        {
+          "path": "registry/multiplayer.ts",
+          "type": "registry:file",
+          "target": "agent/channels/slack.ts"
+        },
+        {
+          "path": "registry/multiplayer-instructions.md",
+          "type": "registry:file",
+          "target": "agent/instructions/multiplayer.md"
+        }
+      ]
+    },
+    {
+      "name": "buzz",
+      "type": "registry:item",
+      "title": "Kybernesis Buzz",
+      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals — and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
+      "dependencies": [
+        "@kybernesis/buzz@eve-0.81"
+      ],
+      "envVars": {
+        "BUZZ_RELAY": "",
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "BUZZ_KEYFILE": "",
+        "BUZZ_AUTH_TAG": ""
+      },
+      "files": [
+        {
+          "path": "registry/buzz-instructions.md",
+          "type": "registry:file",
+          "target": "agent/instructions/buzz.md"
+        },
+        {
+          "path": "registry/buzz-extension.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/buzz.ts"
+        }
+      ]
+    },
+    {
+      "name": "evals",
+      "type": "registry:item",
+      "title": "Kybernesis Evals",
+      "description": "The baseline QA suite for Kybernesis agents: memory, routing, and smoke behaviors with every production hardening lesson as a default.",
+      "dependencies": [
+        "@kybernesis/evals@eve-0.81"
+      ],
+      "files": [
+        {
+          "path": "registry/evals.ts",
+          "type": "registry:file",
+          "target": "evals/kybernesis.eval.ts"
+        },
+        {
+          "path": "registry/evals-config.ts",
+          "type": "registry:file",
+          "target": "evals/evals.config.ts"
+        }
+      ]
+    },
+    {
+      "name": "dispatch",
+      "type": "registry:item",
+      "title": "Kybernesis Dispatch",
+      "description": "Agent-to-agent dispatch: declared remote-peer edges with principal forwarding on by default, and a receiver channel that only trusts enumerated peer deployments.",
+      "dependencies": [
+        "@kybernesis/dispatch@eve-0.81"
+      ],
+      "files": [
+        {
+          "path": "registry/dispatch-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/eve.ts"
+        }
+      ]
+    },
+    {
+      "name": "engineer",
+      "type": "registry:item",
+      "title": "Kybernesis Engineer",
+      "description": "A vision-verified dev loop for eve agents: workshop sandbox (Playwright baked into the template), a screenshot tool the model can SEE, and trade-school skills for building, verifying, and shipping software.",
+      "dependencies": [
+        "@kybernesis/engineer@eve-0.81"
+      ],
+      "files": [
+        {
+          "path": "registry/engineer.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/engineer.ts"
+        },
+        {
+          "path": "registry/engineer-sandbox.ts",
+          "type": "registry:file",
+          "target": "agent/sandbox/sandbox.ts"
+        }
+      ]
+    },
+    {
+      "name": "linq",
+      "type": "registry:item",
+      "title": "Kybernesis iMessage (Linq)",
+      "description": "Answer texts on an iMessage line through Linq. Every sender is resolved to their control-plane person by number: linked people run as themselves, an unlinked number gets one claim link, refused senders get silence. Connect the line from Studio setup.",
+      "dependencies": [
+        "@kybernesis/exe@eve-0.81",
+        "@kybernesis/enterprise@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": "",
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "LINQ_API_KEY": "",
+        "LINQ_WEBHOOK_SECRET": ""
+      },
+      "files": [
+        {
+          "path": "registry/linq-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/linq.ts"
+        }
+      ]
+    },
+    {
+      "name": "local",
+      "type": "registry:item",
+      "title": "Kybernesis Local",
+      "description": "Work on the user's own computer through KYBER Studio: search, read, edit, write, and run commands, with per-effect consent on the desktop.",
+      "dependencies": [
+        "@kybernesis/local@eve-0.81"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/local-tools.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_shell.ts"
+        },
+        {
+          "path": "registry/local-read.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_read.ts"
+        },
+        {
+          "path": "registry/local-list.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_list.ts"
+        },
+        {
+          "path": "registry/local-search.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_search.ts"
+        },
+        {
+          "path": "registry/local-edit.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_edit.ts"
+        },
+        {
+          "path": "registry/local-write.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_write.ts"
+        },
+        {
+          "path": "registry/local-mcp.ts",
+          "type": "registry:file",
+          "target": "agent/tools/local_mcp.ts"
+        }
+      ],
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+    },
+    {
+      "name": "manage",
+      "type": "registry:item",
+      "title": "Kybernesis Manage",
+      "description": "Let KYBER Studio and the web control plane change this agent: install capabilities, write schedules, and (owner only) finish setup with no terminal: model reach, Slack, an iMessage line, the Link wallet and the computer's password. Gives the agent create_routine, list_routines and delete_routine, so a routine asked for in chat is real.",
+      "dependencies": [
+        "@kybernesis/manage@eve-0.81",
+        "@kybernesis/enterprise@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": ""
+      },
+      "files": [
+        {
+          "path": "registry/manage-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/kyb.ts"
+        },
+        {
+          "path": "registry/manage-routines.ts",
+          "type": "registry:file",
+          "target": "agent/lib/routines.ts"
+        },
+        {
+          "path": "registry/manage-create-routine.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_routine.ts"
+        },
+        {
+          "path": "registry/manage-list-routines.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_routines.ts"
+        },
+        {
+          "path": "registry/manage-delete-routine.ts",
+          "type": "registry:file",
+          "target": "agent/tools/delete_routine.ts"
+        }
+      ]
+    },
+    {
+      "name": "voice",
+      "type": "registry:item",
+      "title": "Kybernesis Voice",
+      "description": "Give this agent its own realtime voice in KYBER Studio: the floating orb speaks as the agent and delegates every real request back to the agent's own session. The agent holds its own OpenAI key.",
+      "dependencies": [
+        "@kybernesis/voice@eve-0.81",
+        "@kybernesis/enterprise@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": "",
+        "KYBERNESIS_VOICE_OPENAI_KEY": ""
+      },
+      "files": [
+        {
+          "path": "registry/voice-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/voice.ts"
+        }
+      ]
+    },
+    {
+      "name": "connectors",
+      "type": "registry:item",
+      "title": "Kybernesis Connectors",
+      "description": "Gmail, Calendar, Slack, Notion and the rest, connected by each person in KYBER Studio. Tools resolve per turn from whoever is talking, so one colleague's mailbox is never another's tool.",
+      "dependencies": [
+        "@kybernesis/connectors@eve-0.81"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/connectors.ts",
+          "type": "registry:file",
+          "target": "agent/tools/connectors.ts"
+        }
+      ]
+    },
+    {
+      "name": "exe",
+      "type": "registry:item",
+      "title": "Kybernesis exe host",
+      "description": "Self-host an eve agent on an exe.dev VM: subscription-backed models (Claude, ChatGPT, Grok) instead of metered gateway tokens, a host preflight that catches the ways a self-hosted agent boots broken, service supervision, and an optional Slack socket binding.",
+      "dependencies": [
+        "@kybernesis/exe@eve-0.81"
+      ],
+      "envVars": {
+        "EXE_VM_NAME": "",
+        "EXE_MODEL": ""
+      },
+      "files": [
+        {
+          "path": "registry/exe-preflight.mjs",
+          "type": "registry:file",
+          "target": "scripts/host-preflight.mjs"
+        }
+      ]
+    },
+    {
+      "name": "notify",
+      "type": "registry:item",
+      "title": "Kybernesis Notify",
+      "description": "Tell the person's phone when this agent needs them: a question it parked on, or a reply that finished while they were away. Delivered by the control plane to KYBER Studio for iOS.",
+      "dependencies": [
+        "@kybernesis/notify@eve-0.81",
+        "@kybernesis/enterprise@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT": ""
+      },
+      "files": [
+        {
+          "path": "registry/notify.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/notify.ts"
+        }
+      ]
+    },
+    {
+      "name": "identity",
+      "type": "registry:item",
+      "title": "Kybernesis Identity",
+      "description": "Your agent's .agent name: verify AgentID deliveries, serve the attach verification document, and reach paired agents as ask_<name> tools. No daemon, no socket, no key in the bundle.",
+      "dependencies": [
+        "@kybernesis/identity@eve-0.81"
+      ],
+      "envVars": {
+        "ARP_ISSUER": "https://gateway.agentid.dev",
+        "ARP_AGENT_DID": "",
+        "ARP_AGENT_CREDENTIAL": "",
+        "AGENTID_CHALLENGE": ""
+      },
+      "files": [
+        {
+          "path": "registry/identity-channel.ts",
+          "type": "registry:file",
+          "target": "agent/channels/arp.ts"
+        },
+        {
+          "path": "registry/identity-peers.ts",
+          "type": "registry:file",
+          "target": "agent/tools/arp-peers.ts"
+        }
+      ]
+    },
+    {
+      "name": "computer",
+      "type": "registry:item",
+      "title": "Kybernesis Computer",
+      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, and the connector-first rule for when the agent uses it.",
+      "dependencies": [
+        "@kybernesis/computer@eve-0.81"
+      ],
+      "envVars": {
+        "COMPUTER_NAME": "",
+        "COMPUTER_VNC_PASSWORD": ""
+      },
+      "files": [
+        {
+          "path": "registry/computer-sandbox.ts",
+          "type": "registry:file",
+          "target": "agent/sandbox.ts"
+        },
+        {
+          "path": "registry/computer-tool.ts",
+          "type": "registry:file",
+          "target": "agent/tools/computer.ts"
+        },
+        {
+          "path": "registry/computer-open-browser.ts",
+          "type": "registry:file",
+          "target": "agent/tools/open_browser.ts"
+        },
+        {
+          "path": "registry/computer-close-tabs.ts",
+          "type": "registry:file",
+          "target": "agent/tools/close_tabs.ts"
+        },
+        {
+          "path": "registry/computer-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/computer.ts"
+        }
+      ]
+    },
+    {
+      "name": "payments",
+      "type": "registry:item",
+      "title": "Kybernesis Payments",
+      "description": "A Link wallet for the agent on its owner's behalf: Stripe Link's tools (spend requests, approval links, reports) mounted behind the owner's link-cli sign-in, the person's approval in Link on every purchase, and pay_on_computer, which types the approved one-time card into a checkout on the agent's own computer without the model ever seeing it. Requires the computer item.",
+      "dependencies": [
+        "@kybernesis/payments@eve-0.81",
+        "@kybernesis/computer@eve-0.81"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/payments-retrieve_user_info.ts",
+          "type": "registry:file",
+          "target": "agent/tools/retrieve_user_info.ts"
+        },
+        {
+          "path": "registry/payments-list_payment_methods.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_payment_methods.ts"
+        },
+        {
+          "path": "registry/payments-list_spend_requests.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_spend_requests.ts"
+        },
+        {
+          "path": "registry/payments-create_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-cancel_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/cancel_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-request_spend_approval.ts",
+          "type": "registry:file",
+          "target": "agent/tools/request_spend_approval.ts"
+        },
+        {
+          "path": "registry/payments-retrieve_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/retrieve_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-create_report.ts",
+          "type": "registry:file",
+          "target": "agent/tools/create_report.ts"
+        },
+        {
+          "path": "registry/payments-approve_spend_request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/approve_spend_request.ts"
+        },
+        {
+          "path": "registry/payments-pay-on-computer.ts",
+          "type": "registry:file",
+          "target": "agent/tools/pay_on_computer.ts"
+        },
+        {
+          "path": "registry/payments-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/payments.ts"
+        }
+      ]
+    },
+    {
+      "name": "vault",
+      "type": "registry:item",
+      "title": "Kybernesis Vault",
+      "description": "The person's logins, cards and addresses from KYBER Studio, sealed in the control plane: the agent lists labels and handles and types an item into a page on its own computer; it never reads a secret. A login only fills on its own site; a card asks the person. Requires the computer and enterprise items.",
+      "dependencies": [
+        "@kybernesis/vault@eve-0.81",
+        "@kybernesis/computer@eve-0.81"
+      ],
+      "envVars": {},
+      "files": [
+        {
+          "path": "registry/vault-list.ts",
+          "type": "registry:file",
+          "target": "agent/tools/list_vault.ts"
+        },
+        {
+          "path": "registry/vault-fill.ts",
+          "type": "registry:file",
+          "target": "agent/tools/fill_from_vault.ts"
+        },
+        {
+          "path": "registry/vault-request.ts",
+          "type": "registry:file",
+          "target": "agent/tools/request_vault_item.ts"
+        },
+        {
+          "path": "registry/vault-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/vault.ts"
+        }
+      ]
+    }
+  ]
+}

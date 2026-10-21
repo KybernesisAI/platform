@@ -1,0 +1,24 @@
+{
+  "name": "engineer",
+  "type": "registry:item",
+  "title": "Kybernesis Engineer",
+  "description": "A vision-verified dev loop for eve agents: workshop sandbox (Playwright baked into the template), a screenshot tool the model can SEE, and trade-school skills for building, verifying, and shipping software.",
+  "dependencies": [
+    "@kybernesis/engineer@eve-0.81"
+  ],
+  "files": [
+    {
+      "path": "registry/engineer.ts",
+      "type": "registry:file",
+      "target": "agent/extensions/engineer.ts",
+      "content": "// Kybernesis Engineer: vision-verified dev loop, trade-school skills, and\n// ship discipline. Pairs with the workshop sandbox (agent/sandbox/sandbox.ts,\n// installed by the same registry item) — Playwright bakes into the sandbox\n// TEMPLATE on first use, so later sessions start warm.\nexport { default } from \"@kybernesis/engineer\";\n"
+    },
+    {
+      "path": "registry/engineer-sandbox.ts",
+      "type": "registry:file",
+      "target": "agent/sandbox/sandbox.ts",
+      "content": "import { defineSandbox } from \"eve/sandbox\";\nimport { vercel } from \"eve/sandbox/vercel\";\n\n/**\n * The Kybernesis engineer workshop: a warm, safe cloud dev machine.\n *\n * - TEMPLATE bootstrap (runs once, inherited by every session): pnpm +\n *   Playwright + Chromium. Prewarm runs at deploy time, so a broken\n *   bootstrap fails the build loudly; warm sessions run the full\n *   render→screenshot→vision loop in seconds.\n * - Backend is PINNED to Vercel Sandbox — hosted sandboxes even from local\n *   dev (uses the linked project's Vercel credentials; run `vercel link` +\n *   `vercel env pull` first). No Docker anywhere: local evals exercise the\n *   exact production backend and reuse the deploy-prewarmed template.\n * - All sessions run under a domain ALLOWLIST — an agent that installs\n *   arbitrary npm packages must not have open egress.\n * - A blocked domain fails loudly; extend the allowlist deliberately for\n *   what the client's projects genuinely need. Treat every addition as a\n *   security decision.\n */\nexport default defineSandbox({\n  backend: vercel({\n    resources: { vcpus: 4 },\n    networkPolicy: {\n      allow: [\n        // package installs\n        \"registry.npmjs.org\",\n        \"*.npmjs.org\",\n        // git + repo tarballs (credentials are brokered at the firewall)\n        \"github.com\",\n        \"api.github.com\",\n        \"codeload.github.com\",\n        \"*.githubusercontent.com\",\n        // playwright browser downloads (template bootstrap)\n        \"cdn.playwright.dev\",\n        \"playwright.azureedge.net\",\n        \"playwright.download.prss.microsoft.com\",\n        \"storage.googleapis.com\",\n        // apt for browser system deps (template bootstrap) — the Vercel\n        // Sandbox base image is Ubuntu; keep Debian mirrors for other bases\n        \"archive.ubuntu.com\",\n        \"security.ubuntu.com\",\n        \"ports.ubuntu.com\",\n        \"*.ubuntu.com\",\n        \"deb.debian.org\",\n        \"security.debian.org\",\n        \"*.debian.org\",\n        // model + deploy platform\n        \"ai-gateway.vercel.sh\",\n        \"vercel.com\",\n        \"*.vercel.app\",\n        // common webfont fetches during rendering\n        \"fonts.googleapis.com\",\n        \"fonts.gstatic.com\",\n      ],\n    },\n  }),\n  revalidationKey: () => \"kybernesis-workshop-v5\",\n  async bootstrap({ use }) {\n    const sandbox = await use();\n    // The sandbox egress proxy carries HTTPS only; apt defaults to http://\n    // mirrors, so every index fetch silently fails. Rewrite to https first.\n    await sandbox.run({\n      command:\n        \"find /etc/apt -type f \\\\( -name '*.list' -o -name '*.sources' \\\\) -exec sed -i 's|http://|https://|g' {} + && apt-get update\",\n    });\n    await sandbox.run({ command: \"npm install -g pnpm\" });\n    // Explicit package.json: `npm init -y` derives the name from the directory\n    // and npm rejects names starting with a dot (\".shot\").\n    await sandbox.run({\n      command:\n        \"mkdir -p /workspace/.shot && cd /workspace/.shot && echo '{\\\"name\\\":\\\"kyb-shot\\\",\\\"private\\\":true}' > package.json && npm install playwright\",\n    });\n    await sandbox.run({\n      command: \"cd /workspace/.shot && npx playwright install --with-deps chromium\",\n    });\n  },\n});\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

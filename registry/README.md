@@ -9,6 +9,16 @@ A [shadcn-format](https://ui.shadcn.com/docs/registry) integration registry for
 eve registry add @kybernesis=https://registry.kybernesis.ai/r/{name}.json
 ```
 
+An agent on a newer eve line than the packages' `latest` points at that line's
+copy instead, whose items install the line's builds by npm tag:
+
+```bash
+eve registry add @kybernesis=https://registry.kybernesis.ai/r/eve-0.81/{name}.json
+```
+
+`r/eve-0.81/` is generated from the `eve-0.81` branch by
+`node scripts/line-registry.mjs eve-0.81`; edit the items there, not here.
+
 ## Items
 
 ### arcana — durable long-term memory
