@@ -82,8 +82,8 @@ node scripts/check-registry.mjs
 ```
 
 Every package is built against one eve line: `eve` is a peer dependency
-scoped to that line (`>=0.68.0 <0.69.0`) with the exact certified version
-(**0.68.0**, the same as `EVE_VERSION` in `packages/create/src/util.ts`) in
+scoped to that line (`>=0.81.1 <0.82.0`) with the exact certified version
+(**0.81.1**, the same as `EVE_VERSION` in `packages/create/src/util.ts`) in
 `devDependencies`. Moving to a new eve is a deliberate, eval-gated
 certification, not a version bump.
 

@@ -49,8 +49,7 @@
     "directory": "packages/dispatch"
   },
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   },
   "peerDependenciesMeta": {
     "@kybernesis/enterprise": {

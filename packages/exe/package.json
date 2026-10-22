@@ -75,8 +75,7 @@
     "directory": "packages/exe"
   },
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   },
   "peerDependenciesMeta": {
     "zod": {

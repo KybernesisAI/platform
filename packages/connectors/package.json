@@ -17,8 +17,7 @@
     "NOTICE"
   ],
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

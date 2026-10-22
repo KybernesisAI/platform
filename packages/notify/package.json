@@ -38,8 +38,7 @@
     "typescript": "^5.6.0"
   },
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   },
   "eve": {
     "extension": {

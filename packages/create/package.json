@@ -46,8 +46,7 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   },
   "peerDependencies": {}
 }

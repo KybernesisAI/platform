@@ -69,8 +69,5 @@
       "source": "./extension",
       "dist": "./dist/extension"
     }
-  },
-  "publishConfig": {
-    "tag": "eve-0.81"
   }
 }

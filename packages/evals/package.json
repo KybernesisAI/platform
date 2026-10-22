@@ -49,8 +49,5 @@
   },
   "bin": {
     "kyb-eval": "./dist/cli.js"
-  },
-  "publishConfig": {
-    "tag": "eve-0.81"
   }
 }

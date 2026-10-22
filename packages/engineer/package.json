@@ -65,8 +65,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "publishConfig": {
-    "tag": "eve-0.81"
   }
 }

@@ -55,7 +55,6 @@
     "@types/node": "^24.0.0"
   },
   "publishConfig": {
-    "access": "public",
-    "tag": "eve-0.81"
+    "access": "public"
   }
 }
