@@ -72,7 +72,7 @@
       "name": "buzz",
       "type": "registry:item",
       "title": "Kybernesis Buzz",
-      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals — and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
+      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals \u2014 and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
       "dependencies": [
         "@kybernesis/buzz@eve-0.81"
       ],
@@ -512,6 +512,23 @@
           "path": "registry/vault-instructions.ts",
           "type": "registry:file",
           "target": "agent/instructions/vault.ts"
+        }
+      ]
+    },
+    {
+      "name": "artifacts",
+      "type": "registry:item",
+      "title": "Kybernesis Artifacts",
+      "description": "Pages this agent makes for a person, such as a report, a dashboard or a tracker, drawn inline as cards in KYBER Studio and the phone. Stored on the agent's own machine and shown only to the person who asked, through the manage routes.",
+      "dependencies": [
+        "@kybernesis/artifacts@eve-0.81",
+        "@kybernesis/manage@eve-0.81"
+      ],
+      "files": [
+        {
+          "path": "registry/artifacts.ts",
+          "type": "registry:file",
+          "target": "agent/extensions/artifacts.ts"
         }
       ]
     }
