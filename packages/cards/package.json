@@ -1,0 +1,40 @@
+{
+  "name": "@kybernesis/cards",
+  "version": "0.1.0",
+  "description": "Rich replies for eve agents: one card format that tools emit and Kybernesis clients draw, with plain-text fallbacks for text-only channels and a reader that turns a session stream into the steps an agent took.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/cards"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "NOTICE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
