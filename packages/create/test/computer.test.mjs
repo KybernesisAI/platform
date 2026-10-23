@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computerDoctorChecks } from "../dist/doctor.js";
+import { computerDoctorChecks, countLiveProcesses } from "../dist/doctor.js";
 import { computerPlan } from "../dist/templates.js";
 
 const base = { configured: true, name: "acme-computer", containerState: "running", screenBound: true, vncPasswordSet: true };
@@ -35,4 +35,19 @@ test("init plan: root sandbox, sighted tool, guarded browser, instructions, eval
   assert.match(plan.files.find((f) => f.path === "agent/sandbox.ts").content, /"acme-computer"/);
   assert.deepEqual(plan.deps, ["@kybernesis/computer"]);
   assert.match(plan.env, /COMPUTER_VNC_PASSWORD/);
+});
+
+test("doctor: extra display settings daemons warn, a pile that nears Xvfb's limit fails, and both say how to clear it", () => {
+  assert.deepEqual(computerDoctorChecks({ ...base, settingsDaemons: 1 }).map((c) => c.verdict), ["pass"]);
+  const some = computerDoctorChecks({ ...base, settingsDaemons: 3 }).find((c) => /settings daemons/.test(c.label));
+  assert.equal(some.verdict, "warn");
+  assert.match(some.detail, /0\.3\.1/);
+  assert.match(some.detail, /docker exec acme-computer/);
+  assert.equal(computerDoctorChecks({ ...base, settingsDaemons: 239 }).find((c) => /settings daemons/.test(c.label)).verdict, "fail");
+  assert.ok(!computerDoctorChecks({ ...base, containerState: "stopped", settingsDaemons: 239 }).some((c) => /settings daemons/.test(c.label)));
+});
+
+test("doctor: zombies are not counted as live settings daemons", () => {
+  assert.equal(countLiveProcesses("Ss\nSl\nZ\n \n"), 2);
+  assert.equal(countLiveProcesses(""), 0);
 });

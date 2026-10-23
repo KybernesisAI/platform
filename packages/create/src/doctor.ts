@@ -827,7 +827,16 @@ export interface ComputerInspection {
   /** The noVNC port is bound on loopback. */
   screenBound: boolean | null;
   vncPasswordSet: boolean;
+  /**
+   * Live xfsettingsd processes in the running computer. One is right; more
+   * were left by display restarts before @kybernesis/computer 0.3.1, and each
+   * holds one of Xvfb's client slots.
+   */
+  settingsDaemons?: number | null;
 }
+
+/** Xvfb ran out of client slots at about 240 settings daemons; fail well before that. */
+const SETTINGS_DAEMONS_FAIL = 100;
 
 /**
  * A computer that is configured but not running is the quiet failure here:
@@ -865,6 +874,16 @@ export function computerDoctorChecks(c: ComputerInspection): Check[] {
       detail: "the container was created without the noVNC port mapping; `docker rm -f " + c.name + "` and `eve build` to recreate it (volumes keep the home and /workspace)",
     });
   }
+  if (c.containerState === "running" && typeof c.settingsDaemons === "number" && c.settingsDaemons > 1) {
+    checks.push({
+      verdict: c.settingsDaemons >= SETTINGS_DAEMONS_FAIL ? "fail" : "warn",
+      label: `the computer has ${c.settingsDaemons} display settings daemons running (one is right)`,
+      detail:
+        "each restart of its display left one behind, and each holds an X client slot; at about 240 the screen stops accepting windows and `eve build` fails. " +
+        "Upgrade @kybernesis/computer to 0.3.1 or later (`kyb upgrade`), then clear the extras: " +
+        "`docker exec " + c.name + " sh -c 'n=$(pgrep -n -x xfsettingsd); for p in $(pgrep -x xfsettingsd); do [ $p = $n ] || kill $p; done'`",
+    });
+  }
   if (!c.vncPasswordSet) {
     checks.push({
       verdict: "warn",
@@ -887,11 +906,20 @@ export function inspectComputer(cwd: string): ComputerInspection | null {
   const containerState: ComputerInspection["containerState"] =
     state === null ? "unknown" : state.trim() === "true" ? "running" : state.trim() === "false" ? "stopped" : "missing";
   const ports = containerState === "running" ? capture("docker", ["port", name, "6080"]) : null;
+  const daemons = containerState === "running"
+    ? capture("docker", ["exec", name, "sh", "-c", "ps -C xfsettingsd -o stat= || true"])
+    : null;
   return {
     configured: true,
     name,
     containerState,
     screenBound: containerState === "running" ? Boolean(ports && ports.trim().length > 0) : null,
     vncPasswordSet: Boolean(env.COMPUTER_VNC_PASSWORD?.trim()),
+    settingsDaemons: daemons === null ? null : countLiveProcesses(daemons),
   };
+}
+
+/** @internal Lines of `ps -o stat=` output that are not zombies (a zombie holds no X connection). */
+export function countLiveProcesses(stats: string): number {
+  return stats.split("\n").filter((line) => line.trim() && !line.trim().startsWith("Z")).length;
 }
