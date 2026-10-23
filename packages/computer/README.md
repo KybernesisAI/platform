@@ -115,3 +115,8 @@ connector-first and ask-to-connect behaviour.
 - `eve eval` must run in the foreground over SSH (a detached run gets 401).
 - Memory: the container is capped (`memoryLimit`, default 3g); Chrome idles near 1 GB.
   `close_tabs` exists for a reason.
+- The display starts only when it is down. eve's display start opens a new D-Bus
+  session and a new `xfsettingsd` every time, and the old ones stay on the X server;
+  before 0.3.1 every session, restart and eval left one, and at about 240 Xvfb ran
+  out of client slots and `eve build` failed. `startComputer` now skips a computer
+  that is up and keeps only the newest settings daemon; `kyb doctor` counts them.
