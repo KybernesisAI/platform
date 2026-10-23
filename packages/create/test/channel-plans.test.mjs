@@ -9,7 +9,7 @@ test("exe slack: the agent's own Slack app from the control plane, identity on, 
   assert.match(plan.content, /identity: credential \? channelIdentity/);
   assert.doesNotMatch(plan.content, /SLACK_BOT_TOKEN|SLACK_SOCKET/);
   assert.deepEqual(plan.env, []);
-  assert.ok(plan.deps.some((d) => d.startsWith("@kybernesis/multiplayer@^0.6")));
+  assert.ok(plan.deps.includes("@kybernesis/multiplayer@eve-0.81"));
 });
 
 test("exe imessage: the identity-gated Linq channel the Channels page connects, not Photon", () => {
