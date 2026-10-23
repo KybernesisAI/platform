@@ -1,0 +1,19 @@
+{
+  "name": "artifacts",
+  "type": "registry:item",
+  "title": "Kybernesis Artifacts",
+  "description": "Pages this agent makes for a person, such as a report, a dashboard or a tracker, drawn inline as cards in KYBER Studio and the phone. Stored on the agent's own machine and shown only to the person who asked, through the manage routes.",
+  "dependencies": [
+    "@kybernesis/artifacts",
+    "@kybernesis/manage"
+  ],
+  "files": [
+    {
+      "path": "registry/artifacts.ts",
+      "type": "registry:file",
+      "target": "agent/extensions/artifacts.ts",
+      "content": "// Artifacts: pages this agent makes for a person (reports, dashboards,\n// trackers) that KYBER Studio and the phone draw inline as cards. They are\n// stored on this agent's machine and served to the person who asked by the\n// @kybernesis/manage routes. See @kybernesis/artifacts.\nexport { default } from \"@kybernesis/artifacts/extension\";\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

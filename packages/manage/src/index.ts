@@ -9,6 +9,7 @@ import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
 import { memoryRoutes, type MemoryOptions } from "./memory.js";
+import { artifactRoutes, type ArtifactsOptions, type ArtifactViewer } from "./artifacts.js";
 import { fileRoutes, type FilesOptions } from "./files.js";
 
 /**
@@ -170,6 +171,24 @@ async function authorize(req: Request, options: ManageOptions, level: "use" | "m
   return null;
 }
 
+/**
+ * The same check as `authorize`, for routes that answer differently per person:
+ * the verified caller, or the Response that refuses them.
+ */
+async function identify(req: Request, options: ManageOptions): Promise<ArtifactViewer | Response> {
+  const issuer = options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
+  const agent = options.agent ?? process.env.KYBERNESIS_AGENT;
+  if (!agent) {
+    return Response.json(
+      { ok: false, error: "This agent has no KYBERNESIS_AGENT set, so it cannot check grants." },
+      { status: 500 },
+    );
+  }
+  const result = await verifyKybernesisRequest(req, { issuer, agent });
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
+  return { userId: result.principal.userId, level: result.principal.level };
+}
+
 export interface ManageOptions {
   /**
    * The module name of this channel under `agent/channels/`, without extension.
@@ -222,6 +241,14 @@ export interface ManageOptions {
    * that was not delivered.
    */
   files?: FilesOptions | false;
+  /**
+   * Artifacts the agent made (`@kybernesis/artifacts`), under
+   * /eve/v1/kyb/artifacts: list, one artifact's versions, and its content as
+   * text for the app's sandbox. Each caller sees only their own artifacts; one
+   * nobody owns is shown to people who manage the agent. On by default; an
+   * agent without the package simply has none.
+   */
+  artifacts?: ArtifactsOptions | false;
 }
 
 /**
@@ -404,6 +431,9 @@ export function manageChannel(options: ManageOptions = {}) {
         ? []
         : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
       ...(options.files === false ? [] : fileRoutes({ prefix: PREFIX, options: options.files ?? {} })),
+      ...(options.artifacts === false
+        ? []
+        : artifactRoutes({ prefix: PREFIX, options: options.artifacts ?? {}, identify: (req) => identify(req, options) })),
       ...(options.memory === false
         ? []
         : memoryRoutes({ prefix: PREFIX, options: options.memory ?? {}, authorize: (req) => authorize(req, options, "manage") })),
@@ -868,6 +898,7 @@ export function routineTools(options: ManageOptions = {}) {
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
+export { artifactRoutes, artifactsDir, listVisible, visibleTo, type ArtifactsOptions, type ArtifactViewer } from "./artifacts.js";
 export { memoryRoutes, memoryConfig, callMemory, contentOf, MEMORY_MCP_URL, type MemoryOptions } from "./memory.js";
 
 /** The name `eve add` needs: bare catalog names belong to the Kybernesis registry. */
