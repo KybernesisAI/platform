@@ -516,6 +516,28 @@
       ]
     },
     {
+      "name": "cards",
+      "type": "registry:item",
+      "title": "Kybernesis Cards",
+      "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data. Text channels get each card's plain text, so a reply still reads without it.",
+      "dependencies": [
+        "@kybernesis/cards",
+        "zod"
+      ],
+      "files": [
+        {
+          "path": "registry/cards-show.ts",
+          "type": "registry:file",
+          "target": "agent/tools/show.ts"
+        },
+        {
+          "path": "registry/cards-instructions.md",
+          "type": "registry:file",
+          "target": "agent/instructions/cards.md"
+        }
+      ]
+    },
+    {
       "name": "artifacts",
       "type": "registry:item",
       "title": "Kybernesis Artifacts",

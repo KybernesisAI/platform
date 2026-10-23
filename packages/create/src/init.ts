@@ -41,6 +41,7 @@ import { upsertEnv } from "./envfile.js";
 import { systemdRestartCommand } from "./systemd.js";
 import { sandboxCleanupScaffoldFiles } from "./sandbox-cleanup.js";
 import { MODEL_REACH_ENV, resolveModelScaffold, type ModelScaffoldConfig } from "./model-reach.js";
+import { STUDIO_CORE, ignoreMagicState, wireMagicLinq } from "./studio-core.js";
 
 /**
  * The always-installed core. Everything else — channels, subagents, engineer,
@@ -239,7 +240,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     // client change THIS AGENT — its dependencies and its source; `notify`
     // lets it reach the person's phone. Different blast radius, so an agent
     // can have one without the others.
-    console.log(bold("\n2b2  KYBER Studio: local execution + management routes + phone notifications …"));
+    console.log(bold("\n2b2  KYBER Studio: local execution + management routes + phone notifications + cards, artifacts, heads-ups …"));
     const studioFailures: string[] = [];
     for (const item of ["local", "manage", "notify"]) {
       // The @kybernesis/ prefix is load-bearing: a bare name resolves against
@@ -254,6 +255,19 @@ export async function init(rawName: string | undefined, options: InitOptions = {
       if (!ok) {
         studioFailures.push(item);
         console.log(yellow(`  ! ${item} did not install — re-run: npx eve add @kybernesis/${item}`));
+      }
+    }
+    // What a person sees beyond words, on every agent Studio reaches: cards
+    // under replies, artifacts, and magic (off until each person opts in).
+    // After manage and notify on purpose: artifacts are served by manage's
+    // routes, and magic delivers into its conversation and rings the phone.
+    for (const core of STUDIO_CORE) {
+      const ok = run("npx", ["eve", "add", `@kybernesis/${core.item}`, "--overwrite"], { cwd: dir, allowFail: true });
+      if (!ok) {
+        studioFailures.push(core.item);
+        console.log(yellow(`  ! ${core.item} did not install — re-run: npx eve add @kybernesis/${core.item}`));
+      } else if (core.item === "magic") {
+        ignoreMagicState(dir);
       }
     }
     // Said again, loudly, at the end. A warning printed sixty lines before a
@@ -450,6 +464,8 @@ export async function init(rawName: string | undefined, options: InitOptions = {
   } else {
     console.log(bold(`\n4/6  Channel: ${channel} (no channel file) …`));
   }
+  // A person who last texted the agent gets their heads-ups in that thread.
+  if (studio && wireMagicLinq(dir)) console.log(dim("     agent/lib/magic-surfaces.ts — heads-ups also land in iMessage threads"));
 
   if (depts.length) {
     console.log(bold(`\n4b   Generating ${depts.length} department subagent(s) …`));
@@ -508,6 +524,7 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     host === "exe" ? "exe.dev host" : null,
     model.reach === "claude-sub" ? "Claude subscription reach" : null,
     studio ? "KYBER Studio (local execution + management routes)" : null,
+    studio ? "cards, artifacts and heads-ups (each person opts in)" : null,
     engineer ? "engineer subagent (workshop + vision loop)" : null,
     compPlan ? "its own computer (desktop + Chrome, watch and take over)" : null,
     compPlan ? "its own vault (logins and cards it fills without seeing)" : null,
