@@ -1,0 +1,77 @@
+{
+  "name": "magic",
+  "type": "registry:item",
+  "title": "Kybernesis Magic",
+  "description": "Proactive heads-ups, off until each person turns them on: a morning brief, meeting prep, time to leave (live traffic with GOOGLE_MAPS_API_KEY, the person's own estimate without), double bookings, replies owed, important mail and one-off reminders. Code watches their calendar and mail every five minutes; the model runs only when something is worth saying, as that person, in the conversation they last used. Quiet hours, a daily budget and a feedback dial keep it quiet. Requires the manage, connectors and notify items.",
+  "dependencies": [
+    "@kybernesis/magic"
+  ],
+  "envVars": {
+    "KYBERNESIS_ISSUER": "",
+    "KYBERNESIS_AGENT_CREDENTIAL": "",
+    "GOOGLE_MAPS_API_KEY": ""
+  },
+  "files": [
+    {
+      "path": "registry/magic-schedule.ts",
+      "type": "registry:file",
+      "target": "agent/schedules/magic.ts",
+      "content": "import { defineSchedule } from \"eve/schedules\";\nimport { noteDeliveryFailure, tick } from \"@kybernesis/magic/steps\";\nimport { deliver } from \"../lib/magic-surfaces.js\";\n\n// Every five minutes, code looks at each opted-in person's calendar, mail and\n// reminders. The model only runs when that finds something worth saying, and\n// then as the person, in the conversation they already have with this agent.\nexport default defineSchedule({\n  cron: \"*/5 * * * *\",\n  async run({ to, waitUntil }) {\n    for (const dispatch of await tick()) {\n      waitUntil(deliver(to, dispatch).catch((error) => noteDeliveryFailure(dispatch.principalId, error)));\n    }\n  },\n});\n"
+    },
+    {
+      "path": "registry/magic-surfaces.ts",
+      "type": "registry:file",
+      "target": "agent/lib/magic-surfaces.ts",
+      "content": "import type { MagicDispatch } from \"@kybernesis/magic\";\nimport type { ScheduleToFn } from \"eve/schedules\";\nimport kyb from \"../channels/kyb.js\";\n\n/**\n * Where a heads-up is delivered: the conversation the person last used.\n *\n * Studio and the phone app share the agent's canonical conversation through\n * the kyb channel, and a turn run as the person rings their phone. To deliver\n * into another channel's conversation, import that channel and add a branch\n * on the recorded address. For iMessage through Linq:\n *\n *   import linq from \"../channels/linq.js\";\n *   if (dispatch.surface.token?.startsWith(\"linq:\")) {\n *     return to(linq, { threadId: dispatch.surface.token }).send(dispatch.packet, { auth: dispatch.surface.auth });\n *   }\n */\nexport function deliver(to: ScheduleToFn, dispatch: MagicDispatch) {\n  return to(kyb, { routine: \"magic\" }).send(dispatch.packet, { auth: dispatch.surface.auth });\n}\n"
+    },
+    {
+      "path": "registry/magic-hook.ts",
+      "type": "registry:file",
+      "target": "agent/hooks/magic.ts",
+      "content": "import { magicHook } from \"@kybernesis/magic/tools\";\n\n// Remembers which conversation each person last wrote in, so their heads-ups\n// land there. Only verified people are recorded; magic's own turns are not.\nexport default magicHook();\n"
+    },
+    {
+      "path": "registry/magic-settings.ts",
+      "type": "registry:file",
+      "target": "agent/tools/magic_settings.ts",
+      "content": "import { magicSettingsTool } from \"@kybernesis/magic/tools\";\n\n// Heads-ups for the person in this turn: on, off, and how they work.\nexport default magicSettingsTool();\n"
+    },
+    {
+      "path": "registry/magic-remind-me.ts",
+      "type": "registry:file",
+      "target": "agent/tools/remind_me.ts",
+      "content": "import { remindMeTool } from \"@kybernesis/magic/tools\";\n\n// One person's one-off reminder, delivered into their conversation on time.\nexport default remindMeTool();\n"
+    },
+    {
+      "path": "registry/magic-status.ts",
+      "type": "registry:file",
+      "target": "agent/tools/magic_status.ts",
+      "content": "import { magicStatusTool } from \"@kybernesis/magic/tools\";\n\n// What heads-ups are doing for the person in this turn, and why.\nexport default magicStatusTool();\n"
+    },
+    {
+      "path": "registry/magic-feedback.ts",
+      "type": "registry:file",
+      "target": "agent/tools/magic_feedback.ts",
+      "content": "import { magicFeedbackTool } from \"@kybernesis/magic/tools\";\n\n// \"Fewer of these\", \"stop the X ones\": the person's dial on each kind.\nexport default magicFeedbackTool();\n"
+    },
+    {
+      "path": "registry/magic-no-reply.ts",
+      "type": "registry:file",
+      "target": "agent/tools/no_reply.ts",
+      "content": "import { noReply } from \"eve/tools/no_reply\";\n\n// Lets a background check end in silence when nothing is worth saying.\nexport default noReply();\n"
+    },
+    {
+      "path": "registry/magic-instructions.ts",
+      "type": "registry:file",
+      "target": "agent/instructions/magic.ts",
+      "content": "import { magicInstructions } from \"@kybernesis/magic/tools\";\n\n// How heads-ups work, plus what this agent told the person on its own lately.\nexport default magicInstructions();\n"
+    },
+    {
+      "path": "registry/magic-skill.md",
+      "type": "registry:file",
+      "target": "agent/skills/magic/SKILL.md",
+      "content": "---\ndescription: Turn on, set up, change or turn off proactive heads-ups (morning brief, meeting prep, time to leave, double bookings, replies owed, reminders) for the person you are talking to.\n---\n\n# Setting up heads-ups\n\nHeads-ups are per person. Everything here applies only to the person in this conversation, and magic_settings only ever changes their own settings.\n\n## Turning it on\n\nAsk only what you cannot find out, one short question at a time, and suggest the default so a one-word answer works:\n\n1. Their time zone. Required. Offer the one their calendar or memory suggests (\"Bangkok time?\") and use the IANA name (Asia/Bangkok).\n2. Morning brief: on at 07:30 by default. Ask if that time suits. An evening wrap is off unless they want one.\n3. Quiet hours: 22:00 to 07:00 by default. Nothing but reminders they set and urgent time-to-leave alerts gets through.\n4. Places, only if they want time-to-leave alerts: home and office addresses as a map would find them. Without them, time-to-leave alerts only follow an in-person meeting somewhere else.\n5. People whose mail always matters: names or addresses (or a whole company domain) for important-mail alerts and reply nudges.\n6. How far you should go: tell (just say it), suggest (offer one next step, the default), or draft (prepare a reply or brief, never send it).\n\nThen call magic_settings with enabled true and what they told you, and confirm in two lines what they will hear and when. Mention that they can say \"fewer of these\", \"stop the X ones\" or \"turn magic off\" any time.\n\nCalendar and mail come from the services they connected in KYBER Studio. If magic_status says one is not connected, tell them which and that heads-ups for it start once they connect it.\n\n## Changing it\n\nMap what they say to magic_settings fields: a new brief time is briefAt, \"no brief\" is briefAt null, \"stop the meeting prep ones\" is kinds.meeting_prep.enabled false, \"only bug me three times a day\" is dailyBudget 3. Confirm the change in one line.\n\n## Turning it off\n\nmagic_settings with enabled false. Their reminders still arrive; say so.\n"
+    }
+  ],
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json"
+}

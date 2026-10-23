@@ -1,0 +1,55 @@
+{
+  "name": "@kybernesis/magic",
+  "version": "0.1.0",
+  "description": "Proactive agents: a code-only watch over the person's calendar, inbox and reminders that wakes the model only when something is worth saying, and delivers it into the conversation they already have.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/magic"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./steps": {
+      "types": "./dist/steps.d.ts",
+      "import": "./dist/steps.js",
+      "default": "./dist/steps.js"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js",
+      "default": "./dist/tools.js"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/prepublish.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "peerDependencies": {
+    "eve": ">=0.81.1 <0.82.0",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eve": "0.81.1",
+    "typescript": "^5.9.0",
+    "zod": "^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
