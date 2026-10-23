@@ -19,7 +19,7 @@ test("answers map to outcomes: a saved id, typing it yourself, or a cancel; noth
   assert.deepEqual(interpretVaultAnswer({ status: "answered", text: "vault:abc" }).item_id, "abc");
   assert.equal(interpretVaultAnswer({ status: "answered", optionId: "manual" }).status, "manual");
   assert.equal(interpretVaultAnswer({ status: "answered", optionId: "cancel" }).status, "cancelled");
-  assert.equal(interpretVaultAnswer({ status: "dismissed" }).status, "cancelled");
+  assert.equal(interpretVaultAnswer({ status: "cancelled" }).status, "cancelled");
   assert.equal(interpretVaultAnswer({ status: "unavailable" }).status, "unavailable");
   assert.equal(interpretVaultAnswer({ status: "answered", text: "here it is: hunter2" }).status, "cancelled");
 });

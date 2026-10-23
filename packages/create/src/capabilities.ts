@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { finalizeGithubToolsRegistryMount, wireArpAuth } from "./init.js";
 import { DISPATCH_DEP, dispatchEveChannelTs, dispatchPeersTs, engineerPlan, type HostKind } from "./templates.js";
 import type { ModelScaffoldConfig } from "./model-reach.js";
+import { THIRD_PARTY_PINS } from "./line-hop.js";
 import { run, yellow } from "./util.js";
 
 /**
@@ -15,17 +16,15 @@ import { run, yellow } from "./util.js";
 // Official eve-registry limbs installed with the engineer subagent.
 // connection/vercel is Vercel-Connect-backed, so it is VERCEL-HOST ONLY: on a
 // self-hosted agent it cannot get an OIDC token and the agent fails to boot.
-const ENGINEER_ITEMS_ALL = ["extension/agent-browser", "extension/github-tools"] as const;
+const ENGINEER_ITEMS_ALL = ["extension/github-tools"] as const;
 const ENGINEER_ITEMS_VERCEL = ["connection/vercel"] as const;
 
 /**
- * The registry items install the newest release of each third-party
- * extension, and those are built on a later eve than the certified one, which
- * eve then refuses at discovery ("has no compile or runtime usage") and the
- * agent never boots. These are the releases proven on the certified eve.
- * Move them with the eve certification, never on their own.
+ * The third-party extensions at the releases proven on the certified eve (see
+ * THIRD_PARTY_PINS): the registry items install the newest release, which eve
+ * refuses at discovery when it is built on a later eve.
  */
-export const ENGINEER_EXTENSION_PINS = ["@agent-browser/eve@0.34.0", "@github-tools/eve-extension@0.8.0"] as const;
+export const ENGINEER_EXTENSION_PINS = Object.entries(THIRD_PARTY_PINS).map(([name, version]) => `${name}@${version}`);
 
 function write(dir: string, path: string, content: string): void {
   const full = join(dir, path);
@@ -50,7 +49,7 @@ export function applyDispatch(dir: string): string[] {
 
 /**
  * The engineer: a declared `builder` subagent with its own workshop sandbox,
- * memory and skills, plus the browser and GitHub tools at the root.
+ * memory and skills, plus the GitHub tools at the root.
  */
 export function applyEngineer(dir: string, host: HostKind, model: ModelScaffoldConfig): { files: string[]; steps: string[] } {
   const plan = engineerPlan(host, model);
@@ -61,7 +60,7 @@ export function applyEngineer(dir: string, host: HostKind, model: ModelScaffoldC
     if (item === "extension/github-tools") finalizeGithubToolsRegistryMount(dir, ok);
     if (!ok) console.log(yellow(`  ! ${item} did not install cleanly — re-run: npx eve add ${item}`));
   }
-  // --legacy-peer-deps: both declare peer ranges that trail the certified eve.
+  // --legacy-peer-deps: it declares a peer range that trails the certified eve.
   const pinned = run("npm", ["install", "--save-exact", "--legacy-peer-deps", ...ENGINEER_EXTENSION_PINS, "--no-audit", "--no-fund"], {
     cwd: dir,
     allowFail: true,

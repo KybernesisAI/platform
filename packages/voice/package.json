@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/voice",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Give a KYBER Studio agent its own realtime voice: the floating orb speaks as the agent and delegates every real request back to the agent's own session. The agent holds its own OpenAI key.",
   "license": "Apache-2.0",
   "type": "module",
@@ -27,15 +27,15 @@
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "peerDependencies": {
-    "@kybernesis/enterprise": "^0.9.0",
-    "eve": ">=0.68.0 <0.69.0",
+    "@kybernesis/enterprise": "^0.10.0",
+    "eve": ">=0.81.1 <0.82.0",
     "zod": "^3.23.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@kybernesis/enterprise": "^0.9.0",
+    "@kybernesis/enterprise": "^0.10.0",
     "@types/node": "^22.10.2",
     "@types/ws": "^8.18.1",
-    "eve": "0.68.0",
+    "eve": "0.81.1",
     "typescript": "^5.7.2"
   },
   "engines": {

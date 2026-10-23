@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
-export const EVE_VERSION = "0.68.0";
-export const REGISTRY_URL = "https://registry.kybernesis.ai/r/{name}.json";
+export const EVE_VERSION = "0.81.1";
+/** The registry items built for EVE_VERSION's line; every @kybernesis dep in them is tagged for it. */
+export const REGISTRY_URL = "https://registry.kybernesis.ai/r/eve-0.81/{name}.json";
 export const DEFAULT_ISSUER = "https://agent.kybernesis.ai";
 
 const TTY = process.stdout.isTTY === true;

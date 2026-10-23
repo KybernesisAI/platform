@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/local",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Let a deployed eve agent work on the user's own machine, through KYBER Studio.",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,12 +25,12 @@
     "prepublishOnly": "node ../../scripts/prepublish.mjs"
   },
   "peerDependencies": {
-    "eve": ">=0.68.0 <0.69.0",
+    "eve": ">=0.81.1 <0.82.0",
     "zod": "^3.23.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "eve": "0.68.0",
+    "eve": "0.81.1",
     "typescript": "^5.7.2"
   }
 }

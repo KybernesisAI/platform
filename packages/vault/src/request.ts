@@ -53,7 +53,10 @@ export type VaultRequestOutcome =
   | { status: "cancelled"; note: string }
   | { status: "unavailable"; note: string };
 
-/** What the agent's tool file passes to `ctx.ask`. The tool itself must be authored in `agent/tools/` — eve compiles `"use workflow"` from source, so a package cannot ship it. */
+/**
+ * What the agent's tool file passes to `ctx.ask`. The tool itself must be authored in `agent/tools/` — eve compiles `"use workflow"` from source, so a package cannot ship it.
+ * Author it as `task(input, ctx)`, not `execute`: on eve ≥0.69 a new message withdraws a question asked from an `execute` call, so the person saying anything else while the form is open would cancel the ask.
+ */
 export function vaultItemAsk(input: VaultItemAsk) {
   return {
     prompt: vaultItemPrompt(input),
@@ -66,10 +69,10 @@ export function vaultItemAsk(input: VaultItemAsk) {
   };
 }
 
-/** Turn the person's answer into the tool's result. */
+/** Turn the person's answer into the tool's result. `cancelled` is eve's withdrawn question (the turn was cancelled before anyone answered). */
 export function interpretVaultAnswer(answer: { status: string; optionId?: string; text?: string }): VaultRequestOutcome {
   if (answer.status === "unavailable") return { status: "unavailable", note: "No one can answer here (an unattended run). Stop and say what you need." };
-  if (answer.status === "dismissed" || answer.optionId === "cancel") return { status: "cancelled", note: "The person cancelled. Do not try another way to get these details." };
+  if (answer.status === "cancelled" || answer.optionId === "cancel") return { status: "cancelled", note: "The person cancelled. Do not try another way to get these details." };
   if (answer.optionId === "manual") return { status: "manual", note: "The person will type it on your screen. Take a screenshot every ~20 seconds until the form is filled or the page changes, then continue; do not touch the fields." };
   const text = (answer.text ?? "").trim();
   if (text.startsWith(SAVED_PREFIX)) {
@@ -80,4 +83,4 @@ export function interpretVaultAnswer(answer: { status: string; optionId?: string
 }
 
 export const REQUEST_VAULT_ITEM_DESCRIPTION =
-  "Ask the person for a login, card, address or contact you need but could not find in their vault (use list_vault first). The turn pauses until they answer. They can add it to the vault (you get an item id to use with fill_from_vault), take over your screen to type it themselves, or cancel. Never ask for secrets in chat; use this.";
+  "Ask the person for a login, card, address or contact you need but could not find in their vault (use list_vault first). The question stays open while you wait, even if they write about something else, and the answer comes back to you later in the conversation; do nothing on that form until it does. They can add it to the vault (you get an item id to use with fill_from_vault), take over your screen to type it themselves, or cancel. Never ask for secrets in chat; use this.";

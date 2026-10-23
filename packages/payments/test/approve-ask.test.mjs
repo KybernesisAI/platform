@@ -14,7 +14,7 @@ test("the question takes a typed reply, so text-only channels can answer it", ()
 test("buttons and typed replies: only a no cancels, everything else checks Link", () => {
   assert.equal(interpretSpendRequestAnswer({ status: "answered", optionId: "approved" }), "check");
   assert.equal(interpretSpendRequestAnswer({ status: "answered", optionId: "cancel" }), "cancel");
-  assert.equal(interpretSpendRequestAnswer({ status: "dismissed" }), "cancel");
+  assert.equal(interpretSpendRequestAnswer({ status: "cancelled" }), "cancel");
   assert.equal(interpretSpendRequestAnswer({ status: "unavailable" }), "cancel");
   for (const text of ["Approve", "I approved it", "done", "yes go ahead", "ok", ""]) {
     assert.equal(interpretSpendRequestAnswer({ status: "answered", text }), "check", text);

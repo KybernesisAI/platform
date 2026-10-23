@@ -59,13 +59,17 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
   registry-written files instead.
 - Every package: Apache-2.0 `LICENSE` + `NOTICE`, `files: ["dist","NOTICE"]`,
   `eve` as a **peerDependency** scoped to the eve line it was built on
-  (`>=0.68.0 <0.69.0`) with the exact pinned version in `devDependencies`
-  (currently **0.68.0**, matching `EVE_VERSION` in `packages/create/src/util.ts`;
-  certified 2026-09-30, fleet on it 2026-10-05: Kyber 23/23, Ava 15/16 (Attio
-  list shape), Foreman 11/11, Sid green). Upgrades are deliberate and
-  eval-gated; see the certification skill. 0.68 broke the sandbox API, the
-  judge and eval context, `ask_question` (now opt-in), `todo`, and
-  `outputSchema`/`mode` on `defineAgent`.
+  (`>=0.81.1 <0.82.0`) with the exact pinned version in `devDependencies`
+  (currently **0.81.1**, matching `EVE_VERSION` in `packages/create/src/util.ts`;
+  certified 2026-10-21 on host trials: Foreman 14 + 1 skip, Ava 16/16, Sid
+  18/19, Kyber 20/23 (Sid-peer callback timeouts seen only in trials)).
+  Upgrades are deliberate and eval-gated; see the certification skill. The
+  first 0.81 boot deletes `.eve/.workflow-data` (past conversations); `kyb
+  upgrade` copies it to `.eve/.workflow-data.eve-<old line>` first. 0.81
+  dropped `load_skill`/`connection_search` (now `eve__skill`, `eve__search`,
+  `eve__tool`), renamed the judge's `evaluationModel` to `decisionModel`, and
+  withdraws `execute` asks on a steering message (HITL tools are `task()`).
+  `@agent-browser/eve` does not mount on 0.81 and is no longer installed.
 - **Per-eve-line builds**: a package belongs to the eve it was BUILT with, not
   its peer range. Before publishing, `npm install --no-save eve@^<line>` then
   `node scripts/check-eve-line.mjs`. A moved peer range alone ships a broken
