@@ -1,6 +1,6 @@
 export * from "./types.js";
 export { parseCard, cardsFromOutput, safeUrl, LIMITS } from "./parse.js";
-export { cardText, cardTitle, sparkline, money, type TextDialect } from "./text.js";
+export { cardText, cardTitle, sparkline, money, withUnit, type TextDialect } from "./text.js";
 export {
   CARD_MARKER,
   VAULT_ITEM_MARKER,

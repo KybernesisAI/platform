@@ -9,6 +9,8 @@ import {
   cardsOf,
   cardText,
   chipFor,
+  labelFor,
+  withUnit,
   forModel,
   newStepState,
   parseCard,
@@ -153,6 +155,9 @@ test("chips name what a tool touches", () => {
   assert.equal(chipFor("gmail_send_email"), "Gmail");
   assert.equal(chipFor("posthog_query_insights"), "PostHog");
   assert.equal(chipFor("github__create_pull_request"), "GitHub");
+  assert.equal(chipFor("googlecalendar_events_list"), "Google Calendar");
+  assert.equal(chipFor("googlecalendar__events_list"), "Google Calendar");
+  assert.equal(labelFor("googlecalendar_events_list", "Google Calendar"), "Events list");
   assert.equal(chipFor("computer"), "Computer");
   assert.equal(chipFor("pay_on_computer"), "Payments");
   assert.equal(chipFor("fill_from_vault"), "Vault");
@@ -240,4 +245,12 @@ test("an artifact card keeps its display, format and time", () => {
   assert.deepEqual(parsed.data, { artifactId: "art_1", version: 3, display: "inline", format: "html", updatedAt: "2026-10-23T07:00:00Z" });
   assert.deepEqual(parsed.actions, [{ label: "Open", artifact: "art_1" }]);
   assert.equal(parseCard({ kyb: 1, card: "artifact", data: { artifactId: "a", format: "exe" } }).data.format, undefined);
+});
+
+test("units read as words in fallbacks", () => {
+  assert.equal(withUnit("30", "emails"), "30 emails");
+  assert.equal(withUnit("2.5", "%"), "2.5%");
+  assert.equal(withUnit("7", undefined), "7");
+  const text = cardText({ kyb: 1, card: "chart", data: { kind: "bar", x: ["Mon", "Tue"], series: [{ name: "Inbox", values: [3, 30] }], unit: "emails" } });
+  assert.match(text, /latest 30 emails/);
 });

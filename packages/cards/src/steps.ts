@@ -83,6 +83,12 @@ const NAMESPACES: Record<string, string> = {
   posthog: "PostHog",
   hubspot: "HubSpot",
   linkedin: "LinkedIn",
+  googlecalendar: "Google Calendar",
+  googledrive: "Google Drive",
+  googledocs: "Google Docs",
+  googlesheets: "Google Sheets",
+  googleslides: "Google Slides",
+  gcal: "Google Calendar",
 };
 
 const words = (s: string): string => s.replace(/[_-]+/g, " ").trim();
@@ -122,6 +128,11 @@ export function labelFor(tool: string, chip: string): string {
   let rest = words(last);
   const service = chip.toLowerCase();
   if (rest.toLowerCase().startsWith(`${service} `)) rest = rest.slice(service.length + 1);
+  else {
+    // A renamed service ("googlecalendar" shown as "Google Calendar") still leads the raw name.
+    const raw = rest.split(" ")[0]!.toLowerCase();
+    if (NAMESPACES[raw] === chip) rest = rest.slice(raw.length + 1);
+  }
   return capital(rest) || capital(words(tool));
 }
 
