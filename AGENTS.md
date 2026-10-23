@@ -38,6 +38,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | `packages/exe` | Running on exe.dev VMs (subscription models, supervision, `hostPreflight`) | plain TS library |
 | `packages/buzz` | Buzz channel bridge (runs as its own systemd unit) | **eve extension** + library |
 | `packages/notify` | Push notifications via the control plane | **eve extension** |
+| `packages/magic` | Proactive heads-ups (code-only 5-minute watch over calendar, mail, reminders; the model runs as the person only when something passes the gate; tools, hook and tick written by the registry item) | plain TS library |
 | `packages/voice` | Realtime voice (WebRTC, watch frames) | plain TS library |
 | `packages/multiplayer` | Shared-thread Slack conversations (`multiplayerSlackChannel`) | plain TS library (channels can't ship in extensions) |
 | `packages/evals` | Baseline QA suites (array-export fan-out factories, `kyb-eval` bin) | plain TS library |

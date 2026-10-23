@@ -514,6 +514,72 @@
           "target": "agent/instructions/vault.ts"
         }
       ]
+    },
+    {
+      "name": "magic",
+      "type": "registry:item",
+      "title": "Kybernesis Magic",
+      "description": "Proactive heads-ups, off until each person turns them on: a morning brief, meeting prep, time to leave (live traffic with GOOGLE_MAPS_API_KEY, the person's own estimate without), double bookings, replies owed, important mail and one-off reminders. Code watches their calendar and mail every five minutes; the model runs only when something is worth saying, as that person, in the conversation they last used. Quiet hours, a daily budget and a feedback dial keep it quiet. Requires the manage, connectors and notify items.",
+      "dependencies": [
+        "@kybernesis/magic"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "GOOGLE_MAPS_API_KEY": ""
+      },
+      "files": [
+        {
+          "path": "registry/magic-schedule.ts",
+          "type": "registry:file",
+          "target": "agent/schedules/magic.ts"
+        },
+        {
+          "path": "registry/magic-surfaces.ts",
+          "type": "registry:file",
+          "target": "agent/lib/magic-surfaces.ts"
+        },
+        {
+          "path": "registry/magic-hook.ts",
+          "type": "registry:file",
+          "target": "agent/hooks/magic.ts"
+        },
+        {
+          "path": "registry/magic-settings.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_settings.ts"
+        },
+        {
+          "path": "registry/magic-remind-me.ts",
+          "type": "registry:file",
+          "target": "agent/tools/remind_me.ts"
+        },
+        {
+          "path": "registry/magic-status.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_status.ts"
+        },
+        {
+          "path": "registry/magic-feedback.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_feedback.ts"
+        },
+        {
+          "path": "registry/magic-no-reply.ts",
+          "type": "registry:file",
+          "target": "agent/tools/no_reply.ts"
+        },
+        {
+          "path": "registry/magic-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/magic.ts"
+        },
+        {
+          "path": "registry/magic-skill.md",
+          "type": "registry:file",
+          "target": "agent/skills/magic/SKILL.md"
+        }
+      ]
     }
   ]
 }
