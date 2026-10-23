@@ -34,13 +34,18 @@ export function money(amount: number, currency: string): string {
 
 const tileText = (t: StatTile): string => `${t.label} ${t.value}${t.change ? ` (${t.change})` : ""}`;
 
+/** "30" and "emails" → "30 emails"; "%" and "k" stay attached. */
+export function withUnit(value: string, unit?: string): string {
+  if (!unit) return value;
+  return /^[A-Za-z]/.test(unit) ? `${value} ${unit}` : `${value}${unit}`;
+}
+
 function chartText(d: ChartData): string[] {
-  const unit = d.unit ?? "";
   return d.series.map((s) => {
     const last = s.values[s.values.length - 1];
     const name = s.name || "Values";
     const range = d.x.length > 1 ? `, ${d.x[0]} to ${d.x[d.x.length - 1]}` : "";
-    return `${name}${range}: ${sparkline(s.values)} latest ${last}${unit}`;
+    return `${name}${range}: ${sparkline(s.values)} latest ${withUnit(String(last), d.unit)}`;
   });
 }
 
