@@ -1,6 +1,7 @@
 /** File templates written by `kyb init`. Kept in sync with the proven Kyber patterns. */
 
 import type { ModelScaffoldConfig } from "./model-reach.js";
+import { linePackage } from "./util.js";
 
 /** Exact output of Eve's legacy extension/github-tools registry item. */
 export const LEGACY_GITHUB_TOOLS_MOUNT = `import githubTools from "@github-tools/eve-extension";
@@ -340,7 +341,7 @@ export default multiplayerSlackChannel({
   credentials: connectSlackCredentials(process.env.SLACK_CONNECTOR_UID!),
 });
 `,
-        deps: onExe ? ["@kybernesis/multiplayer@^0.6.0", "@kybernesis/enterprise"] : ["@kybernesis/multiplayer", "@vercel/connect"],
+        deps: onExe ? [linePackage("multiplayer"), "@kybernesis/enterprise"] : ["@kybernesis/multiplayer", "@vercel/connect"],
         registryItems: [],
         env: onExe ? [] : [`SLACK_CONNECTOR_UID="slack/${name}"`],
         steps: onExe
@@ -612,7 +613,7 @@ export default governedPeers();
 }
 
 /** Pinned to the eve line the scaffold certifies, like every other @kybernesis dep it installs. */
-export const DISPATCH_DEP = "@kybernesis/dispatch@^0.7.0";
+export const DISPATCH_DEP = linePackage("dispatch");
 
 // ── Engineer subagent ───────────────────────────────────────────────────
 // `--engineer` scaffolds a DECLARED SUBAGENT that owns the build capability,

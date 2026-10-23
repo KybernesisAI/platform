@@ -2,6 +2,14 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
 export const EVE_VERSION = "0.81.1";
+/** The npm dist-tag every @kybernesis package carries for EVE_VERSION's line, e.g. `eve-0.81`. */
+export const EVE_LINE_TAG = `eve-${EVE_VERSION.split(".").slice(0, 2).join(".")}`;
+/**
+ * An install spec for a @kybernesis package on the certified line. A hand-written
+ * range went stale at the 0.81 cutover (dispatch ^0.7.0 is the 0.68 build, and
+ * npm refuses it beside eve 0.81.1), so specs follow EVE_VERSION instead.
+ */
+export const linePackage = (name: string): string => `@kybernesis/${name}@${EVE_LINE_TAG}`;
 /** The registry items built for EVE_VERSION's line; every @kybernesis dep in them is tagged for it. */
 export const REGISTRY_URL = "https://registry.kybernesis.ai/r/eve-0.81/{name}.json";
 export const DEFAULT_ISSUER = "https://agent.kybernesis.ai";
