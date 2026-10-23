@@ -37,6 +37,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | `packages/identity` | `.agent` identity, peers as tools | plain TS library |
 | `packages/exe` | Running on exe.dev VMs (subscription models, supervision, `hostPreflight`) | plain TS library |
 | `packages/buzz` | Buzz channel bridge (runs as its own systemd unit) | **eve extension** + library |
+| `packages/cards` | Rich replies: the card format tools emit and Studio draws, text fallbacks, the steps reader | plain TS library, zero deps (no eve peer) |
 | `packages/notify` | Push notifications via the control plane | **eve extension** |
 | `packages/artifacts` | Pages the agent makes for a person (reports, dashboards), drawn inline as cards in Studio and the phone; stored on the agent's machine, served per person by `manage` | **eve extension** + store library |
 | `packages/voice` | Realtime voice (WebRTC, watch frames) | plain TS library |
