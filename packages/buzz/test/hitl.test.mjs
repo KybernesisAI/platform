@@ -54,6 +54,16 @@ test("HITL prompts show numbered labels, stable IDs, descriptions and reply inst
   assert.match(rendered, /option number, option ID, or exact label/);
 });
 
+test("a card marker line on a question never reaches Buzz", () => {
+  const marked = {
+    ...request,
+    prompt: '[kyb:vault-item] {"kind":"login","site":"https://portal.example"}\nI need a login for portal.example.',
+  };
+  const rendered = formatInputRequests([marked]);
+  assert.doesNotMatch(rendered, /kyb:/);
+  assert.match(rendered, /^I need a login for portal\.example\./);
+});
+
 test("option ID, exact label and 1-based number use Eve response resolution", () => {
   assert.deepEqual(resolveInputReply("safe", [request]), [{ requestId: "request-1", optionId: "safe" }]);
   assert.deepEqual(resolveInputReply("Continue safely", [request]), [{ requestId: "request-1", optionId: "safe" }]);
