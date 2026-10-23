@@ -38,6 +38,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 | `packages/exe` | Running on exe.dev VMs (subscription models, supervision, `hostPreflight`) | plain TS library |
 | `packages/buzz` | Buzz channel bridge (runs as its own systemd unit) | **eve extension** + library |
 | `packages/notify` | Push notifications via the control plane | **eve extension** |
+| `packages/artifacts` | Pages the agent makes for a person (reports, dashboards), drawn inline as cards in Studio and the phone; stored on the agent's machine, served per person by `manage` | **eve extension** + store library |
 | `packages/voice` | Realtime voice (WebRTC, watch frames) | plain TS library |
 | `packages/multiplayer` | Shared-thread Slack conversations (`multiplayerSlackChannel`) | plain TS library (channels can't ship in extensions) |
 | `packages/evals` | Baseline QA suites (array-export fan-out factories, `kyb-eval` bin) | plain TS library |
@@ -53,7 +54,7 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
   extensionless imports break plain-Node ESM consumers — shipped bug, fixed in
   enterprise 0.1.1).
 - **Exports maps** always include `"./package.json": "./package.json"`.
-- **Extensions** (arcana, buzz, engineer, notify): source under `extension/`, built by
+- **Extensions** (arcana, artifacts, buzz, engineer, notify): source under `extension/`, built by
   `eve extension build`; extensions cannot declare channels, route auth,
   sandboxes, schedules, or evals — those ship as library exports or
   registry-written files instead.
