@@ -5,20 +5,13 @@ import {
   type InputResponse,
   type MessageStreamEvent,
 } from "eve/client";
-import { promptText } from "@kybernesis/cards";
 import type { StoredSession } from "./sessions.js";
 
-/**
- * Render pending Eve input in a text-only Buzz channel.
- *
- * A Kybernesis tool may put a `[kyb:…] {json}` marker on a question's first
- * line for apps that draw it as a card. Buzz shows only the sentence after it.
- */
+/** Render pending Eve input in a text-only Buzz channel. */
 export function formatInputRequests(requests: readonly InputRequest[]): string {
   return requests.map((request, requestIndex) => {
-    const prompt = promptText(request.prompt);
     const lines = [
-      requests.length > 1 ? `Question ${requestIndex + 1}: ${prompt}` : prompt,
+      requests.length > 1 ? `Question ${requestIndex + 1}: ${request.prompt}` : request.prompt,
     ];
     if (request.options?.length) {
       lines.push(
