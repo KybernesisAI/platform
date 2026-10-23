@@ -72,7 +72,7 @@
       "name": "buzz",
       "type": "registry:item",
       "title": "Kybernesis Buzz",
-      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals \u2014 and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
+      "description": "The agent as a member of a Buzz workspace: per-speaker verified identity resolved through the control plane, self-service identity linking, presence and typing signals — and the workspace itself, through the Buzz CLI: projects, issues, pull requests, patches, repos, notes, canvases, workflows, media.",
       "dependencies": [
         "@kybernesis/buzz@eve-0.81"
       ],
@@ -516,6 +516,28 @@
       ]
     },
     {
+      "name": "cards",
+      "type": "registry:item",
+      "title": "Kybernesis Cards",
+      "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data. Text channels get each card's plain text, so a reply still reads without it.",
+      "dependencies": [
+        "@kybernesis/cards@eve-0.81",
+        "zod"
+      ],
+      "files": [
+        {
+          "path": "registry/cards-show.ts",
+          "type": "registry:file",
+          "target": "agent/tools/show.ts"
+        },
+        {
+          "path": "registry/cards-instructions.md",
+          "type": "registry:file",
+          "target": "agent/instructions/cards.md"
+        }
+      ]
+    },
+    {
       "name": "artifacts",
       "type": "registry:item",
       "title": "Kybernesis Artifacts",
@@ -529,6 +551,72 @@
           "path": "registry/artifacts.ts",
           "type": "registry:file",
           "target": "agent/extensions/artifacts.ts"
+        }
+      ]
+    },
+    {
+      "name": "magic",
+      "type": "registry:item",
+      "title": "Kybernesis Magic",
+      "description": "Proactive heads-ups, off until each person turns them on: a morning brief, meeting prep, time to leave (live traffic with GOOGLE_MAPS_API_KEY, the person's own estimate without), double bookings, replies owed, important mail and one-off reminders. Code watches their calendar and mail every five minutes; the model runs only when something is worth saying, as that person, in the conversation they last used. Quiet hours, a daily budget and a feedback dial keep it quiet. Requires the manage, connectors and notify items.",
+      "dependencies": [
+        "@kybernesis/magic@eve-0.81"
+      ],
+      "envVars": {
+        "KYBERNESIS_ISSUER": "",
+        "KYBERNESIS_AGENT_CREDENTIAL": "",
+        "GOOGLE_MAPS_API_KEY": ""
+      },
+      "files": [
+        {
+          "path": "registry/magic-schedule.ts",
+          "type": "registry:file",
+          "target": "agent/schedules/magic.ts"
+        },
+        {
+          "path": "registry/magic-surfaces.ts",
+          "type": "registry:file",
+          "target": "agent/lib/magic-surfaces.ts"
+        },
+        {
+          "path": "registry/magic-hook.ts",
+          "type": "registry:file",
+          "target": "agent/hooks/magic.ts"
+        },
+        {
+          "path": "registry/magic-settings.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_settings.ts"
+        },
+        {
+          "path": "registry/magic-remind-me.ts",
+          "type": "registry:file",
+          "target": "agent/tools/remind_me.ts"
+        },
+        {
+          "path": "registry/magic-status.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_status.ts"
+        },
+        {
+          "path": "registry/magic-feedback.ts",
+          "type": "registry:file",
+          "target": "agent/tools/magic_feedback.ts"
+        },
+        {
+          "path": "registry/magic-no-reply.ts",
+          "type": "registry:file",
+          "target": "agent/tools/no_reply.ts"
+        },
+        {
+          "path": "registry/magic-instructions.ts",
+          "type": "registry:file",
+          "target": "agent/instructions/magic.ts"
+        },
+        {
+          "path": "registry/magic-skill.md",
+          "type": "registry:file",
+          "target": "agent/skills/magic/SKILL.md"
         }
       ]
     }

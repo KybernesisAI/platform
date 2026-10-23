@@ -14,6 +14,10 @@ npx @kybernesis/create init acme-atlas
 
 `kyb init --host=exe` always installs the agent's computer (`@kybernesis/computer`: a persistent desktop with Chrome a person can watch and take over) and its vault (`@kybernesis/vault`: per-agent, per-person logins and cards it fills on that computer without seeing them). They are not options. A Vercel host gets neither, because a function cannot keep a desktop alive, and init says so.
 
+## Core on every Studio agent
+
+`kyb init --studio` (every agent the provisioner builds) also installs what a person sees beyond words in KYBER Studio and on the phone: cards under replies (`@kybernesis/cards` and the `show` tool from the `cards` registry item), artifacts (`@kybernesis/artifacts`: pages the agent makes and keeps, served by manage) and magic (`@kybernesis/magic`: proactive heads-ups, off until each person turns them on). On a Linq agent, magic delivers into the iMessage thread the person last used. `kyb upgrade` adds whichever of the three an agent with `@kybernesis/manage` is missing, lists them in `--check` so the owner's Update button shows, and holds the result to the eval gate even when no other package moved.
+
 ## `kyb init [name]`
 
 Scaffolds the full Kybernesis stack:

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,15 +21,26 @@ import { fileURLToPath } from "node:url";
  * `node scripts/check-registry.mjs`:
  *
  *   git fetch origin eve-0.81 && node scripts/line-registry.mjs eve-0.81
+ *
+ * Once the line has merged and master IS that line (eve-0.81 since
+ * 2026-10-23), the items come from this checkout instead, so a new item on
+ * master reaches the line's agents too:
+ *
+ *   node scripts/line-registry.mjs eve-0.81 .
  */
 const line = process.argv[2] ?? "eve-0.81";
 if (!/^eve-\d+\.\d+$/.test(line)) throw new Error(`not an eve line: ${line}`);
+const ref = process.argv[3] ?? `origin/${line}`;
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(repo, "registry", "r", line);
 
 const fromLine = (path) =>
-  JSON.parse(execFileSync("git", ["show", `origin/${line}:${path}`], { cwd: repo, encoding: "utf8" }));
+  JSON.parse(
+    ref === "."
+      ? readFileSync(join(repo, path), "utf8")
+      : execFileSync("git", ["show", `${ref}:${path}`], { cwd: repo, encoding: "utf8" }),
+  );
 
 const tagged = (deps) =>
   deps?.map((dep) => (/^@kybernesis\/[^@/]+$/.test(dep) ? `${dep}@${line}` : dep));
@@ -45,4 +56,4 @@ for (const entry of catalog.items) {
 }
 write("registry.json", { ...catalog, items: catalog.items.map(withLineDeps) });
 
-console.log(`${catalog.items.length} items from origin/${line} → registry/r/${line}/`);
+console.log(`${catalog.items.length} items from ${ref === "." ? "this checkout" : ref} → registry/r/${line}/`);

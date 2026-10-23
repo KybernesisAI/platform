@@ -13,6 +13,7 @@ import { newestOnLine, type Candidate } from "./on-line-version.js";
 import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js";
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairExeClaudeRoute } from "./exe-claude-route.js";
+import { planStudioCore, repairStudioCore } from "./studio-core.js";
 import { repairOptInTools, repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, REGISTRY_URL, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
@@ -1227,6 +1228,9 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
           .filter((target) => changed.includes(`${target.name}@${target.targetVersion}`))
           .map((target) => [target.name, { name: target.name, from: target.installedVersion, to: target.targetVersion }])).values(),
         ...manifest.moves.map((move) => ({ name: move.name, from: move.from, to: move.to ?? "removed" })),
+        // Packages every agent now ships with that this one predates: an
+        // upgrade adds them, so the Update button has to show them.
+        ...planStudioCore(deps, (name) => newestBuildForEve(name, EVE_VERSION)),
       ],
       resetsConversations: eveChanged,
     });
@@ -1267,10 +1271,19 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairHostArtifacts(cwd, deps);
     repairEvalCommand(cwd);
     repairNotifySetup(cwd, deps);
+    const added = repairStudioCore(cwd, deps);
     repairReasoningSandboxes(cwd, deps);
     repairManageRestart(cwd, deps);
     repairExeClaudeRoutes(cwd, deps);
     reportSourceMigration(cwd);
+    if (added.length === 0) return;
+    // New tools and a schedule on a live agent: the same gate as any upgrade.
+    run("npm", ["run", "typecheck"], { cwd });
+    if (options.skipEval) {
+      console.log(yellow("\nEval gate SKIPPED (--skip-eval). Run `npm run eval` before deploying.\n"));
+      return;
+    }
+    await runUpgradeEvalGate(cwd, options.host);
     return;
   }
 
@@ -1362,6 +1375,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairHostArtifacts(cwd, deps);
   repairEvalCommand(cwd);
   repairNotifySetup(cwd, deps);
+  repairStudioCore(cwd, deps);
   repairReasoningSandboxes(cwd, deps);
   repairManageRestart(cwd, deps);
   repairExeClaudeRoutes(cwd, deps);

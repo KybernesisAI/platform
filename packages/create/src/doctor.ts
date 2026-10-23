@@ -12,6 +12,7 @@ import { describeStaleSidecar, newestPackageChange, staleSidecars } from "./stal
 import { checkSelfVersion } from "./self-version.js";
 import { envUrlProblems } from "./env-urls.js";
 import { migrateManifest, migrateSources } from "./line-hop.js";
+import { missingStudioCore } from "./studio-core.js";
 
 type Verdict = "pass" | "warn" | "fail";
 const MARK: Record<Verdict, string> = {
@@ -260,6 +261,10 @@ export async function doctor(): Promise<void> {
   for (const p of ["@kybernesis/arcana", "@kybernesis/enterprise", "@kybernesis/evals"]) {
     if (deps[p]) add("pass", `${p} ${deps[p]}`);
     else add("warn", `${p} not installed`, `eve add @kybernesis/${p.split("/")[1]}`);
+  }
+  // Core on every agent Studio manages; kyb upgrade adds whichever is missing.
+  for (const core of missingStudioCore(deps)) {
+    add("warn", `${core.pkg} not installed (${core.what})`, `npx kyb upgrade adds it, or npx eve add @kybernesis/${core.item}`);
   }
 
   /**

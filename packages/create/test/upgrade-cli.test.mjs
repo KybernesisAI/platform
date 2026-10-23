@@ -91,6 +91,7 @@ case "$*" in
   *"@kybernesis/enterprise/package.json"*) echo ${options.allCurrent ? "0.8.0" : "0.7.0"} ;;
   *"@kybernesis/create/package.json"*peerDependencies*) echo "" ;;
   *"@kybernesis/create/package.json"*) echo 0.20.0 ;;
+${options.nodeCases ?? ""}
   *) exec ${JSON.stringify(process.execPath)} "$@" ;;
 esac
 `);
@@ -123,6 +124,7 @@ if [ "$1" = view ]; then
     "@kybernesis/evals@0.6.2 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
     "@kybernesis/exe@0.12.1 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
     "@kybernesis/enterprise@0.8.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;
+${options.npmViewCases ?? ""}
     *) exit 1 ;;
   esac
   exit 0
@@ -345,6 +347,86 @@ test("--check plans an agent that keeps kyb in its own package.json (no eve peer
     const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
     assert.equal(plan.ok, true, result.stdout);
     assert.deepEqual(plan.changes, [{ name: "@kybernesis/create", from: "0.20.0", to: installedCreateVersion }]);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+/** A current agent with manage 0.25.0 and none of cards, artifacts or magic. */
+const studioAgent = {
+  allCurrent: true,
+  extraDeps: { "@kybernesis/manage": "^0.25.0" },
+  nodeCases: `  *"@kybernesis/manage/package.json"*peerDependencies*) echo "^${EVE_VERSION}" ;;
+  *"@kybernesis/manage/package.json"*) echo 0.25.0 ;;`,
+  npmViewCases: [
+    `    "@kybernesis/manage versions") echo '["0.25.0"]' ;;`,
+    `    "@kybernesis/manage@0.25.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;`,
+    `    "@kybernesis/cards versions") echo '["0.1.0"]' ;;`,
+    `    "@kybernesis/cards@0.1.0 peerDependencies.eve") echo "" ;;`,
+    `    "@kybernesis/artifacts versions") echo '["0.1.0"]' ;;`,
+    `    "@kybernesis/artifacts@0.1.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;`,
+    `    "@kybernesis/magic versions") echo '["0.1.0"]' ;;`,
+    `    "@kybernesis/magic@0.1.0 peerDependencies.eve") echo "^${EVE_VERSION}" ;;`,
+  ].join("\n"),
+};
+
+test("--check lists cards, artifacts and magic for a current agent that predates them, so the Update button shows", () => {
+  const fix = fixture(studioAgent);
+  try {
+    const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const plan = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("KYB_UPGRADE_PLAN ")).slice(17));
+    assert.equal(plan.ok, true, result.stdout);
+    assert.deepEqual(plan.changes, [
+      { name: "@kybernesis/cards", from: "none", to: "0.1.0" },
+      { name: "@kybernesis/artifacts", from: "none", to: "0.1.0" },
+      { name: "@kybernesis/magic", from: "none", to: "0.1.0" },
+    ]);
+    assert.doesNotMatch(commandLog(fix), /^npx eve add/m, "--check changes nothing");
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("upgrade adds cards, artifacts and magic to a current agent, then holds it to the eval gate", () => {
+  const fix = fixture(studioAgent);
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const log = commandLog(fix);
+    const adds = log.split("\n").filter((line) => line.startsWith("npx eve add"));
+    assert.deepEqual(adds, [
+      "npx eve add @kybernesis/cards --yes",
+      "npx eve add @kybernesis/artifacts --yes",
+      "npx eve add @kybernesis/magic --yes",
+    ]);
+    assert.match(log, /^npm run typecheck$/m);
+    assert.match(log, /^npm run eval$/m);
+    assert.match(readFileSync(join(fix.dir, ".gitignore"), "utf8"), /^\.kyb$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("upgrade on a current agent that already has them adds nothing and runs no eval", () => {
+  const fix = fixture({
+    ...studioAgent,
+    allCurrent: true,
+    extraDeps: { "@kybernesis/manage": "^0.25.0", "@kybernesis/cards": "^0.1.0", "@kybernesis/artifacts": "^0.1.0", "@kybernesis/magic": "^0.1.0" },
+    nodeCases: `${studioAgent.nodeCases}
+  *"@kybernesis/cards/package.json"*peerDependencies*) echo "" ;;
+  *"@kybernesis/cards/package.json"*) echo 0.1.0 ;;
+  *"@kybernesis/artifacts/package.json"*peerDependencies*) echo "^${EVE_VERSION}" ;;
+  *"@kybernesis/artifacts/package.json"*) echo 0.1.0 ;;
+  *"@kybernesis/magic/package.json"*peerDependencies*) echo "^${EVE_VERSION}" ;;
+  *"@kybernesis/magic/package.json"*) echo 0.1.0 ;;`,
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const log = commandLog(fix);
+    assert.doesNotMatch(log, /^npx eve add/m);
+    assert.doesNotMatch(log, /^npm run eval$/m);
   } finally {
     fix.cleanup();
   }
