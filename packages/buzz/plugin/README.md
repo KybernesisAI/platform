@@ -32,14 +32,16 @@ that is not one self-contained module.
 
 ## Sign
 
-A signed release names its publisher in Buzz, and only that publisher can ship updates to it.
-After `npm run build` (which empties `release/`, so an old signature never outlives its build),
-sign the folder and commit the two files it writes:
+A signed release names its publisher in Buzz, and only that publisher can ship updates. The
+publisher is Kybernesis, not a person, so `scripts/sign.mjs` signs with a key kept in the
+publishing Mac's Keychain (`ai.kybernesis.buzz-plugin-publisher`) instead of `buzzodz plugin sign`,
+which can only use the Buzz identity of whoever is signed in. It writes the same NIP-PS pair
+Buzz's tool writes; the artifact is byte-identical to buzz-app's own.
 
 ```sh
-buzzodz plugin sign release   # writes plugin.artifact.json + plugin.signature.json
+npm run sign -- --create-key   # once, on the publishing Mac
+npm run build && npm run sign  # every release; commit release/ including the two signed files
 ```
 
-`buzzodz plugin sign` signs with the Buzz identity saved on that computer. Every later release must
-be signed by the same publisher; changing publisher means everyone removes and reinstalls.
-
+`npm run build` empties `release/`, so a signature never outlives its build. Losing the key ends
+updates under this publisher (everyone would reinstall), so keep a copy of it somewhere safe.
