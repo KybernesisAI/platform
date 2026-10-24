@@ -99,11 +99,8 @@ export default defineTool({
 
     // The file as a card in KYBER Studio and the phone. The reply still carries
     // the URL, because text-only channels never see tool results.
-    const file = card(
-      "file",
-      { url, name, size: bytes.byteLength, mediaType: contentType.split(";")[0] },
-      { actions: [{ label: "Open", url, primary: true }] },
-    );
+    // The apps draw the file's own Open button.
+    const file = card("file", { url, name, size: bytes.byteLength, mediaType: contentType.split(";")[0] });
     return withCards({
       url,
       filename: name,
