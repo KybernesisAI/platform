@@ -8,6 +8,7 @@ import {
 } from "eve/client";
 import { askFrom, askText, cardsOf, hiddenAsk, newStepState, readStep, type AskAnswer, type Card } from "@kybernesis/cards";
 import type { StoredSession } from "./sessions.js";
+import { failureFromEvent, silentTurnReply, type TurnFailure } from "./turn.js";
 
 /**
  * Render pending Eve input in a Buzz channel.
@@ -159,6 +160,20 @@ export function resumeStalledReply(stallMs: number): string {
   );
 }
 
+/**
+ * What the room is told when the turn an answer resumed failed.
+ *
+ * @remarks
+ * Found live: a declined approval resumed the turn, the model refused the
+ * continuation, and the run ended. The follower saw the stream end and said
+ * nothing, so the person who pressed Decline got silence. They answered; the
+ * failure is the one thing they must hear about, in the stream's own words.
+ */
+export function resumeFailedReply(failures: readonly TurnFailure[]): string {
+  const said = silentTurnReply(failures);
+  return `Your answer reached me, but the work it restarted stopped. ${said}`;
+}
+
 /** A session needs its follower while asking or while resumed output is unpublished. */
 export function needsPendingFollower(session: Pick<StoredSession, "pendingInputRequests" | "resumeInFlight">): boolean {
   return Boolean(session.pendingInputRequests?.length || session.resumeInFlight);
@@ -170,6 +185,8 @@ export interface PendingFollowerCallbacks {
   onInputRequested(requests: readonly InputRequest[]): void | Promise<void>;
   /** The resumed turn's words, and the cards its tools handed back. */
   onMessage(message: string, cards: readonly Card[]): void | Promise<void>;
+  /** The resumed turn failed: what the stream said, for the room. */
+  onFailed?(failures: readonly TurnFailure[]): void | Promise<void>;
   onLog?: (message: string) => void;
 }
 
@@ -215,6 +232,16 @@ export async function followPendingConversation(
   let streamIndex = initial.streamIndex;
   let completedMessage = "";
   let steps = newStepState();
+  /** Failures since the last answer. A declined call is the person's choice, not one. */
+  let failures: TurnFailure[] = [];
+
+  /** Tell the room, then stop supervising: a failed run will not come back. */
+  const failThenClear = async () => {
+    // Only an answered question resumed this work; a run failing while it waits on a person stays quiet as before.
+    if (state.resumeInFlight) await callbacks.onFailed?.(failures);
+    state = withoutSupervision(state);
+    await persist();
+  };
 
   const persist = async () => {
     state = { ...state, streamIndex };
@@ -243,11 +270,15 @@ export async function followPendingConversation(
     // the follower is still open.
     streamIndex += 1;
     readStep(steps, streamEvent.type, streamEvent.data);
+    const declined = streamEvent.type === "action.result" && (streamEvent.data as { status?: unknown }).status === "rejected";
+    const failure = declined ? null : failureFromEvent(streamEvent as { type: string; data?: unknown });
+    if (failure) failures.push(failure);
 
     switch (streamEvent.type) {
       case "input.requested":
         completedMessage = "";
         steps = newStepState();
+        failures = [];
         state = withPending(state, streamEvent.data.requests);
         // Keep the durable cursor before the prompt until Buzz accepts it for
         // relay delivery; a reconnect can then replay and render the request.
@@ -280,9 +311,11 @@ export async function followPendingConversation(
         }
         await persist();
         break;
-      case "turn.cancelled":
       case "turn.failed":
       case "session.failed":
+        await failThenClear();
+        return;
+      case "turn.cancelled":
       case "session.completed":
         state = withoutSupervision(state);
         await persist();
@@ -295,5 +328,16 @@ export async function followPendingConversation(
     }
   }
 
+  /**
+   * The stream closed without a boundary. Usually a dropped connection, and
+   * the caller reattaches. But after an answer, a model failure followed by
+   * the end of the stream is the run ending: reattaching finds nothing new,
+   * and the room would be told only after the work ceiling, an hour later.
+   */
+  if (state.resumeInFlight && failures.some((f) => f.kind === "model")) {
+    callbacks.onLog?.("resumed turn failed and its stream ended; telling the room");
+    await failThenClear();
+    return;
+  }
   callbacks.onLog?.("pending Eve stream ended before a resumable boundary");
 }

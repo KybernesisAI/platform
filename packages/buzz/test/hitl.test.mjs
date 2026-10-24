@@ -10,6 +10,7 @@ import {
   resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
+  resumeFailedReply,
   resumeStalledReply,
   STALE_ANSWER_REPLY,
 } from "../dist/hitl.js";
@@ -423,4 +424,53 @@ test("words answer a pressed question that takes words", () => {
   assert.deepEqual(resolveCarriedAnswers([{ requestId: "request-1", text: "  Thursday  " }], [open]).responses, [
     { requestId: "request-1", text: "Thursday" },
   ]);
+});
+
+const declinedThenFailed = [
+  event("input.resolved", { resolutions: [{ kind: "tool-approval", outcome: "rejected", requestId: "request-2" }] }),
+  event("action.result", { status: "rejected", result: { toolName: "delete_asset", output: "The person declined." } }),
+  event("step.failed", { code: "MODEL_CALL_FAILED", message: "This model does not support assistant message prefill." }),
+];
+
+async function followFailure(events) {
+  const failed = [];
+  const states = [];
+  const messages = [];
+  await followPendingConversation(
+    fakeSession(events),
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [approval], speakerPublicKey: "speaker" },
+    {
+      onState: (state) => states.push(structuredClone(state)),
+      onInputRequested: () => {},
+      onMessage: (message) => messages.push(message),
+      onFailed: (failures) => failed.push(failures),
+    },
+    new AbortController().signal,
+  );
+  return { failed, states, messages };
+}
+
+test("a resumed turn that fails tells the room what failed, and a decline is not a failure", async () => {
+  const { failed, states, messages } = await followFailure([...declinedThenFailed, event("turn.failed", { code: "MODEL_CALL_FAILED", message: "Model call failed." })]);
+  assert.equal(failed.length, 1);
+  assert.deepEqual(failed[0].map((f) => f.kind), ["model", "model"]);
+  assert.deepEqual(messages, []);
+  assert.equal(states.at(-1).resumeInFlight, undefined);
+  assert.equal(states.at(-1).pendingInputRequests, undefined);
+  const said = resumeFailedReply(failed[0]);
+  assert.match(said, /^Your answer reached me, but the work it restarted stopped\./);
+  assert.match(said, /does not support assistant message prefill/);
+  assert.doesNotMatch(said, /delete_asset/);
+});
+
+test("a model failure and then the end of the stream is the run ending, not a disconnect", async () => {
+  const { failed, states } = await followFailure(declinedThenFailed);
+  assert.equal(failed.length, 1);
+  assert.equal(states.at(-1).resumeInFlight, undefined);
+});
+
+test("a stream that just drops after an answer is left for the reattach", async () => {
+  const { failed, states } = await followFailure(declinedThenFailed.slice(0, 2));
+  assert.equal(failed.length, 0);
+  assert.equal(states.at(-1).resumeInFlight, true);
 });
