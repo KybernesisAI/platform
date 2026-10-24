@@ -396,12 +396,34 @@ test("collector preserves final-message, failed, and waiting HITL semantics", as
     sessionId: "session-original",
     streamIndex: 9,
     failures: [],
+    cards: [],
   });
 
   const failedStore = storeWith();
   const failedClient = { sessions: { attach: (id) => attachedSession(id, async () =>
     eventResponse(id, [{ type: "session.failed", data: {} }])) } };
   assert.equal((await answerTurn(failedClient, failedStore, "channel", "question", "relay")).status, "failed");
+});
+
+test("the outcome carries the cards the turn's tools handed back, as the apps read them", async () => {
+  const stats = { kyb: 1, card: "stats", title: "This week", data: { tiles: [{ label: "Visitors", value: "12,480" }] } };
+  const events = [
+    { type: "turn.started", data: { turnId: "turn-1" } },
+    { type: "actions.requested", data: { turnId: "turn-1", actions: [{ callId: "c1", kind: "tool-call", toolName: "show", input: {} }] } },
+    { type: "action.result", data: { status: "completed", result: { callId: "c1", toolName: "show", output: { ok: true, kyb: stats } } } },
+    { type: "message.completed", data: { finishReason: "stop", message: "Here is the week." } },
+    { type: "session.waiting", data: {} },
+  ];
+  const client = { sessions: { attach: (id) => ({
+    state: { sessionId: id, streamIndex: 0 },
+    async *stream() {},
+    async send() { return eventResponse(id, events); },
+  }) } };
+  const outcome = await answerTurn(client, storeWith(), "channel", "how was the week?", "relay");
+  assert.equal(outcome.message, "Here is the week.");
+  assert.equal(outcome.cards.length, 1);
+  assert.equal(outcome.cards[0].card, "stats");
+  assert.equal(outcome.cards[0].title, "This week");
 });
 
 test("timeout replies are useful, singular, and do not claim cancellation", () => {

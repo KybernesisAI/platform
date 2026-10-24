@@ -30,8 +30,10 @@ function completed(id) {
   } };
 }
 
-test("isSessionGone: 404, and 409 session_not_active, mean gone; everything else does not", () => {
+test("isSessionGone: 404, 410 session_expired and 409 session_not_active mean gone; everything else does not", () => {
   assert.equal(isSessionGone(new ClientError(404, "session not found")), true);
+  const expired = new ClientError(410, JSON.stringify({ code: "session_expired", error: "Session history is no longer available.", ok: false }));
+  assert.equal(isSessionGone(expired), true, "410 session_expired");
   const gone = new ClientError(409, JSON.stringify({ code: "session_not_active", error: "The session is no longer active.", ok: false }));
   assert.equal(isSessionGone(gone), true, "409 session_not_active");
   assert.equal(isSessionGone(new ClientError(409, "The session is no longer active.")), true, "409 by message");

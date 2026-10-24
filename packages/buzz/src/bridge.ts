@@ -1,3 +1,4 @@
+import { cardMessage, cardText, readHiddenAnswers, type Card } from "@kybernesis/cards";
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
@@ -20,9 +21,12 @@ import {
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
+  resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
+  resumeFailedReply,
   resumeStalledReply,
+  STALE_ANSWER_REPLY,
 } from "./hitl.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -77,6 +81,14 @@ export type BuzzBridgeOptions = {
   agentSilenceTimeoutMs?: number;
   /** Ceiling on a turn once acknowledged; the agent is working while its stream is quiet. Default 60 minutes. */
   agentWorkTimeoutMs?: number;
+  /**
+   * Post the cards a turn's tools handed back, each as its own message after
+   * the reply: the card's text, with the card hidden in a comment for clients
+   * that draw it. Questions carry themselves the same way (0.14), so the
+   * plugin can draw an approval as its email and answer it with a press.
+   * Default true; false posts the reply and questions as words alone.
+   */
+  cards?: boolean;
   onLog?: (message: string) => void;
 };
 
@@ -90,6 +102,71 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   const agentSilenceTimeoutMs = validateAgentSilenceTimeoutMs(
     options.agentSilenceTimeoutMs ?? DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   );
+
+  /**
+   * An artifact card, with a link everyone in the channel can open.
+   *
+   * Posting an artifact into a channel shares it with the channel: that is
+   * what the person asked for by asking here. The link is made by the agent's
+   * own share route, as the person who asked (the artifact's owner), so it is
+   * their act and they can withdraw it from their artifacts. If the link
+   * cannot be made, the card goes out as it was and says where to open it.
+   */
+  const sharedInChannel = async (card: Card, speaker: string): Promise<Card> => {
+    if (card.card !== "artifact" || !card.data || typeof card.data !== "object") return card;
+    const data = card.data as { artifactId?: unknown; version?: unknown; url?: unknown };
+    if (typeof data.artifactId !== "string" || typeof data.url === "string") return card;
+    try {
+      const credentials = credentialsFor(speaker);
+      const response = await fetch(
+        `${options.agentUrl.replace(/\/$/, "")}/eve/v1/kyb/artifacts/${encodeURIComponent(data.artifactId)}/share`,
+        {
+          method: "POST",
+          headers: {
+            ...(await credentials.headers()),
+            authorization: `Bearer ${await credentials.bearer()}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(typeof data.version === "number" ? { version: data.version } : {}),
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; url?: unknown; error?: unknown } | null;
+      if (!response.ok || !body?.ok || typeof body.url !== "string") {
+        log(`could not share artifact ${data.artifactId.slice(0, 8)} (${response.status} ${String(body?.error ?? "")})`);
+        return card;
+      }
+      // The words people without the plugin read now carry the link.
+      const shared = { ...card, data: { ...data, url: body.url }, text: undefined } as Card;
+      return { ...shared, text: cardText(shared) };
+    } catch (error) {
+      log(`could not share artifact ${data.artifactId.slice(0, 8)} (${(error as Error).message})`);
+      return card;
+    }
+  };
+
+  /**
+   * A turn's cards, one message each, threaded where the reply went.
+   *
+   * The reply stays an ordinary message the client draws itself, links and
+   * mentions included; a card-aware client swaps only these follow-ups for the
+   * card. They do not mention the asker again: the reply already did.
+   */
+  const postCards = async (
+    relay: BuzzRelay,
+    channel: string,
+    cards: readonly Card[],
+    speaker: string,
+    replyTo?: NostrEvent,
+  ): Promise<void> => {
+    if (options.cards === false || cards.length === 0) return;
+    let posted = 0;
+    for (const card of await Promise.all(cards.map((c) => sharedInChannel(c, speaker)))) {
+      const content = cardMessage(card);
+      if (content && relay.reply(channel, content, replyTo, { mention: false })) posted += 1;
+    }
+    if (posted) log(`posted ${posted} card(s) in ${channel.slice(0, 8)}`);
+  };
 
   /**
    * One conversation per channel — the SESSION ID, not a handle to it.
@@ -308,7 +385,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         }),
         onInputRequested: (requests) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          const promptId = relay.reply(channel, formatInputRequests(requests));
+          const promptId = relay.reply(channel, formatInputRequests(requests, { carry: options.cards !== false }));
           if (!promptId) throw new Error("Buzz relay is not connected");
           relay.watchReplies([promptId]);
           const current = sessions.get(community, channel);
@@ -320,10 +397,18 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           }
           log(`posted another input request in ${channel.slice(0, 8)}`);
         }),
-        onMessage: (message) => serialize(community, channel, async () => {
+        onMessage: (message, cards) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          if (!relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
-          log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
+          if (message.trim() && !relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
+          if (message.trim()) log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
+          await postCards(relay, channel, cards, stored.speakerPublicKey!);
+        }),
+        onFailed: (failures) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          const current = sessions.get(community, channel);
+          if (current?.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
+          if (!relay.reply(channel, resumeFailedReply(failures))) throw new Error("Buzz relay is not connected");
+          log(`resumed turn failed in ${channel.slice(0, 8)} (${describeSilentTurn(failures)}); told the room`);
         }),
         onLog: log,
       },
@@ -386,10 +471,14 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     const addressed = event.tags.some((t) => t[0] === "p" && t[1] === key.publicKey);
     // A reply to a prompt this agent posted is an answer even when it names nobody: people answer
     // a question by replying to it, not by mentioning the asker. Only while that prompt is open.
-    const repliedTo = event.tags.find((t) => t[0] === "e")?.[1];
+    // Any `e` tag counts: a reply inside a thread names the thread's root first and the prompt
+    // after it (NIP-10 `root` and `reply` markers), so the first tag is often not the prompt.
+    const referenced = event.tags.filter((t) => t[0] === "e" && typeof t[1] === "string").map((t) => t[1]!);
+    // The message this one answers directly: the `reply` marker, else the last `e` tag.
+    const parent = event.tags.find((t) => t[0] === "e" && t[3] === "reply")?.[1] ?? referenced.at(-1);
     const open = channel ? sessions.get(from, channel) : undefined;
     const answersPrompt = Boolean(
-      repliedTo && open?.pendingInputRequests?.length && open.promptEventIds?.includes(repliedTo),
+      open?.pendingInputRequests?.length && referenced.some((id) => open.promptEventIds?.includes(id)),
     );
     // In a one-to-one DM every message is to the agent, mention or not, as with Buzz's own
     // agents. Not one written by another agent (it carries its owner's `auth` attestation):
@@ -429,9 +518,26 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       await serialize(from, channel, async () => {
         const pending = sessions.get(from, channel);
         if (pending?.pendingInputRequests?.length) {
-          // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
-          const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
-          const responses = resolveInputReply(answer, pending.pendingInputRequests);
+          let responses: readonly import("eve/client").InputResponse[] | null;
+          const carried = readHiddenAnswers(text);
+          if (carried.length) {
+            // A press in the plugin. It counts only as a direct reply to a prompt this bridge
+            // posted, so a message quoting someone else's question cannot answer this one.
+            if (!parent || !pending.promptEventIds?.includes(parent)) {
+              log(`ignored a pressed answer in ${channel.slice(0, 8)} that does not reply to an open prompt`);
+              return;
+            }
+            const resolved = resolveCarriedAnswers(carried, pending.pendingInputRequests);
+            if (!resolved.responses) {
+              relay.reply(channel, resolved.stale ? STALE_ANSWER_REPLY : invalidInputReply(pending.pendingInputRequests), event);
+              return;
+            }
+            responses = resolved.responses;
+          } else {
+            // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
+            const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
+            responses = resolveInputReply(answer, pending.pendingInputRequests);
+          }
           if (!responses) {
             relay.reply(channel, invalidInputReply(pending.pendingInputRequests), event);
             return;
@@ -448,7 +554,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           const session = clientFor(event.pubkey).sessions.attach(pending.id, {
             streamIndex: pending.streamIndex,
           });
-          await respondToPendingConversation(session, responses, from, channel);
+          await respondToPendingConversation(session, responses);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
           /**
            * The answer is in, so this conversation is no longer waiting on a
@@ -463,10 +569,17 @@ export function buzzBridge(options: BuzzBridgeOptions) {
            * a human, so while that flag was set the room could only be told
            * nothing.
            */
+          // A press answers one question; any others stay open until they are answered too.
           const answered = sessions.get(from, channel);
           if (answered?.pendingInputRequests?.length) {
+            const done = new Set(responses.map((response) => response.requestId));
+            const remaining = answered.pendingInputRequests.filter((request) => !done.has(request.requestId));
             const { pendingInputRequests: _resolved, ...rest } = answered;
-            sessions.set(from, channel, { ...rest, resumeInFlight: true });
+            sessions.set(
+              from,
+              channel,
+              remaining.length ? { ...rest, pendingInputRequests: remaining } : { ...rest, resumeInFlight: true },
+            );
           }
           return;
         }
@@ -503,7 +616,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
             pendingInputRequests: result.inputRequests,
             speakerPublicKey: event.pubkey,
           });
-          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests), event);
+          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests, { carry: options.cards !== false }), event);
           if (promptId) {
             relay.watchReplies([promptId]);
             const current = sessions.get(from, channel);
@@ -514,6 +627,10 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           return;
         }
 
+        if (!result.message && result.cards.length) {
+          await postCards(relay, channel, result.cards, event.pubkey, event);
+          return;
+        }
         if (!result.message) {
           // Say what the stream said: a failed tool by name and error, a
           // failed model call by code, or, only when there is truly nothing,
@@ -524,6 +641,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         }
         relay.reply(channel, result.message, event);
         log(`replied (${result.message.length} chars)`);
+        await postCards(relay, channel, result.cards, event.pubkey, event);
       });
     } catch (error) {
       /** A rejected HITL response stays pending; the room gets a concrete retry path. */

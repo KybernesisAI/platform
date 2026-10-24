@@ -6,10 +6,11 @@ import { z } from "zod";
  * Show the person a card: numbers, a chart, a table, a checklist, a brief on a
  * person or company, or a link.
  *
- * KYBER Studio and the phone draw the card under the reply. The model reads
- * only a note that the card was shown, so it doesn't repeat the contents.
- * Text channels (Slack, Buzz, iMessage) never see tool results, so the reply
- * must still make sense without the card. See @kybernesis/cards.
+ * KYBER Studio and the phone draw the card under the reply, and the Buzz
+ * bridge posts it after the reply for the Kybernesis cards plugin to draw.
+ * The model reads only a note that the card was shown, so it doesn't repeat
+ * the contents. Slack and iMessage never see tool results, so the reply must
+ * still make sense without the card. See @kybernesis/cards.
  */
 
 const tone = z.enum(["good", "bad", "neutral"]).describe("Whether the change is good or bad news. Up is not always good.");
@@ -78,7 +79,7 @@ const shown = z.discriminatedUnion("kind", [
 
 export default defineTool({
   description:
-    "Show the person a card in KYBER Studio: a few key numbers (stats), a trend (chart), rows (table), progress (checklist), a short profile of a person or company (brief), or one link. Use it when a reply is mainly numbers, a comparison or a status, after you have the data. Keep your written reply to a sentence or two that stands on its own, because some channels never show cards. Don't repeat the card's contents in the reply.",
+    "Show the person a card in KYBER Studio, the phone app or Buzz: a few key numbers (stats), a trend (chart), rows (table), progress (checklist), a short profile of a person or company (brief), or one link. Use it when a reply is mainly numbers, a comparison or a status, after you have the data. Keep your written reply to a sentence or two that stands on its own, because some channels never show cards. Don't repeat the card's contents in the reply.",
   inputSchema: z.object({
     title: z.string().max(120).describe("Short title, e.g. Website traffic, last 7 days"),
     source: z.string().max(40).optional().describe("Where the data came from, e.g. PostHog or Gmail"),

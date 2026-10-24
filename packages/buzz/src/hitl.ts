@@ -1,22 +1,30 @@
 import {
+  parseInputResponses,
   resolveTextToResponses,
   type ClientSession,
   type InputRequest,
   type InputResponse,
   type MessageStreamEvent,
 } from "eve/client";
-import { promptText } from "@kybernesis/cards";
+import { askFrom, askText, cardsOf, hiddenAsk, newStepState, readStep, type AskAnswer, type Card } from "@kybernesis/cards";
 import type { StoredSession } from "./sessions.js";
+import { failureFromEvent, silentTurnReply, type TurnFailure } from "./turn.js";
 
 /**
- * Render pending Eve input in a text-only Buzz channel.
+ * Render pending Eve input in a Buzz channel.
  *
- * A Kybernesis tool may put a `[kyb:…] {json}` marker on a question's first
- * line for apps that draw it as a card. Buzz shows only the sentence after it.
+ * Everyone reads the words: a question's sentence (a `[kyb:…]` marker line is
+ * dropped), an approval as the email or event it would send, then the options
+ * by number. With `carry`, each question also travels hidden after the words
+ * (`<!-- kyb:ask v1 … -->`), so the Kybernesis plugin can draw it the way
+ * Studio does and answer it with a press. Only a posted prompt carries them:
+ * a press is accepted only as a reply to a prompt the bridge is watching.
  */
-export function formatInputRequests(requests: readonly InputRequest[]): string {
-  return requests.map((request, requestIndex) => {
-    const prompt = promptText(request.prompt);
+export function formatInputRequests(requests: readonly InputRequest[], options: { carry?: boolean } = {}): string {
+  const asks = requests.map((request) => askFrom(request));
+  const text = asks.map((ask, requestIndex) => {
+    const request = requests[requestIndex]!;
+    const prompt = askText(ask);
     const lines = [
       requests.length > 1 ? `Question ${requestIndex + 1}: ${prompt}` : prompt,
     ];
@@ -36,7 +44,56 @@ export function formatInputRequests(requests: readonly InputRequest[]): string {
     }
     return lines.join("\n");
   }).join("\n\n");
+  if (!options.carry) return text;
+  const hidden = asks.map((ask) => hiddenAsk(ask)).filter((h): h is string => h !== null);
+  return hidden.length ? `${text}\n\n${hidden.join("\n")}` : text;
 }
+
+/**
+ * Answers a client pressed, checked against what is actually open.
+ *
+ * Each answer must name an open request. An option must be one of that
+ * request's own; words alone answer only a question that takes words. eve's
+ * strict schema checks the result before it is sent. `stale` is true when no
+ * answer named an open request, which is what a second press on a question
+ * someone already answered looks like.
+ */
+export function resolveCarriedAnswers(
+  answers: readonly AskAnswer[],
+  requests: readonly InputRequest[],
+): { responses: readonly InputResponse[]; stale: false } | { responses: null; stale: boolean } {
+  const open = new Map(requests.map((request) => [request.requestId, request]));
+  const picked = new Map<string, InputResponse>();
+  let named = false;
+  for (const answer of answers) {
+    const request = open.get(answer.requestId);
+    if (!request) continue;
+    named = true;
+    if (picked.has(request.requestId)) continue;
+    const ids = request.options?.map((option) => option.id) ?? [];
+    if (answer.optionId !== undefined) {
+      if (ids.length > 0 && !ids.includes(answer.optionId)) return { responses: null, stale: false };
+      picked.set(request.requestId, {
+        requestId: request.requestId,
+        optionId: answer.optionId,
+        ...(answer.text?.trim() ? { text: answer.text.trim() } : {}),
+      } as InputResponse);
+      continue;
+    }
+    const words = answer.text?.trim();
+    if (!words || (ids.length > 0 && request.allowFreeform !== true)) return { responses: null, stale: false };
+    picked.set(request.requestId, { requestId: request.requestId, text: words } as InputResponse);
+  }
+  if (picked.size === 0) return { responses: null, stale: !named };
+  try {
+    return { responses: parseInputResponses([...picked.values()]), stale: false };
+  } catch {
+    return { responses: null, stale: false };
+  }
+}
+
+/** What a press on a question nobody is waiting on any more gets. */
+export const STALE_ANSWER_REPLY = "That question was already answered, so nothing changed.";
 
 /** Resolve a Buzz text reply using Eve's certified matching semantics. */
 export function resolveInputReply(
@@ -53,15 +110,20 @@ export function invalidInputReply(requests: readonly InputRequest[]): string {
   return `I still need a valid answer before I can continue.\n\n${formatInputRequests(requests)}`;
 }
 
-/** Submit a matched reply without consuming its response stream. */
+/**
+ * Submit a matched reply without consuming its response stream.
+ *
+ * No `clientContext`: the turn already carries the channel from when it
+ * started, and eve 0.81 treats context on a respond as new turn input. It then
+ * runs one more model step after the agent's reply, with the agent's message
+ * last, which models that refuse prefill reject. The turn fails and the whole
+ * conversation ends, on an approve, a decline or an answer alike.
+ */
 export async function respondToPendingConversation(
   session: Pick<ClientSession, "respond">,
   responses: readonly InputResponse[],
-  community: string,
-  channel: string,
 ): Promise<void> {
   await session.respond(responses, {
-    clientContext: { buzzCommunity: community, buzzChannel: channel },
     streamReconnectPolicy: { reconnect: false },
   });
 }
@@ -98,6 +160,20 @@ export function resumeStalledReply(stallMs: number): string {
   );
 }
 
+/**
+ * What the room is told when the turn an answer resumed failed.
+ *
+ * @remarks
+ * Found live: a declined approval resumed the turn, the model refused the
+ * continuation, and the run ended. The follower saw the stream end and said
+ * nothing, so the person who pressed Decline got silence. They answered; the
+ * failure is the one thing they must hear about, in the stream's own words.
+ */
+export function resumeFailedReply(failures: readonly TurnFailure[]): string {
+  const said = silentTurnReply(failures);
+  return `Your answer reached me, but the work it restarted stopped. ${said}`;
+}
+
 /** A session needs its follower while asking or while resumed output is unpublished. */
 export function needsPendingFollower(session: Pick<StoredSession, "pendingInputRequests" | "resumeInFlight">): boolean {
   return Boolean(session.pendingInputRequests?.length || session.resumeInFlight);
@@ -107,7 +183,10 @@ export interface PendingFollowerCallbacks {
   /** Persist the latest cursor and supervision state before publishing outward. */
   onState(state: Omit<StoredSession, "updated">): void | Promise<void>;
   onInputRequested(requests: readonly InputRequest[]): void | Promise<void>;
-  onMessage(message: string): void | Promise<void>;
+  /** The resumed turn's words, and the cards its tools handed back. */
+  onMessage(message: string, cards: readonly Card[]): void | Promise<void>;
+  /** The resumed turn failed: what the stream said, for the room. */
+  onFailed?(failures: readonly TurnFailure[]): void | Promise<void>;
   onLog?: (message: string) => void;
 }
 
@@ -152,6 +231,17 @@ export async function followPendingConversation(
   let state = { ...initial };
   let streamIndex = initial.streamIndex;
   let completedMessage = "";
+  let steps = newStepState();
+  /** Failures since the last answer. A declined call is the person's choice, not one. */
+  let failures: TurnFailure[] = [];
+
+  /** Tell the room, then stop supervising: a failed run will not come back. */
+  const failThenClear = async () => {
+    // Only an answered question resumed this work; a run failing while it waits on a person stays quiet as before.
+    if (state.resumeInFlight) await callbacks.onFailed?.(failures);
+    state = withoutSupervision(state);
+    await persist();
+  };
 
   const persist = async () => {
     state = { ...state, streamIndex };
@@ -162,7 +252,8 @@ export async function followPendingConversation(
     // Do not persist past message.completed/turn.completed until publication
     // succeeds. If this callback throws or the process dies, recovery replays
     // the unpublished output from the last safe cursor.
-    if (completedMessage.trim()) await callbacks.onMessage(completedMessage);
+    const cards = cardsOf(steps.steps.values());
+    if (completedMessage.trim() || cards.length) await callbacks.onMessage(completedMessage, cards);
     state = withoutSupervision(state);
     await persist();
   };
@@ -178,10 +269,16 @@ export async function followPendingConversation(
     // closes; count yielded durable events so crash recovery can persist while
     // the follower is still open.
     streamIndex += 1;
+    readStep(steps, streamEvent.type, streamEvent.data);
+    const declined = streamEvent.type === "action.result" && (streamEvent.data as { status?: unknown }).status === "rejected";
+    const failure = declined ? null : failureFromEvent(streamEvent as { type: string; data?: unknown });
+    if (failure) failures.push(failure);
 
     switch (streamEvent.type) {
       case "input.requested":
         completedMessage = "";
+        steps = newStepState();
+        failures = [];
         state = withPending(state, streamEvent.data.requests);
         // Keep the durable cursor before the prompt until Buzz accepts it for
         // relay delivery; a reconnect can then replay and render the request.
@@ -214,9 +311,11 @@ export async function followPendingConversation(
         }
         await persist();
         break;
-      case "turn.cancelled":
       case "turn.failed":
       case "session.failed":
+        await failThenClear();
+        return;
+      case "turn.cancelled":
       case "session.completed":
         state = withoutSupervision(state);
         await persist();
@@ -229,5 +328,16 @@ export async function followPendingConversation(
     }
   }
 
+  /**
+   * The stream closed without a boundary. Usually a dropped connection, and
+   * the caller reattaches. But after an answer, a model failure followed by
+   * the end of the stream is the run ending: reattaching finds nothing new,
+   * and the room would be told only after the work ceiling, an hour later.
+   */
+  if (state.resumeInFlight && failures.some((f) => f.kind === "model")) {
+    callbacks.onLog?.("resumed turn failed and its stream ended; telling the room");
+    await failThenClear();
+    return;
+  }
   callbacks.onLog?.("pending Eve stream ended before a resumable boundary");
 }

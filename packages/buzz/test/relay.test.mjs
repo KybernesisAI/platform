@@ -8,6 +8,7 @@ import {
   KIND_REACTION,
   KIND_TYPING,
   MAX_SEEN_EVENT_IDS,
+  OUTBOX_MAX_AGE_MS,
 } from "../dist/relay.js";
 import { loadOrCreateKey } from "../dist/keys.js";
 import { mkdtempSync } from "node:fs";
@@ -256,6 +257,17 @@ test("a reply is anchored to the message it answers and addressed back to its au
   assert.deepEqual(message.tags, [["h", "channel-1"], ["e", "msg-1"], ["p", "a".repeat(64)]]);
 });
 
+test("a follow-up card threads under the same message without notifying its author twice", () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+
+  const asked = { id: "msg-1", pubkey: "a".repeat(64), created_at: 1, kind: 9, tags: [], content: "?", sig: "" };
+  relay.reply("channel-1", "a card", asked, { mention: false });
+
+  const message = socket.published(KIND_MESSAGE).at(-1);
+  assert.deepEqual(message.tags, [["h", "channel-1"], ["e", "msg-1"]]);
+});
+
 test("a reaction is signed, sent over HTTP, and binds the signature to the body", async () => {
   const { relay, socket } = connected();
   authenticate(socket);
@@ -418,4 +430,37 @@ test("a refused roster request clears the discovery, so the next one can run", a
   socket.deliver(["EOSE", rosterReq[1]]);
   assert.equal(socket.sent.some((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39000), false);
   assert.equal(relay.isDirect("dm-1"), false);
+});
+
+test("a message posted while signed out waits and goes out, in order, on the next sign-in", () => {
+  const { relay, socket } = connected();
+  // Connected but not yet signed in: the relay would refuse the event.
+  const first = relay.reply("channel-1", "Send this email?");
+  socket.readyState = 3;
+  const second = relay.reply("channel-1", "And this one?");
+  assert.ok(first && second, "a held message still has its id, so replies to it can be watched");
+  assert.equal(socket.published(KIND_MESSAGE).length, 0);
+
+  socket.readyState = 1;
+  authenticate(socket);
+  assert.deepEqual(socket.published(KIND_MESSAGE).map((e) => e.id), [first, second]);
+});
+
+test("typing and presence are not held for later: late, they are wrong", () => {
+  const { relay, socket } = connected();
+  socket.readyState = 3;
+  assert.equal(relay.publish({ kind: KIND_TYPING, tags: [], content: "" }), null);
+  socket.readyState = 1;
+  authenticate(socket);
+  assert.equal(socket.published(KIND_TYPING).length, 0);
+});
+
+test("a message held longer than the limit is dropped, not delivered out of context", (t) => {
+  const { relay, socket } = connected();
+  const realNow = Date.now;
+  t.after(() => { Date.now = realNow; });
+  relay.reply("channel-1", "old question");
+  Date.now = () => realNow() + OUTBOX_MAX_AGE_MS + 1_000;
+  authenticate(socket);
+  assert.equal(socket.published(KIND_MESSAGE).length, 0);
 });

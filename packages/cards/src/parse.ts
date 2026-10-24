@@ -222,6 +222,7 @@ const DATA: { [T in KnownCardType]: (d: Obj) => CardDataByType[T] | null } = {
       display: d.display === "inline" ? "inline" : "document",
       format: d.format === "markdown" ? "markdown" : d.format === "html" ? "html" : undefined,
       updatedAt: str(d.updatedAt, 40),
+      url: safeUrl(d.url),
     };
   },
   "pull-request"(d) {

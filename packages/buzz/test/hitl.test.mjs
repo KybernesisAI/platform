@@ -7,10 +7,14 @@ import {
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
+  resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
+  resumeFailedReply,
   resumeStalledReply,
+  STALE_ANSWER_REPLY,
 } from "../dist/hitl.js";
+import { answerMessage, readHiddenAnswers, readHiddenAsks } from "@kybernesis/cards";
 
 const request = {
   action: { callId: "call-1", input: {}, kind: "tool-call", toolName: "ask_question" },
@@ -110,6 +114,32 @@ test("the follower persists cursors and is the publisher for out-of-band resumed
   assert.equal(states.at(-1).streamIndex, 10);
   assert.equal(states.at(-1).pendingInputRequests, undefined);
   assert.equal(states.at(-1).speakerPublicKey, "speaker");
+});
+
+test("a resumed turn hands its cards to the room with its words", async () => {
+  const delivered = [];
+  const link = { kyb: 1, card: "link", data: { url: "https://example.com/report", title: "Report" } };
+  const session = fakeSession([
+    event("input.resolved", { resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }] }),
+    event("action.result", { status: "completed", result: { callId: "c9", toolName: "share_report", output: { kyb: link } } }),
+    event("message.completed", { finishReason: "stop", message: "Done.", sequence: 2, stepIndex: 1, turnId: "turn-1" }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ]);
+
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: () => {},
+      onInputRequested: () => assert.fail("no second question"),
+      onMessage: (message, cards) => delivered.push({ message, cards }),
+    },
+    new AbortController().signal,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].message, "Done.");
+  assert.deepEqual(delivered[0].cards.map((c) => c.card), ["link"]);
 });
 
 test("the follower handles another HITL round and does not terminate at its waiting boundary", async () => {
@@ -256,14 +286,12 @@ test("submitting a channel reply uses ClientSession.respond without consuming du
   };
   const responses = [{ requestId: "request-1", optionId: "safe" }];
 
-  await respondToPendingConversation(session, responses, "relay-a", "channel-1");
+  await respondToPendingConversation(session, responses);
 
+  // No clientContext: on a respond, eve runs an extra step that ends on the agent's message.
   assert.deepEqual(calls, [{
     responses,
-    options: {
-      clientContext: { buzzCommunity: "relay-a", buzzChannel: "channel-1" },
-      streamReconnectPolicy: { reconnect: false },
-    },
+    options: { streamReconnectPolicy: { reconnect: false } },
   }]);
 });
 
@@ -347,4 +375,102 @@ test("giving up on a resumed turn tells the room what happened", () => {
   assert.match(reply, /nothing was posted/i, "says no work landed");
   assert.match(reply, /ask me again/i, "says the channel is usable");
   assert.match(resumeStalledReply(60_000), /1 minute\b/, "reads correctly in the singular");
+});
+
+const approval = {
+  action: {
+    callId: "call-2",
+    input: { to: ["dana@example.com"], subject: "Q3 numbers", body: "Hi Dana,\n\nThe numbers are in." },
+    kind: "tool-call",
+    toolName: "gmail__send_email",
+  },
+  kind: "tool-approval",
+  options: [
+    { id: "approve", label: "Approve" },
+    { id: "cancel", label: "Cancel" },
+  ],
+  prompt: "Approve tool call: gmail__send_email",
+  requestId: "request-2",
+};
+
+test("an approval reads as the email it would send, with the question hidden after it", () => {
+  const rendered = formatInputRequests([approval], { carry: true });
+  assert.match(rendered, /^Send email · Gmail\nTo: dana@example\.com\nSubject: Q3 numbers\n\nHi Dana,\n\nThe numbers are in\./);
+  assert.match(rendered, /1\. Approve \[approve\]/);
+  const [ask] = readHiddenAsks(rendered);
+  assert.equal(ask.requestId, "request-2");
+  assert.equal(ask.card.data.subject, "Q3 numbers");
+  // Without carry, and in a correction, the words alone.
+  assert.equal(readHiddenAsks(formatInputRequests([approval])).length, 0);
+  assert.equal(readHiddenAsks(invalidInputReply([approval])).length, 0);
+});
+
+test("a pressed answer resolves only against what is open, with its own options", () => {
+  const press = (answer) => resolveCarriedAnswers(readHiddenAnswers(answerMessage(answer, "Pressed")), [request, approval]);
+  assert.deepEqual(press({ requestId: "request-2", optionId: "approve" }).responses, [{ requestId: "request-2", optionId: "approve" }]);
+  assert.deepEqual(press({ requestId: "request-2", optionId: "cancel", text: "Not as written." }).responses, [
+    { requestId: "request-2", optionId: "cancel", text: "Not as written." },
+  ]);
+  // An option the request does not have, or words on a closed choice, are not answers.
+  assert.deepEqual(press({ requestId: "request-2", optionId: "reset" }), { responses: null, stale: false });
+  assert.deepEqual(press({ requestId: "request-1", text: "whatever" }), { responses: null, stale: false });
+  // A question nobody is waiting on any more.
+  assert.deepEqual(press({ requestId: "request-9", optionId: "approve" }), { responses: null, stale: true });
+  assert.match(STALE_ANSWER_REPLY, /already answered/);
+});
+
+test("words answer a pressed question that takes words", () => {
+  const open = { ...request, allowFreeform: true };
+  assert.deepEqual(resolveCarriedAnswers([{ requestId: "request-1", text: "  Thursday  " }], [open]).responses, [
+    { requestId: "request-1", text: "Thursday" },
+  ]);
+});
+
+const declinedThenFailed = [
+  event("input.resolved", { resolutions: [{ kind: "tool-approval", outcome: "rejected", requestId: "request-2" }] }),
+  event("action.result", { status: "rejected", result: { toolName: "delete_asset", output: "The person declined." } }),
+  event("step.failed", { code: "MODEL_CALL_FAILED", message: "This model does not support assistant message prefill." }),
+];
+
+async function followFailure(events) {
+  const failed = [];
+  const states = [];
+  const messages = [];
+  await followPendingConversation(
+    fakeSession(events),
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [approval], speakerPublicKey: "speaker" },
+    {
+      onState: (state) => states.push(structuredClone(state)),
+      onInputRequested: () => {},
+      onMessage: (message) => messages.push(message),
+      onFailed: (failures) => failed.push(failures),
+    },
+    new AbortController().signal,
+  );
+  return { failed, states, messages };
+}
+
+test("a resumed turn that fails tells the room what failed, and a decline is not a failure", async () => {
+  const { failed, states, messages } = await followFailure([...declinedThenFailed, event("turn.failed", { code: "MODEL_CALL_FAILED", message: "Model call failed." })]);
+  assert.equal(failed.length, 1);
+  assert.deepEqual(failed[0].map((f) => f.kind), ["model", "model"]);
+  assert.deepEqual(messages, []);
+  assert.equal(states.at(-1).resumeInFlight, undefined);
+  assert.equal(states.at(-1).pendingInputRequests, undefined);
+  const said = resumeFailedReply(failed[0]);
+  assert.match(said, /^Your answer reached me, but the work it restarted stopped\./);
+  assert.match(said, /does not support assistant message prefill/);
+  assert.doesNotMatch(said, /delete_asset/);
+});
+
+test("a model failure and then the end of the stream is the run ending, not a disconnect", async () => {
+  const { failed, states } = await followFailure(declinedThenFailed);
+  assert.equal(failed.length, 1);
+  assert.equal(states.at(-1).resumeInFlight, undefined);
+});
+
+test("a stream that just drops after an answer is left for the reattach", async () => {
+  const { failed, states } = await followFailure(declinedThenFailed.slice(0, 2));
+  assert.equal(failed.length, 0);
+  assert.equal(states.at(-1).resumeInFlight, true);
 });

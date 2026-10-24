@@ -95,14 +95,24 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
    packages in the @kybernesis scope). Agents never publish: hand him the exact
    command, never with `--otp`. `scripts/prepublish.mjs` rebuilds `dist/` (it is not in git, so a stale one shipped manage 0.13.0 without its routes) and refuses a version
    already on npm. The packument shows about a minute before the tarball, so
-   poll the tarball URL before deploying a consumer:
-   `cd ~/platform/packages/<name> && git pull --ff-only && npm publish`
+   poll the tarball URL before deploying a consumer. The command to hand him
+   is always the same, however many packages moved:
+   `cd ~/platform && npm run release` (`scripts/release.mjs`: clean master,
+   `npm ci`, build, eve-line check, then publishes every version npm lacks in
+   dependency order, tags each `eve-<line>`, then waits up to 10 minutes for
+   the tarballs and only warns about a slow one, never stops; a
+   brand-new package is skipped unless signed in as kybernesis, so he reruns
+   it under that account). `npm run release -- --dry-run` lists what would go.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
    + regenerate `registry/r/<item>.json` (content-embedded copy) + the catalog
    `registry/r/registry.json` + `registry/index.html`, run
-   `node scripts/check-registry.mjs`, then push to `master`. The root
-   `vercel.json` serves `registry/` and auto-deploys from master (it can lag
-   about 15 min). Never `vercel --prod`.
+   `node scripts/check-registry.mjs`, then push to `master`.
+   registry.kybernesis.ai is the Vercel project `kybernesis-registry`, which
+   builds this repo's root (the root `vercel.json` serves `registry/`) on every
+   master push. It was not linked to git until 2026-10-24, so pushes from #125
+   to #135 never reached it; after a merge, compare the live item with master
+   (`curl -s https://registry.kybernesis.ai/r/eve-0.81/<item>.json | shasum`).
+   Never `vercel --prod`.
 5. **Gate on the consumer**: bump the pin in the consuming agent, run its
    `npm run eval` (the suite must be green), then deploy that agent with its
    own `scripts/deploy.sh` (agents run on exe.dev VMs under systemd, not

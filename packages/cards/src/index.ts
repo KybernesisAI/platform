@@ -26,3 +26,29 @@ export { card, withCards, forModel, type CardFields } from "./build.js";
 export { derivedCards, outputObject, formPrompt, formAnswer, readFormAnswer } from "./derive.js";
 export { approvalCard } from "./approval.js";
 export { describeCron, nextCronRun, routineSchedule, shiftCron } from "./schedule.js";
+export {
+  HIDDEN_CARD_OPEN,
+  HIDDEN_CARD_MAX,
+  hiddenCard,
+  cardMessage,
+  readHiddenCards,
+  withoutHiddenCards,
+} from "./hidden.js";
+export {
+  HIDDEN_ASK_OPEN,
+  HIDDEN_ANSWER_OPEN,
+  ANSWER_TEXT_MAX,
+  askFrom,
+  askText,
+  hiddenAsk,
+  readHiddenAsks,
+  answerMessage,
+  readHiddenAnswers,
+  withoutHiddenAsks,
+  type Ask,
+  type AskAnswer,
+  type AskOption,
+  type AskSource,
+  type SpendNeed,
+  type VaultNeed,
+} from "./carried-asks.js";
