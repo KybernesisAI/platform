@@ -1242,7 +1242,7 @@ function Z(e) {
 	let t = X.get(e);
 	return t || (t = e.content.includes("<!-- kyb:card v1 ") ? oe(e.content) : [], X.set(e, t)), t;
 }
-var Ce = "/eve/v1/kyb/artifacts/shared/";
+var Ce = "/eve/v1/kyb/artifact-shares/";
 function Q(e) {
 	try {
 		let t = new URL(e);

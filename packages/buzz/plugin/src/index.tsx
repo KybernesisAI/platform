@@ -36,7 +36,7 @@ function cardsIn(message: Message): Card[] {
 }
 
 /** An artifact page the agent shared, at its share route. */
-const SHARED_PATH = "/eve/v1/kyb/artifacts/shared/";
+const SHARED_PATH = "/eve/v1/kyb/artifact-shares/";
 
 function isSharedPage(url: string): boolean {
   try {

@@ -179,6 +179,10 @@ export function artifactRoutes(input: {
   identify: (req: Request) => Promise<ArtifactViewer | Response>;
 }): RouteDefinition[] {
   const base = `${input.prefix}/artifacts`;
+  // Share links sit apart from the artifact routes: eve treats routes that
+  // differ only where one side has a parameter as the same route, so
+  // `artifacts/shared/:token` would clash with `artifacts/:id/shares`.
+  const sharedBase = `${input.prefix}/artifact-shares`;
   const dir = () => artifactsDir(input.options);
 
   const shares = () => sharesDir(input.options);
@@ -188,7 +192,7 @@ export function artifactRoutes(input: {
      * A shared version, by its link. No sign-in: the link is the credential.
      * Withdrawn links, and links to an artifact that is gone, are a 404.
      */
-    GET(`${base}/shared/:token`, async (_req, { params }) => {
+    GET(`${sharedBase}/:token`, async (_req, { params }) => {
       const share = readShare(shares(), String(params.token));
       const meta = share ? readMeta(dir(), share.artifactId) : null;
       if (!share || !meta || share.version > meta.version) return NOT_FOUND();
@@ -214,7 +218,7 @@ export function artifactRoutes(input: {
     }),
 
     // Withdraw a link. Only the person who made it can.
-    DELETE(`${base}/shared/:token`, async (req, { params }) => {
+    DELETE(`${sharedBase}/:token`, async (req, { params }) => {
       const viewer = await input.identify(req);
       if (viewer instanceof Response) return viewer;
       const share = readShare(shares(), String(params.token));
@@ -238,7 +242,7 @@ export function artifactRoutes(input: {
       return Response.json(
         {
           ok: true,
-          shares: mine.map((s) => ({ token: s.token, version: s.version, createdAt: s.createdAt, url: origin ? `${origin}${base}/shared/${s.token}` : undefined })),
+          shares: mine.map((s) => ({ token: s.token, version: s.version, createdAt: s.createdAt, url: origin ? `${origin}${sharedBase}/${s.token}` : undefined })),
         },
         { headers: { "cache-control": "no-store" } },
       );
@@ -271,7 +275,7 @@ export function artifactRoutes(input: {
       if (!Number.isInteger(version) || version < 1 || version > meta.version) return NOT_FOUND();
       const share = shareArtifact(shares(), meta.id, version, viewer.userId);
       return Response.json(
-        { ok: true, token: share.token, version, url: `${origin}${base}/shared/${share.token}` },
+        { ok: true, token: share.token, version, url: `${origin}${sharedBase}/${share.token}` },
         { headers: { "cache-control": "no-store" } },
       );
     }),
