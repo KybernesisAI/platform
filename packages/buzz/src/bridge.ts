@@ -1,3 +1,4 @@
+import { cardMessage, cardText, type Card } from "@kybernesis/cards";
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
@@ -77,6 +78,12 @@ export type BuzzBridgeOptions = {
   agentSilenceTimeoutMs?: number;
   /** Ceiling on a turn once acknowledged; the agent is working while its stream is quiet. Default 60 minutes. */
   agentWorkTimeoutMs?: number;
+  /**
+   * Post the cards a turn's tools handed back, each as its own message after
+   * the reply: the card's text, with the card hidden in a comment for clients
+   * that draw it. Default true; false posts the reply alone, as before 0.13.
+   */
+  cards?: boolean;
   onLog?: (message: string) => void;
 };
 
@@ -90,6 +97,71 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   const agentSilenceTimeoutMs = validateAgentSilenceTimeoutMs(
     options.agentSilenceTimeoutMs ?? DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   );
+
+  /**
+   * An artifact card, with a link everyone in the channel can open.
+   *
+   * Posting an artifact into a channel shares it with the channel: that is
+   * what the person asked for by asking here. The link is made by the agent's
+   * own share route, as the person who asked (the artifact's owner), so it is
+   * their act and they can withdraw it from their artifacts. If the link
+   * cannot be made, the card goes out as it was and says where to open it.
+   */
+  const sharedInChannel = async (card: Card, speaker: string): Promise<Card> => {
+    if (card.card !== "artifact" || !card.data || typeof card.data !== "object") return card;
+    const data = card.data as { artifactId?: unknown; version?: unknown; url?: unknown };
+    if (typeof data.artifactId !== "string" || typeof data.url === "string") return card;
+    try {
+      const credentials = credentialsFor(speaker);
+      const response = await fetch(
+        `${options.agentUrl.replace(/\/$/, "")}/eve/v1/kyb/artifacts/${encodeURIComponent(data.artifactId)}/share`,
+        {
+          method: "POST",
+          headers: {
+            ...(await credentials.headers()),
+            authorization: `Bearer ${await credentials.bearer()}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(typeof data.version === "number" ? { version: data.version } : {}),
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      const body = (await response.json().catch(() => null)) as { ok?: boolean; url?: unknown; error?: unknown } | null;
+      if (!response.ok || !body?.ok || typeof body.url !== "string") {
+        log(`could not share artifact ${data.artifactId.slice(0, 8)} (${response.status} ${String(body?.error ?? "")})`);
+        return card;
+      }
+      // The words people without the plugin read now carry the link.
+      const shared = { ...card, data: { ...data, url: body.url }, text: undefined } as Card;
+      return { ...shared, text: cardText(shared) };
+    } catch (error) {
+      log(`could not share artifact ${data.artifactId.slice(0, 8)} (${(error as Error).message})`);
+      return card;
+    }
+  };
+
+  /**
+   * A turn's cards, one message each, threaded where the reply went.
+   *
+   * The reply stays an ordinary message the client draws itself, links and
+   * mentions included; a card-aware client swaps only these follow-ups for the
+   * card. They do not mention the asker again: the reply already did.
+   */
+  const postCards = async (
+    relay: BuzzRelay,
+    channel: string,
+    cards: readonly Card[],
+    speaker: string,
+    replyTo?: NostrEvent,
+  ): Promise<void> => {
+    if (options.cards === false || cards.length === 0) return;
+    let posted = 0;
+    for (const card of await Promise.all(cards.map((c) => sharedInChannel(c, speaker)))) {
+      const content = cardMessage(card);
+      if (content && relay.reply(channel, content, replyTo, { mention: false })) posted += 1;
+    }
+    if (posted) log(`posted ${posted} card(s) in ${channel.slice(0, 8)}`);
+  };
 
   /**
    * One conversation per channel — the SESSION ID, not a handle to it.
@@ -320,10 +392,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           }
           log(`posted another input request in ${channel.slice(0, 8)}`);
         }),
-        onMessage: (message) => serialize(community, channel, async () => {
+        onMessage: (message, cards) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          if (!relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
-          log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
+          if (message.trim() && !relay.reply(channel, message)) throw new Error("Buzz relay is not connected");
+          if (message.trim()) log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
+          await postCards(relay, channel, cards, stored.speakerPublicKey!);
         }),
         onLog: log,
       },
@@ -514,6 +587,10 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           return;
         }
 
+        if (!result.message && result.cards.length) {
+          await postCards(relay, channel, result.cards, event.pubkey, event);
+          return;
+        }
         if (!result.message) {
           // Say what the stream said: a failed tool by name and error, a
           // failed model call by code, or, only when there is truly nothing,
@@ -524,6 +601,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         }
         relay.reply(channel, result.message, event);
         log(`replied (${result.message.length} chars)`);
+        await postCards(relay, channel, result.cards, event.pubkey, event);
       });
     } catch (error) {
       /** A rejected HITL response stays pending; the room gets a concrete retry path. */

@@ -938,7 +938,18 @@ export function routineTools(options: ManageOptions = {}) {
 
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
-export { artifactRoutes, artifactsDir, listVisible, visibleTo, type ArtifactsOptions, type ArtifactViewer } from "./artifacts.js";
+export {
+  artifactRoutes,
+  artifactsDir,
+  listVisible,
+  sharesDir,
+  shareArtifact,
+  SHARED_PAGE_POLICY,
+  visibleTo,
+  type ArtifactShare,
+  type ArtifactsOptions,
+  type ArtifactViewer,
+} from "./artifacts.js";
 export { screenRoutes, screensDir, type ScreensOptions } from "./screens.js";
 export { memoryRoutes, memoryConfig, callMemory, contentOf, MEMORY_MCP_URL, type MemoryOptions } from "./memory.js";
 

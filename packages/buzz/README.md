@@ -81,6 +81,20 @@ command on the host. The `.agent` name comes from `ARP_AGENT_DID`, or from
 runs it through `@kybernesis/manage` (`buzz.profile`). `kybernesis-buzz profile --from-agentid`
 still takes the profile from the name alone.
 
+## Cards
+
+When a tool hands back a card (a chart, a table, a checklist, an artifact), the bridge posts it
+after the reply as its own threaded message: the card's text for people to read, and the card
+itself in an HTML comment (`<!-- kyb:card v1 {...} -->`) that Buzz hides. The reply stays an
+ordinary message Buzz draws itself. The Kybernesis cards plugin for the Buzz desktop app
+(`plugin/`) draws those messages as the card; without it people read the text.
+
+An artifact posted into a channel is shared with the channel: the bridge asks the agent for a
+share link as the person who asked (`POST /eve/v1/kyb/artifacts/:id/share`, `@kybernesis/manage`
+0.28), and the card carries it. The plugin draws the page inside the card on the macOS desktop
+app and opens it beside the conversation; everywhere else the link is in the text. The person
+can withdraw the link from the agent. `BUZZ_CARDS=off` stops card messages.
+
 ## Configuration
 
 | Variable | Meaning |
@@ -91,6 +105,7 @@ still takes the profile from the name alone.
 | `BUZZ_SESSIONS_FILE` | Channel-to-session continuity store (default beside the key file; an existing legacy `.buzz-sessions.json` is reused) |
 | `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence before the agent acknowledges a request: unread drain, send and create acknowledgement (default `300000`, five minutes). This is where a genuine stall shows: no run is ever created. |
 | `BUZZ_AGENT_WORK_TIMEOUT_MS` | Ceiling on silence once the response stream is open (default `3600000`, sixty minutes). The stream is quiet while the agent works, a long tool call or a delegated subagent produces nothing until it returns, so this is a ceiling on work, not a stall detector. |
+| `BUZZ_CARDS` | `off` stops posting cards after replies (default on) |
 | `BUZZ_PROFILE_SYNC_MS` | How often the profile is re-checked against the name and picture its owner set and its `.agent` name (default `900000`, fifteen minutes; `0` turns it off) |
 | `AGENTID_MIRROR_SUFFIX` | Where names serve their public documents (default `.agentid.dev`); for staging only |
 | `KYBERNESIS_ISSUER` | The control plane |

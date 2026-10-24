@@ -83,7 +83,7 @@ function body(card: KnownCard): string[] {
     case "file":
       return [card.data.url];
     case "artifact":
-      return ["Open it in KYBER Studio."];
+      return [card.data.url ?? "Open it in KYBER Studio."];
     case "pull-request": {
       const d = card.data;
       const lines = [d.summary, d.additions !== undefined || d.deletions !== undefined ? `+${d.additions ?? 0} −${d.deletions ?? 0}` : undefined];

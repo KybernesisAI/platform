@@ -127,6 +127,12 @@ export interface ArtifactData {
   format?: "html" | "markdown";
   /** ISO 8601. */
   updatedAt?: string;
+  /**
+   * A share link to this version that anyone holding it can open. Set when
+   * the artifact was posted into a shared conversation (a Buzz channel), which
+   * deliberately shares it with everyone there.
+   */
+  url?: string;
 }
 
 export type CheckState = "passed" | "failed" | "running";
