@@ -19,6 +19,10 @@ export interface AgentLinkAnswer {
   connected?: boolean;
   url?: string;
   available?: string[];
+  /** Connected for the whole company (a shared sign-in), not just this person. */
+  shared?: boolean;
+  /** What the person should know before signing in, e.g. that their workspace admin may need to approve. */
+  note?: string;
   shelf?: { name: string; slug: string; connected: boolean; fromChat: boolean }[];
 }
 
@@ -38,6 +42,7 @@ export function connectAnswer(answer: AgentLinkAnswer): Record<string, unknown> 
     };
   }
   const service = answer.service ?? "the service";
+  const note = answer.note ? ` ${answer.note}` : "";
   if (answer.connected) {
     return { connected: true, message: `${service} is already connected for this person. Its tools are available now.` };
   }
@@ -46,7 +51,7 @@ export function connectAnswer(answer: AgentLinkAnswer): Record<string, unknown> 
     {
       connected: false,
       linkSent: true,
-      message: `The person now has a button to sign in to ${service} in their own browser. After they finish, ${service}'s tools are available from their next message.`,
+      message: `The person now has a button to sign in to ${service} in their own browser. After they finish, ${service}'s tools are available from their next message.${note}`,
     },
     card(
       "link",
@@ -54,12 +59,20 @@ export function connectAnswer(answer: AgentLinkAnswer): Record<string, unknown> 
         url: answer.url,
         title: `Connect ${service}`,
         site: service,
-        description: `Sign in with your own ${service} account in your browser. When you're done, send me your next message and I can use it.`,
+        description: `${
+          answer.shared
+            ? `Sign in to ${service} for the whole company in your browser.`
+            : `Sign in with your own ${service} account in your browser.`
+        } When you're done, send me your next message and I can use it.${note}`,
       },
       {
         id: `connect-${answer.slug ?? service.toLowerCase()}`,
         source: "Connectors",
-        actions: [{ label: `Connect ${service}`, url: answer.url, primary: true }],
+        actions: [
+          { label: `Connect ${service}`, url: answer.url, primary: true },
+          // Changing their mind is an answer too; it goes back as their next message.
+          { label: "Cancel", say: `Never mind, don't connect ${service}.` },
+        ],
         text: `Connect ${service}: ${answer.url}`,
       },
     ),
