@@ -2,7 +2,7 @@
   "id": "kybernesis.cards",
   "name": "Kybernesis cards",
   "apiVersion": 1,
-  "description": "Show the cards Kybernesis agents send, such as charts, tables, checklists and pages, right in the conversation.",
+  "description": "Show the cards Kybernesis agents send, such as charts, tables, checklists and pages, and answer their questions and approvals, right in the conversation.",
   "discovery": {
     "category": "agent-tools",
     "tags": [

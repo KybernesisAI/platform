@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/cards",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Rich replies for eve agents: one card format that tools emit and Kybernesis clients draw, with plain-text fallbacks for text-only channels and a reader that turns a session stream into the steps an agent took.",
   "license": "Apache-2.0",
   "type": "module",

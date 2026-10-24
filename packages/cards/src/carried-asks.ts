@@ -34,8 +34,10 @@ import type { ApprovalData, Card } from "./types.js";
 
 export const HIDDEN_ASK_OPEN = "<!-- kyb:ask v1 ";
 export const HIDDEN_ANSWER_OPEN = "<!-- kyb:answer v1 ";
+export const HIDDEN_SETTLED_OPEN = "<!-- kyb:settled v1 ";
 const HIDDEN_ASK = /<!-- kyb:ask v1 (\{[\s\S]*?\}) -->/g;
 const HIDDEN_ANSWER = /<!-- kyb:answer v1 (\{[\s\S]*?\}) -->/g;
+const HIDDEN_SETTLED = /<!-- kyb:settled v1 (\{[\s\S]*?\}) -->/g;
 
 export interface AskOption {
   id: string;
@@ -75,6 +77,38 @@ export interface Ask {
   card?: Card;
   vault?: VaultNeed;
   spend?: SpendNeed;
+  /** Who the question is for: the person whose message raised it. */
+  asker?: AskPerson;
+  /** Only the asker may answer; everyone else sees it waiting on them. */
+  askerOnly?: true;
+  /** How it ended, once it has. A settled question travels as `kyb:settled`, not `kyb:ask`. */
+  settled?: AskSettled;
+}
+
+/** A person a question names, by their key on the chat and the name people know them by. */
+export interface AskPerson {
+  key: string;
+  name?: string;
+}
+
+/**
+ * How a question ended.
+ *
+ * `approved`, `declined` and `changes` are an approval's answers (`changes`
+ * is Edit: sent back to be made again). `answered` is any other question.
+ * `withdrawn` means nobody is waiting on it any more: the work it belonged to
+ * stopped, or a later question took its place.
+ */
+export type AskOutcome = "approved" | "declined" | "changes" | "answered" | "withdrawn";
+
+export interface AskSettled {
+  outcome: AskOutcome;
+  /** Who answered, by name. */
+  by?: string;
+  /** What they said, in words, for an `answered` question. */
+  answer?: string;
+  /** When, in milliseconds. */
+  at?: number;
 }
 
 /** How a client answers one question. */
@@ -178,14 +212,41 @@ function readAsk(v: unknown): Ask | null {
     card: isObj(v.card) ? (parseCard(v.card) ?? undefined) : undefined,
     vault: vaultNeed(v.vault),
     spend: spendNeed(v.spend),
+    asker: askPerson(v.asker),
+    askerOnly: v.askerOnly === true && askPerson(v.asker) ? true : undefined,
+    settled: askSettled(v.settled),
   } as Obj) as unknown as Ask;
 }
 
-/** Every question hidden in `content`, in order. */
+function askPerson(v: unknown): AskPerson | undefined {
+  if (!isObj(v) || typeof v.key !== "string" || !/^[0-9a-f]{64}$/.test(v.key)) return undefined;
+  return drop({ key: v.key, name: str(v.name, 200) });
+}
+
+const OUTCOMES: readonly AskOutcome[] = ["approved", "declined", "changes", "answered", "withdrawn"];
+
+function askSettled(v: unknown): AskSettled | undefined {
+  if (!isObj(v) || !OUTCOMES.includes(v.outcome as AskOutcome)) return undefined;
+  return drop({
+    outcome: v.outcome as AskOutcome,
+    by: str(v.by, 200),
+    answer: str(v.answer, 1000),
+    at: typeof v.at === "number" && Number.isFinite(v.at) ? v.at : undefined,
+  });
+}
+
+/** Every open question hidden in `content`, in order. */
 export function readHiddenAsks(content: string): Ask[] {
   if (!content.includes(HIDDEN_ASK_OPEN)) return [];
+  return readAll(content, HIDDEN_ASK).map((ask) => {
+    const { settled: _settled, ...open } = ask;
+    return open;
+  });
+}
+
+function readAll(content: string, pattern: RegExp): Ask[] {
   const out: Ask[] = [];
-  for (const m of content.matchAll(HIDDEN_ASK)) {
+  for (const m of content.matchAll(pattern)) {
     try {
       const ask = readAsk(JSON.parse(m[1]!));
       if (ask) out.push(ask);
@@ -194,6 +255,91 @@ export function readHiddenAsks(content: string): Ask[] {
     }
   }
   return out;
+}
+
+/**
+ * The comment that carries a question once it is settled.
+ *
+ * A different marker from an open question's, so a client that only knows
+ * open questions draws no buttons for it: it shows the words, which say how
+ * it ended.
+ */
+export function hiddenSettled(ask: Ask & { settled: AskSettled }): string | null {
+  const { askerOnly: _only, ...rest } = ask;
+  let json = commentJson(rest);
+  if (json.length > HIDDEN_CARD_MAX && rest.card) {
+    const { card: _card, ...small } = rest;
+    json = commentJson(small);
+  }
+  return json.length > HIDDEN_CARD_MAX ? null : `${HIDDEN_SETTLED_OPEN}${json} -->`;
+}
+
+/** Every settled question hidden in `content`, in order. */
+export function readSettledAsks(content: string): Ask[] {
+  if (!content.includes(HIDDEN_SETTLED_OPEN)) return [];
+  return readAll(content, HIDDEN_SETTLED).filter((ask) => ask.settled);
+}
+
+/** Option ids that turn an approval down. */
+const DECLINES = new Set(["cancel", "deny", "denied", "decline", "declined", "reject", "rejected", "no"]);
+
+/**
+ * How an answer settles its question: an approval as approved, declined or
+ * sent back with changes (a decline that says what to change), anything else
+ * as answered, with what was said.
+ */
+export function settleWith(ask: Pick<Ask, "kind" | "options" | "card" | "spend">, answer: Omit<AskAnswer, "requestId">, by?: string, at = Date.now()): AskSettled {
+  const approval = ask.kind === "tool-approval" || ask.card?.card === "approval" || ask.spend !== undefined;
+  const option = ask.options?.find((o) => o.id === answer.optionId);
+  const words = answer.text?.trim();
+  if (approval && answer.optionId !== undefined) {
+    const declined = DECLINES.has(answer.optionId.toLowerCase()) || option?.style === "danger";
+    const outcome: AskOutcome = declined ? (words ? "changes" : "declined") : "approved";
+    return drop({ outcome, by, at });
+  }
+  const said = option?.label ?? words;
+  return drop({ outcome: "answered" as AskOutcome, by, answer: said ? said.slice(0, 1000) : undefined, at });
+}
+
+/** Whether an approval sends something (an email, a message) rather than doing it. */
+function sends(ask: Pick<Ask, "card">): boolean {
+  const kind = ask.card?.card === "approval" ? (ask.card.data as ApprovalData).kind : undefined;
+  return kind === "email" || kind === "message";
+}
+
+/** The short label a settled question shows, such as "Approved" or "Not sent". */
+export function settledLabel(ask: Pick<Ask, "card" | "settled">): string {
+  switch (ask.settled?.outcome) {
+    case "approved":
+      return "Approved";
+    case "declined":
+      return sends(ask) ? "Not sent" : "Declined";
+    case "changes":
+      return "Sent back";
+    case "withdrawn":
+      return "No longer waiting";
+    default:
+      return "Answered";
+  }
+}
+
+/** One sentence saying how a question ended and who ended it. */
+export function settledLine(ask: Pick<Ask, "card" | "settled">): string {
+  const s = ask.settled;
+  if (!s) return "";
+  const by = s.by ? ` by ${s.by}` : "";
+  switch (s.outcome) {
+    case "approved":
+      return `Approved${by}.`;
+    case "declined":
+      return sends(ask) ? `Not sent: declined${by}.` : `Declined${by}.`;
+    case "changes":
+      return `Sent back with changes${by}.`;
+    case "withdrawn":
+      return "No longer waiting on this.";
+    default:
+      return s.answer ? `Answered${by}: ${s.answer}` : `Answered${by}.`;
+  }
 }
 
 /** The longest typed answer a carried answer keeps. */
@@ -229,7 +375,7 @@ export function readHiddenAnswers(content: string): AskAnswer[] {
 
 /** `content` without hidden questions and answers, for surfaces that show raw text. */
 export function withoutHiddenAsks(content: string): string {
-  return content.replace(HIDDEN_ASK, "").replace(HIDDEN_ANSWER, "").replace(/\n{3,}/g, "\n\n").trim();
+  return content.replace(HIDDEN_ASK, "").replace(HIDDEN_ANSWER, "").replace(HIDDEN_SETTLED, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** The longest email or message body a text-only channel shows in an approval. */
