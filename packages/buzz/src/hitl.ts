@@ -109,15 +109,20 @@ export function invalidInputReply(requests: readonly InputRequest[]): string {
   return `I still need a valid answer before I can continue.\n\n${formatInputRequests(requests)}`;
 }
 
-/** Submit a matched reply without consuming its response stream. */
+/**
+ * Submit a matched reply without consuming its response stream.
+ *
+ * No `clientContext`: the turn already carries the channel from when it
+ * started, and eve 0.81 treats context on a respond as new turn input. It then
+ * runs one more model step after the agent's reply, with the agent's message
+ * last, which models that refuse prefill reject. The turn fails and the whole
+ * conversation ends, on an approve, a decline or an answer alike.
+ */
 export async function respondToPendingConversation(
   session: Pick<ClientSession, "respond">,
   responses: readonly InputResponse[],
-  community: string,
-  channel: string,
 ): Promise<void> {
   await session.respond(responses, {
-    clientContext: { buzzCommunity: community, buzzChannel: channel },
     streamReconnectPolicy: { reconnect: false },
   });
 }

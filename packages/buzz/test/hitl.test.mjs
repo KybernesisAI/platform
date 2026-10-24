@@ -285,14 +285,12 @@ test("submitting a channel reply uses ClientSession.respond without consuming du
   };
   const responses = [{ requestId: "request-1", optionId: "safe" }];
 
-  await respondToPendingConversation(session, responses, "relay-a", "channel-1");
+  await respondToPendingConversation(session, responses);
 
+  // No clientContext: on a respond, eve runs an extra step that ends on the agent's message.
   assert.deepEqual(calls, [{
     responses,
-    options: {
-      clientContext: { buzzCommunity: "relay-a", buzzChannel: "channel-1" },
-      streamReconnectPolicy: { reconnect: false },
-    },
+    options: { streamReconnectPolicy: { reconnect: false } },
   }]);
 });
 

@@ -546,7 +546,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           const session = clientFor(event.pubkey).sessions.attach(pending.id, {
             streamIndex: pending.streamIndex,
           });
-          await respondToPendingConversation(session, responses, from, channel);
+          await respondToPendingConversation(session, responses);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
           /**
            * The answer is in, so this conversation is no longer waiting on a
