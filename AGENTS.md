@@ -105,9 +105,13 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
    + regenerate `registry/r/<item>.json` (content-embedded copy) + the catalog
    `registry/r/registry.json` + `registry/index.html`, run
-   `node scripts/check-registry.mjs`, then push to `master`. The root
-   `vercel.json` serves `registry/` and auto-deploys from master (it can lag
-   about 15 min). Never `vercel --prod`.
+   `node scripts/check-registry.mjs`, then push to `master`.
+   registry.kybernesis.ai is the Vercel project `kybernesis-registry`, which
+   builds this repo's root (the root `vercel.json` serves `registry/`) on every
+   master push. It was not linked to git until 2026-10-24, so pushes from #125
+   to #135 never reached it; after a merge, compare the live item with master
+   (`curl -s https://registry.kybernesis.ai/r/eve-0.81/<item>.json | shasum`).
+   Never `vercel --prod`.
 5. **Gate on the consumer**: bump the pin in the consuming agent, run its
    `npm run eval` (the suite must be green), then deploy that agent with its
    own `scripts/deploy.sh` (agents run on exe.dev VMs under systemd, not
