@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/vault",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The person's password and card vault, usable by their eve agent on its own computer: the agent sees labels and handles, the control plane holds the secrets, and a fill tool types them into the page so they are never in the transcript.",
   "license": "Apache-2.0",
   "type": "module",
@@ -34,7 +34,7 @@
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "peerDependencies": {
-    "@kybernesis/computer": ">=0.3.0 <0.4.0",
+    "@kybernesis/computer": ">=0.3.0 <0.5.0",
     "eve": ">=0.81.1 <0.82.0",
     "zod": "^4"
   },
