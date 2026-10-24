@@ -46,6 +46,10 @@ test("connecting gives a sign-in card, or words when it cannot", () => {
   assert.equal(link.kyb.data.title, "Connect HubSpot");
   assert.deepEqual(link.kyb.actions[0], { label: "Connect HubSpot", url: "https://connect.example/s/abc", primary: true });
   assert.match(link.kyb.text, /https:\/\/connect\.example\/s\/abc/);
+  assert.match(link.kyb.data.description, /your own HubSpot account/);
+  const company = connectAnswer({ ok: true, service: "Slack", slug: "slack", connected: false, url: "https://connect.example/s/def", shared: true, note: "Slack may ask a workspace admin on their side to approve it." });
+  assert.match(company.kyb.data.description, /for the whole company.*workspace admin/);
+  assert.match(company.message, /workspace admin/);
   const already = connectAnswer({ ok: true, service: "Gmail", connected: true });
   assert.equal(already.connected, true);
   assert.equal("kyb" in already, false);
