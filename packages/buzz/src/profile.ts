@@ -179,7 +179,9 @@ export async function uploadImage(
   // Blossom server checks that for itself.
   const body = stripMetadata(bytes, mediaType);
   const sha256 = createHash("sha256").update(body).digest("hex");
-  const expires = now() + 300;
+  // At most a minute: NIP-FI's strict Blossom rules, which a community may switch on, refuse
+  // a longer-lived proof. The `server` tag below is the other thing they require.
+  const expires = now() + 60;
 
   const auth = finalizeEvent(
     {
