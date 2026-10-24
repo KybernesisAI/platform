@@ -5,6 +5,12 @@ stats, artifacts) as cards, in the conversation. The agent's bridge (`@kybernesi
 later) posts each card as its own message with the card in a hidden HTML comment; this plugin
 replaces those messages' bodies with the card. The components are `@kybernesis/cards-react`.
 
+Questions too (bridge 0.14 or later): an approval shows the email, event or message it would send,
+with Send it, Edit and Don't send; a purchase its amount and Approve in Link; a form its fields.
+A press replies to the question as the person, in its thread, so the agent reads it exactly as a
+typed answer. A button on a card that says something (Correct it, say) sends that sentence to
+the agent the same way.
+
 Shared artifacts are drawn inside their card with Buzz's browser view (macOS desktop only), shown
 while the card sits wholly in the conversation, and open beside it from Open. Other hosts get the
 details and a link.

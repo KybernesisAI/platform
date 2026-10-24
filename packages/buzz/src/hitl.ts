@@ -1,22 +1,29 @@
 import {
+  parseInputResponses,
   resolveTextToResponses,
   type ClientSession,
   type InputRequest,
   type InputResponse,
   type MessageStreamEvent,
 } from "eve/client";
-import { cardsOf, newStepState, promptText, readStep, type Card } from "@kybernesis/cards";
+import { askFrom, askText, cardsOf, hiddenAsk, newStepState, readStep, type AskAnswer, type Card } from "@kybernesis/cards";
 import type { StoredSession } from "./sessions.js";
 
 /**
- * Render pending Eve input in a text-only Buzz channel.
+ * Render pending Eve input in a Buzz channel.
  *
- * A Kybernesis tool may put a `[kyb:…] {json}` marker on a question's first
- * line for apps that draw it as a card. Buzz shows only the sentence after it.
+ * Everyone reads the words: a question's sentence (a `[kyb:…]` marker line is
+ * dropped), an approval as the email or event it would send, then the options
+ * by number. With `carry`, each question also travels hidden after the words
+ * (`<!-- kyb:ask v1 … -->`), so the Kybernesis plugin can draw it the way
+ * Studio does and answer it with a press. Only a posted prompt carries them:
+ * a press is accepted only as a reply to a prompt the bridge is watching.
  */
-export function formatInputRequests(requests: readonly InputRequest[]): string {
-  return requests.map((request, requestIndex) => {
-    const prompt = promptText(request.prompt);
+export function formatInputRequests(requests: readonly InputRequest[], options: { carry?: boolean } = {}): string {
+  const asks = requests.map((request) => askFrom(request));
+  const text = asks.map((ask, requestIndex) => {
+    const request = requests[requestIndex]!;
+    const prompt = askText(ask);
     const lines = [
       requests.length > 1 ? `Question ${requestIndex + 1}: ${prompt}` : prompt,
     ];
@@ -36,7 +43,56 @@ export function formatInputRequests(requests: readonly InputRequest[]): string {
     }
     return lines.join("\n");
   }).join("\n\n");
+  if (!options.carry) return text;
+  const hidden = asks.map((ask) => hiddenAsk(ask)).filter((h): h is string => h !== null);
+  return hidden.length ? `${text}\n\n${hidden.join("\n")}` : text;
 }
+
+/**
+ * Answers a client pressed, checked against what is actually open.
+ *
+ * Each answer must name an open request. An option must be one of that
+ * request's own; words alone answer only a question that takes words. eve's
+ * strict schema checks the result before it is sent. `stale` is true when no
+ * answer named an open request, which is what a second press on a question
+ * someone already answered looks like.
+ */
+export function resolveCarriedAnswers(
+  answers: readonly AskAnswer[],
+  requests: readonly InputRequest[],
+): { responses: readonly InputResponse[]; stale: false } | { responses: null; stale: boolean } {
+  const open = new Map(requests.map((request) => [request.requestId, request]));
+  const picked = new Map<string, InputResponse>();
+  let named = false;
+  for (const answer of answers) {
+    const request = open.get(answer.requestId);
+    if (!request) continue;
+    named = true;
+    if (picked.has(request.requestId)) continue;
+    const ids = request.options?.map((option) => option.id) ?? [];
+    if (answer.optionId !== undefined) {
+      if (ids.length > 0 && !ids.includes(answer.optionId)) return { responses: null, stale: false };
+      picked.set(request.requestId, {
+        requestId: request.requestId,
+        optionId: answer.optionId,
+        ...(answer.text?.trim() ? { text: answer.text.trim() } : {}),
+      } as InputResponse);
+      continue;
+    }
+    const words = answer.text?.trim();
+    if (!words || (ids.length > 0 && request.allowFreeform !== true)) return { responses: null, stale: false };
+    picked.set(request.requestId, { requestId: request.requestId, text: words } as InputResponse);
+  }
+  if (picked.size === 0) return { responses: null, stale: !named };
+  try {
+    return { responses: parseInputResponses([...picked.values()]), stale: false };
+  } catch {
+    return { responses: null, stale: false };
+  }
+}
+
+/** What a press on a question nobody is waiting on any more gets. */
+export const STALE_ANSWER_REPLY = "That question was already answered, so nothing changed.";
 
 /** Resolve a Buzz text reply using Eve's certified matching semantics. */
 export function resolveInputReply(

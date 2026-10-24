@@ -10,4 +10,5 @@ export {
   type CardContext,
   type Loaded,
 } from "./CardView.js";
+export { AskView, type AskReply, type AskViewProps } from "./AskView.js";
 export { cardStyles } from "./styles.js";

@@ -1,4 +1,4 @@
-import { cardMessage, cardText, type Card } from "@kybernesis/cards";
+import { cardMessage, cardText, readHiddenAnswers, type Card } from "@kybernesis/cards";
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
@@ -21,9 +21,11 @@ import {
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
+  resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
   resumeStalledReply,
+  STALE_ANSWER_REPLY,
 } from "./hitl.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -81,7 +83,9 @@ export type BuzzBridgeOptions = {
   /**
    * Post the cards a turn's tools handed back, each as its own message after
    * the reply: the card's text, with the card hidden in a comment for clients
-   * that draw it. Default true; false posts the reply alone, as before 0.13.
+   * that draw it. Questions carry themselves the same way (0.14), so the
+   * plugin can draw an approval as its email and answer it with a press.
+   * Default true; false posts the reply and questions as words alone.
    */
   cards?: boolean;
   onLog?: (message: string) => void;
@@ -380,7 +384,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         }),
         onInputRequested: (requests) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          const promptId = relay.reply(channel, formatInputRequests(requests));
+          const promptId = relay.reply(channel, formatInputRequests(requests, { carry: options.cards !== false }));
           if (!promptId) throw new Error("Buzz relay is not connected");
           relay.watchReplies([promptId]);
           const current = sessions.get(community, channel);
@@ -459,10 +463,14 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     const addressed = event.tags.some((t) => t[0] === "p" && t[1] === key.publicKey);
     // A reply to a prompt this agent posted is an answer even when it names nobody: people answer
     // a question by replying to it, not by mentioning the asker. Only while that prompt is open.
-    const repliedTo = event.tags.find((t) => t[0] === "e")?.[1];
+    // Any `e` tag counts: a reply inside a thread names the thread's root first and the prompt
+    // after it (NIP-10 `root` and `reply` markers), so the first tag is often not the prompt.
+    const referenced = event.tags.filter((t) => t[0] === "e" && typeof t[1] === "string").map((t) => t[1]!);
+    // The message this one answers directly: the `reply` marker, else the last `e` tag.
+    const parent = event.tags.find((t) => t[0] === "e" && t[3] === "reply")?.[1] ?? referenced.at(-1);
     const open = channel ? sessions.get(from, channel) : undefined;
     const answersPrompt = Boolean(
-      repliedTo && open?.pendingInputRequests?.length && open.promptEventIds?.includes(repliedTo),
+      open?.pendingInputRequests?.length && referenced.some((id) => open.promptEventIds?.includes(id)),
     );
     // In a one-to-one DM every message is to the agent, mention or not, as with Buzz's own
     // agents. Not one written by another agent (it carries its owner's `auth` attestation):
@@ -502,9 +510,26 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       await serialize(from, channel, async () => {
         const pending = sessions.get(from, channel);
         if (pending?.pendingInputRequests?.length) {
-          // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
-          const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
-          const responses = resolveInputReply(answer, pending.pendingInputRequests);
+          let responses: readonly import("eve/client").InputResponse[] | null;
+          const carried = readHiddenAnswers(text);
+          if (carried.length) {
+            // A press in the plugin. It counts only as a direct reply to a prompt this bridge
+            // posted, so a message quoting someone else's question cannot answer this one.
+            if (!parent || !pending.promptEventIds?.includes(parent)) {
+              log(`ignored a pressed answer in ${channel.slice(0, 8)} that does not reply to an open prompt`);
+              return;
+            }
+            const resolved = resolveCarriedAnswers(carried, pending.pendingInputRequests);
+            if (!resolved.responses) {
+              relay.reply(channel, resolved.stale ? STALE_ANSWER_REPLY : invalidInputReply(pending.pendingInputRequests), event);
+              return;
+            }
+            responses = resolved.responses;
+          } else {
+            // "@Ava approve" is an approve. The mention is how the message reached us, not the answer.
+            const answer = addressed ? text.replace(/^@\S+\s*/, "") : text;
+            responses = resolveInputReply(answer, pending.pendingInputRequests);
+          }
           if (!responses) {
             relay.reply(channel, invalidInputReply(pending.pendingInputRequests), event);
             return;
@@ -536,10 +561,17 @@ export function buzzBridge(options: BuzzBridgeOptions) {
            * a human, so while that flag was set the room could only be told
            * nothing.
            */
+          // A press answers one question; any others stay open until they are answered too.
           const answered = sessions.get(from, channel);
           if (answered?.pendingInputRequests?.length) {
+            const done = new Set(responses.map((response) => response.requestId));
+            const remaining = answered.pendingInputRequests.filter((request) => !done.has(request.requestId));
             const { pendingInputRequests: _resolved, ...rest } = answered;
-            sessions.set(from, channel, { ...rest, resumeInFlight: true });
+            sessions.set(
+              from,
+              channel,
+              remaining.length ? { ...rest, pendingInputRequests: remaining } : { ...rest, resumeInFlight: true },
+            );
           }
           return;
         }
@@ -576,7 +608,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
             pendingInputRequests: result.inputRequests,
             speakerPublicKey: event.pubkey,
           });
-          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests), event);
+          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests, { carry: options.cards !== false }), event);
           if (promptId) {
             relay.watchReplies([promptId]);
             const current = sessions.get(from, channel);
