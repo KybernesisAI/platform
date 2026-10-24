@@ -15,7 +15,8 @@
  *   3. publish each package whose version npm does not have, dependencies
  *      first, then point the eve-line tag (`eve-0.81`) at it, because line
  *      registry items install `@kybernesis/<pkg>@eve-<line>`;
- *   4. wait for each tarball to be downloadable before moving on.
+ *   4. once everything is out, wait for the tarballs to be downloadable, and
+ *      warn (never stop) about any npm is still slow to serve.
  *
  * npm still asks for browser 2FA on each publish and each tag. Never pass
  * --otp. A package npm has never seen can only be created by the account that
@@ -140,16 +141,13 @@ run(process.execPath, [
   ...ordered.map((item) => `packages/${item.dir}/package.json`),
 ]);
 
-// 3 and 4. Publish, tag, and wait for the tarball.
-async function waitForTarball(name, version) {
+// 3. Publish and tag. Nothing here waits on npm's CDN: a publish does not need its
+// dependency's tarball to be downloadable, only an install does. Stopping on a slow
+// tarball made every release a run, a wait and a rerun (2026-10-24).
+async function tarballReady(name, version) {
   const base = name.split("/").pop();
-  const url = `${REGISTRY}/${name}/-/${base}-${version}.tgz`;
-  for (let attempt = 0; attempt < 36; attempt++) {
-    const res = await fetch(`${url}?t=${Date.now()}`, { method: "HEAD" });
-    if (res.ok) return true;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-  return false;
+  const res = await fetch(`${REGISTRY}/${name}/-/${base}-${version}.tgz?t=${Date.now()}`, { method: "HEAD" });
+  return res.ok;
 }
 
 const done = [];
@@ -176,15 +174,27 @@ for (const item of ordered) {
   } catch {
     fail(`${id} is published but not tagged ${lineTag}. Run: npm dist-tag add ${id} ${lineTag}`);
   }
-  if (!(await waitForTarball(item.name, item.pkg.version))) {
-    fail(`${id} is published but its tarball is not downloadable after 3 minutes. Run npm run release again later.`);
-  }
-  done.push(id);
+  done.push({ id, name: item.name, version: item.pkg.version });
+}
+
+// 4. Wait for the tarballs together, so consumers can install. Slow is a warning, not a failure.
+const TARBALL_WAIT_MS = 10 * 60_000;
+let waiting = [...done];
+const started = Date.now();
+if (waiting.length) console.log(`\n  Waiting for npm to serve ${waiting.length} tarball(s)…`);
+while (waiting.length && Date.now() - started < TARBALL_WAIT_MS) {
+  const ready = await Promise.all(waiting.map((d) => tarballReady(d.name, d.version).catch(() => false)));
+  waiting = waiting.filter((_, i) => !ready[i]);
+  if (waiting.length) await new Promise((resolve) => setTimeout(resolve, 10_000));
 }
 
 console.log("\n  Released:");
-for (const id of done) console.log(`    ${id} (latest, ${lineTag})`);
+for (const { id } of done) console.log(`    ${id} (latest, ${lineTag})`);
 if (done.length === 0) console.log("    nothing");
+if (waiting.length > 0) {
+  console.log("\n  Published, but npm is still slow to serve these (nothing to rerun; give it a few minutes before installing):");
+  for (const { id } of waiting) console.log(`    ${id}`);
+}
 if (skipped.length > 0) {
   console.log("\n  Not released:");
   for (const s of skipped) console.log(`    ${s.id}: ${s.why}`);
