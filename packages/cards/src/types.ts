@@ -161,6 +161,61 @@ export interface RememberedData {
   memoryId?: string;
 }
 
+/** What an approval asks the person to let through. */
+export type ApprovalKind = "email" | "event" | "message" | "action";
+
+/**
+ * A tool call waiting for a yes, drawn as the thing itself.
+ *
+ * Built by a client from eve's approval request, which carries the tool's real
+ * input, so "Allow gmail send?" becomes the email: who it goes to, the subject
+ * and the body. `subject` is an email's subject or an event's title.
+ */
+export interface ApprovalData {
+  kind: ApprovalKind;
+  /** The tool asking, as eve names it. */
+  tool: string;
+  /** What the person lets happen, in a few words: "Send email", "Create event". */
+  action: string;
+  /** The service it acts in, e.g. "Gmail". */
+  service?: string;
+  to?: string[];
+  cc?: string[];
+  subject?: string;
+  body?: string;
+  /** An event's start and end, as the tool gave them. */
+  when?: string;
+  until?: string;
+  where?: string;
+  people?: string[];
+  /** Where a chat message goes, e.g. "#sales". */
+  channel?: string;
+  /** Anything else worth reading before saying yes, as label and value. */
+  fields?: { label: string; value: string }[];
+}
+
+export type FormFieldKind = "text" | "long" | "number" | "date" | "email" | "choice";
+
+export interface FormField {
+  /** The key the answer comes back under. */
+  id: string;
+  label: string;
+  kind: FormFieldKind;
+  /** The choices, for a `choice` field. */
+  options?: string[];
+  required?: boolean;
+  placeholder?: string;
+  /** A value to start from. */
+  value?: string;
+}
+
+/** A question with fields. It arrives as a `[kyb:card]` ask; the client answers with `formAnswer`. */
+export interface FormData {
+  fields: FormField[];
+  /** The button's label. "Send" when absent. */
+  submit?: string;
+}
+
 export interface RoutineData {
   name: string;
   /** In words: "Every Monday at 9:00 AM". */
@@ -186,6 +241,8 @@ export interface CardDataByType {
   receipt: ReceiptData;
   remembered: RememberedData;
   routine: RoutineData;
+  approval: ApprovalData;
+  form: FormData;
 }
 
 export type KnownCardType = keyof CardDataByType;
@@ -229,6 +286,8 @@ export const KNOWN_CARD_TYPES: readonly KnownCardType[] = [
   "receipt",
   "remembered",
   "routine",
+  "approval",
+  "form",
 ];
 
 export function isKnownCard(card: Card): card is KnownCard {

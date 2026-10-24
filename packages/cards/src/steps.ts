@@ -1,3 +1,4 @@
+import { derivedCards } from "./derive.js";
 import { cardsFromOutput } from "./parse.js";
 import type { Card } from "./types.js";
 
@@ -39,9 +40,11 @@ export interface StepState {
   steps: Map<string, Step>;
   /** Calls running as tasks: their result is a receipt, and they settle later. */
   tasks: Set<string>;
+  /** Each call's input, kept so a finished call can become a card its tool did not make (a memory save, an opened pull request). */
+  inputs?: Map<string, unknown>;
 }
 
-export const newStepState = (): StepState => ({ steps: new Map(), tasks: new Set() });
+export const newStepState = (): StepState => ({ steps: new Map(), tasks: new Set(), inputs: new Map() });
 
 /** Tools that are plumbing, not work a person needs to see. */
 const HIDDEN = new Set(["eve__search", "eve__skill", "load_skill", "connection_search", "show"]);
@@ -59,6 +62,10 @@ const CHIPS: Record<string, string> = {
   pay_on_computer: "Payments",
   approve_spend_request: "Payments",
   create_spend_request: "Payments",
+  create_report: "Payments",
+  create_routine: "Routines",
+  list_routines: "Routines",
+  delete_routine: "Routines",
   list_vault: "Vault",
   fill_from_vault: "Vault",
   request_vault_item: "Vault",
@@ -166,6 +173,8 @@ export function readStep(state: StepState, type: string, data: unknown, meta?: {
       if (!callId || !tool || kind === "load-skill") continue;
       if (hidden(tool) && !viaCatalogue) continue;
       if (state.steps.has(callId)) continue;
+      const input = viaCatalogue && isObj(raw.input) ? raw.input.input : raw.input;
+      if (input !== undefined) (state.inputs ??= new Map()).set(callId, input);
       const chip = chipFor(tool, kind);
       const step: Step = {
         callId,
@@ -213,6 +222,9 @@ export function readStep(state: StepState, type: string, data: unknown, meta?: {
         step.status = status === "failed" ? "failed" : status === "rejected" ? "rejected" : "done";
       }
       if (step.cards.length === 0) step.cards = cardsFromOutput(result.output);
+      if (step.cards.length === 0 && step.status === "done" && !state.tasks.has(callId)) {
+        step.cards = derivedCards(step.tool, state.inputs?.get(callId), result.output);
+      }
     }
     changed.push(step);
     return changed;
@@ -231,6 +243,7 @@ export function readStep(state: StepState, type: string, data: unknown, meta?: {
     const status = text(data.status);
     step.status = status === "completed" ? "done" : status === "cancelled" ? "rejected" : "failed";
     if (step.cards.length === 0) step.cards = cardsFromOutput(data.output);
+    if (step.cards.length === 0 && step.status === "done") step.cards = derivedCards(step.tool, state.inputs?.get(callId!), data.output);
     changed.push(step);
     return changed;
   }

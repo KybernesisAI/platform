@@ -378,7 +378,7 @@
       "name": "computer",
       "type": "registry:item",
       "title": "Kybernesis Computer",
-      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, and the connector-first rule for when the agent uses it.",
+      "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, show_screen to put the screen in front of the person as a private picture, and the connector-first rule for when the agent uses it.",
       "dependencies": [
         "@kybernesis/computer"
       ],
@@ -411,6 +411,11 @@
           "path": "registry/computer-instructions.ts",
           "type": "registry:file",
           "target": "agent/instructions/computer.ts"
+        },
+        {
+          "path": "registry/computer-show-screen.ts",
+          "type": "registry:file",
+          "target": "agent/tools/show_screen.ts"
         }
       ]
     },
@@ -519,7 +524,7 @@
       "name": "cards",
       "type": "registry:item",
       "title": "Kybernesis Cards",
-      "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data. Text channels get each card's plain text, so a reply still reads without it.",
+      "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data, and short forms through ask_form. Text channels get each card's plain text, so a reply still reads without it.",
       "dependencies": [
         "@kybernesis/cards",
         "zod"
@@ -534,6 +539,11 @@
           "path": "registry/cards-instructions.md",
           "type": "registry:file",
           "target": "agent/instructions/cards.md"
+        },
+        {
+          "path": "registry/cards-ask-form.ts",
+          "type": "registry:file",
+          "target": "agent/tools/ask_form.ts"
         }
       ]
     },

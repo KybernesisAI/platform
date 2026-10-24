@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  approvalCard,
   card,
   cardPrompt,
   cardsFromOutput,
@@ -12,11 +13,16 @@ import {
   labelFor,
   withUnit,
   forModel,
+  formAnswer,
+  formPrompt,
   newStepState,
   parseCard,
   parseCardPrompt,
   parseMarkedPrompt,
   promptText,
+  readFormAnswer,
+  describeCron,
+  nextCronRun,
   readStep,
   sparkline,
   visibleSteps,
@@ -107,6 +113,8 @@ test("every known card has a text version", () => {
     card("receipt", { merchant: "Store", amount: 255600, currency: "usd", orderId: "10493827" }),
     card("remembered", { fact: "Ops approves under $5,000." }),
     card("routine", { name: "Weekly pipeline", schedule: "Every Monday at 9:00 AM" }),
+    card("approval", { kind: "email", tool: "gmail_send_email", action: "Send email", to: ["dana@northwind.example"], subject: "Renewal", body: "Hi Dana" }),
+    card("form", { fields: [{ id: "budget", label: "Budget", kind: "number" }] }),
   ];
   for (const c of made) assert.ok(c.text && c.text.length > 0, `${c.card} has text`);
   assert.match(made[9].text, /\$2,556\.00/);
@@ -156,6 +164,9 @@ test("chips name what a tool touches", () => {
   assert.equal(chipFor("posthog_query_insights"), "PostHog");
   assert.equal(chipFor("github__create_pull_request"), "GitHub");
   assert.equal(chipFor("googlecalendar_events_list"), "Google Calendar");
+  assert.equal(chipFor("create_routine"), "Routines");
+  assert.equal(chipFor("create_report"), "Payments");
+  assert.equal(chipFor("ask_form"), "Form");
   assert.equal(chipFor("googlecalendar__events_list"), "Google Calendar");
   assert.equal(labelFor("googlecalendar_events_list", "Google Calendar"), "Events list");
   assert.equal(chipFor("computer"), "Computer");
@@ -253,4 +264,87 @@ test("units read as words in fallbacks", () => {
   assert.equal(withUnit("7", undefined), "7");
   const text = cardText({ kyb: 1, card: "chart", data: { kind: "bar", x: ["Mon", "Tue"], series: [{ name: "Inbox", values: [3, 30] }], unit: "emails" } });
   assert.match(text, /latest 30 emails/);
+});
+
+test("a memory save becomes a remembered card, with ways to correct it", () => {
+  const state = newStepState();
+  feed(state, [
+    { type: "actions.requested", data: { actions: [{ callId: "m", kind: "tool-call", toolName: "arcana__memory__arcana_remember", input: { text: "Favourite coffee is a flat white." } }] } },
+    { type: "action.result", data: { status: "completed", result: { callId: "m", toolName: "arcana__memory__arcana_remember", output: { content: [{ type: "text", text: "{\"ok\":true}" }] } } } },
+  ]);
+  const [made] = cardsOf(state.steps.values());
+  assert.equal(made.card, "remembered");
+  assert.equal(made.data.fact, "Favourite coffee is a flat white.");
+  assert.deepEqual(made.actions.map((a) => a.label), ["Correct it", "Forget it"]);
+  assert.match(made.text, /^Noted: Favourite coffee/);
+});
+
+test("a failed memory save, or one with no text, remembers nothing", () => {
+  const state = newStepState();
+  feed(state, [
+    { type: "actions.requested", data: { actions: [{ callId: "m", kind: "tool-call", toolName: "arcana_remember", input: { text: "x" } }, { callId: "n", kind: "tool-call", toolName: "arcana_remember", input: {} }] } },
+    { type: "action.result", data: { status: "failed", result: { callId: "m", toolName: "arcana_remember", output: "403" } } },
+    { type: "action.result", data: { status: "completed", result: { callId: "n", toolName: "arcana_remember", output: "ok" } } },
+  ]);
+  assert.equal(cardsOf(state.steps.values()).length, 0);
+});
+
+test("a pull request opened through a connector becomes a pull request card", () => {
+  const state = newStepState();
+  const pr = { number: 412, title: "fix: include final page", html_url: "https://github.com/acme/app/pull/412", body: "The paginator stopped one short.\n\nTest added.", additions: 18, deletions: 3 };
+  feed(state, [
+    { type: "actions.requested", data: { actions: [{ callId: "p", kind: "tool-call", toolName: "github__create_pull_request", input: { title: "fix: include final page" } }] } },
+    { type: "action.result", data: { status: "completed", result: { callId: "p", toolName: "github__create_pull_request", output: JSON.stringify(pr) } } },
+  ]);
+  const [made] = cardsOf(state.steps.values());
+  assert.equal(made.card, "pull-request");
+  assert.deepEqual([made.data.repo, made.data.number, made.data.additions, made.data.summary], ["acme/app", 412, 18, "The paginator stopped one short."]);
+  assert.equal(made.actions[0].url, "https://github.com/acme/app/pull/412/files");
+});
+
+test("an approval shows the email it would send, and never a secret", () => {
+  const email = approvalCard("gmail_send_email", { to: ["dana@northwind.example"], subject: "Renewal terms", body: "Hi Dana,\nFinance approved 8%." }, "ask-1");
+  assert.deepEqual([email.card, email.id, email.data.kind, email.data.action, email.data.service, email.data.to[0], email.data.subject], ["approval", "ask-1", "email", "Send email", "Gmail", "dana@northwind.example", "Renewal terms"]);
+  const event = approvalCard("googlecalendar_create_event", { summary: "Renewal call", start: { dateTime: "2026-10-29T15:00:00Z" }, attendees: [{ email: "dana@northwind.example" }], location: "Zoom" });
+  assert.deepEqual([event.data.kind, event.data.subject, event.data.when, event.data.people[0], event.data.service], ["event", "Renewal call", "2026-10-29T15:00:00Z", "dana@northwind.example", "Google Calendar"]);
+  const other = approvalCard("delete_asset", { name: "logo.png", api_key: "sk_live_x", password: "p" });
+  assert.equal(other.data.kind, "action");
+  assert.deepEqual(other.data.fields, [{ label: "Name", value: "logo.png" }]);
+  assert.match(email.text, /To: dana@northwind\.example/);
+});
+
+test("a form travels in a question and its answer comes back as values", () => {
+  const prompt = formPrompt([{ id: "budget", label: "Budget", kind: "number", required: true }, { id: "size", label: "Team size", kind: "choice", options: ["1-10", "11-50"] }, { id: "bad id", label: "x", kind: "text" }], "A few details for the quote.", { submit: "Get quote" });
+  const asked = parseCardPrompt(prompt);
+  assert.equal(asked.card.card, "form");
+  assert.deepEqual(asked.card.data.fields.map((f) => f.id), ["budget", "size"]);
+  assert.equal(asked.card.data.submit, "Get quote");
+  assert.equal(promptText(prompt), "A few details for the quote.");
+  assert.deepEqual(readFormAnswer(formAnswer({ budget: "5000", size: "1-10" })), { values: { budget: "5000", size: "1-10" } });
+  assert.deepEqual(readFormAnswer("about five grand"), { text: "about five grand" });
+  assert.throws(() => formPrompt([{ id: "", label: "" }], "?"));
+});
+
+test("cron reads as words, and the unusual stays as written", () => {
+  assert.equal(describeCron("40 8 * * 1-5"), "Weekdays at 8:40 AM");
+  assert.equal(describeCron("0 10 * * *"), "Every day at 10:00 AM");
+  assert.equal(describeCron("0 9 * * 1"), "Every Monday at 9:00 AM");
+  assert.equal(describeCron("30 17 * * 1,3,5"), "Monday, Wednesday and Friday at 5:30 PM");
+  assert.equal(describeCron("0 12 15 * *"), "Monthly on day 15 at 12:00 PM");
+  assert.equal(describeCron("*/15 * * * *"), "Every 15 minutes");
+  assert.equal(describeCron("0 * * * *"), "Every hour, on the hour");
+  assert.equal(describeCron("0 9 1 1 *"), "0 9 1 1 *");
+});
+
+test("the next run is the first matching minute after now, in host time", () => {
+  const from = new Date(2026, 9, 24, 9, 30); // Saturday 24 Oct 2026, 09:30 local
+  const at = (iso) => new Date(iso);
+  const weekday = at(nextCronRun("40 8 * * 1-5", from));
+  assert.deepEqual([weekday.getDay(), weekday.getHours(), weekday.getMinutes()], [1, 8, 40]);
+  const today = at(nextCronRun("0 10 * * *", from));
+  assert.deepEqual([today.getDate(), today.getHours()], [24, 10]);
+  const quarter = at(nextCronRun("*/15 * * * *", from));
+  assert.deepEqual([quarter.getHours(), quarter.getMinutes()], [9, 45]);
+  assert.equal(nextCronRun("not a cron", from), undefined);
+  assert.equal(nextCronRun("0 9 31 2 *", from), undefined);
 });

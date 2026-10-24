@@ -49,3 +49,14 @@ test("a dotted name cannot name the directory", async () => {
   const out = await run({ HOME: home, EVE_PUBLIC_URL: "https://agent.example.com" }, "..");
   assert.match(out.url, /\/[0-9a-f]{32}\/_$/);
 });
+
+test("the delivery carries a file card for the apps, which the model does not read", async () => {
+  const home = mkdtempSync(join(tmpdir(), "kyb-home-"));
+  const out = await run({ HOME: home, EVE_PUBLIC_URL: "https://agent.example.com" });
+  assert.equal(out.kyb.card, "file");
+  assert.deepEqual(out.kyb.data, { url: out.url, name: "report.md", size: 8, mediaType: "text/plain" });
+  assert.deepEqual(out.kyb.actions, [{ label: "Open", url: out.url, primary: true }]);
+  const model = deliver.toModelOutput(out);
+  assert.equal("kyb" in model.value, false);
+  assert.equal(model.value.url, out.url);
+});

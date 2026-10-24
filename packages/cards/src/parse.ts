@@ -4,8 +4,11 @@ import {
   type Card,
   type CardAction,
   type CardDataByType,
+  type ApprovalKind,
   type ChecklistState,
   type CheckState,
+  type FormField,
+  type FormFieldKind,
   type KnownCardType,
   type StatTile,
   type TableCell,
@@ -114,6 +117,14 @@ function actions(v: unknown): CardAction[] | undefined {
 }
 
 const CHECK: readonly ChecklistState[] = ["done", "waiting", "failed", "skipped"];
+const APPROVAL_KINDS: readonly ApprovalKind[] = ["email", "event", "message", "action"];
+const FIELD_KINDS: readonly FormFieldKind[] = ["text", "long", "number", "date", "email", "choice"];
+const FIELD_ID = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+
+function strings(v: unknown, max: number, len = 200): string[] | undefined {
+  const out = list(v, max).flatMap((s) => str(s, len) ?? []);
+  return out.length ? out : undefined;
+}
 
 /** Each type's data, or null when the card cannot be drawn as that type. */
 const DATA: { [T in KnownCardType]: (d: Obj) => CardDataByType[T] | null } = {
@@ -268,6 +279,60 @@ const DATA: { [T in KnownCardType]: (d: Obj) => CardDataByType[T] | null } = {
     if (!name || !schedule) return null;
     const posts = list(d.posts, 6).flatMap((p) => str(p, 80) ?? []);
     return { name, schedule, nextRun: str(d.nextRun, 40), posts: posts.length ? posts : undefined };
+  },
+  approval(d) {
+    const kind = APPROVAL_KINDS.includes(d.kind as ApprovalKind) ? (d.kind as ApprovalKind) : "action";
+    const tool = str(d.tool, 200);
+    const action = str(d.action, 80);
+    if (!tool || !action) return null;
+    const fields = list(d.fields, 10).flatMap((f) => {
+      if (!isObj(f)) return [];
+      const label = str(f.label, 60);
+      const value = str(f.value);
+      return label && value ? [{ label, value }] : [];
+    });
+    return {
+      kind,
+      tool,
+      action,
+      service: str(d.service, 60),
+      to: strings(d.to, 20),
+      cc: strings(d.cc, 20),
+      subject: str(d.subject, 300),
+      body: str(d.body, LIMITS.text),
+      when: str(d.when, 80),
+      until: str(d.until, 80),
+      where: str(d.where, 200),
+      people: strings(d.people, 30),
+      channel: str(d.channel, 120),
+      fields: fields.length ? fields : undefined,
+    };
+  },
+  form(d) {
+    const seen = new Set<string>();
+    const fields = list(d.fields, 12).flatMap((f): FormField[] => {
+      if (!isObj(f)) return [];
+      const id = str(f.id, 40);
+      const label = str(f.label, 120);
+      if (!id || !label || !FIELD_ID.test(id) || seen.has(id)) return [];
+      seen.add(id);
+      let kind = FIELD_KINDS.includes(f.kind as FormFieldKind) ? (f.kind as FormFieldKind) : "text";
+      const options = strings(f.options, 20, 120);
+      // A choice with nothing to choose is a text box.
+      if (kind === "choice" && !options) kind = "text";
+      return [
+        {
+          id,
+          label,
+          kind,
+          options: kind === "choice" ? options : undefined,
+          required: f.required === true ? true : undefined,
+          placeholder: str(f.placeholder, 120),
+          value: str(f.value, 1000),
+        },
+      ];
+    });
+    return fields.length ? { fields, submit: str(d.submit, 40) } : null;
   },
 };
 

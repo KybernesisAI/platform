@@ -2,7 +2,7 @@
   "name": "computer",
   "type": "registry:item",
   "title": "Kybernesis Computer",
-  "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, and the connector-first rule for when the agent uses it.",
+  "description": "The agent's own persistent computer: a Docker desktop with Chrome a person can watch and take over, a computer tool whose every result carries the screenshot as an image, show_screen to put the screen in front of the person as a private picture, and the connector-first rule for when the agent uses it.",
   "dependencies": [
     "@kybernesis/computer"
   ],
@@ -40,6 +40,12 @@
       "type": "registry:file",
       "target": "agent/instructions/computer.ts",
       "content": "import { defineInstructions } from \"eve/instructions\";\nimport { COMPUTER_INSTRUCTIONS } from \"@kybernesis/computer\";\n\n// The \"which surface\" rule: connected app, then a tool, then the agent's\n// browser, then the person's machine. One source for every agent.\nexport default defineInstructions({ content: COMPUTER_INSTRUCTIONS });\n"
+    },
+    {
+      "path": "registry/computer-show-screen.ts",
+      "type": "registry:file",
+      "target": "agent/tools/show_screen.ts",
+      "content": "import { showScreenTool } from \"@kybernesis/computer\";\n\n// Show the person the computer's screen as a picture in their app. The image\n// stays on this agent, served only to the person it was taken for.\nexport default showScreenTool();\n"
     }
   ]
 }

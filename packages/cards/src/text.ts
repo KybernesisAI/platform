@@ -100,6 +100,23 @@ function body(card: KnownCard): string[] {
       const d = card.data;
       return [`${d.schedule}${d.posts?.length ? ` · posts to ${d.posts.join(", ")}` : ""}`];
     }
+    case "approval": {
+      const d = card.data;
+      const short = (t: string) => (t.length > 280 ? `${t.slice(0, 279)}…` : t);
+      return [
+        ...(d.to?.length ? [`To: ${d.to.join(", ")}`] : []),
+        ...(d.cc?.length ? [`Cc: ${d.cc.join(", ")}`] : []),
+        ...(d.channel ? [`In: ${d.channel}`] : []),
+        ...(d.subject ? [d.kind === "email" ? `Subject: ${d.subject}` : d.subject] : []),
+        ...(d.when ? [`When: ${d.when}${d.until ? ` to ${d.until}` : ""}`] : []),
+        ...(d.where ? [`Where: ${d.where}`] : []),
+        ...(d.people?.length ? [`With: ${d.people.join(", ")}`] : []),
+        ...(d.body ? [short(d.body)] : []),
+        ...(d.fields ?? []).map((f) => `${f.label}: ${f.value}`),
+      ];
+    }
+    case "form":
+      return card.data.fields.map((f, i) => `${i + 1}. ${f.label}${f.kind === "choice" && f.options ? ` (${f.options.join(" / ")})` : ""}`);
   }
 }
 
@@ -122,6 +139,8 @@ export function cardTitle(card: Card): string | undefined {
       return `Routine: ${card.data.name}`;
     case "remembered":
       return undefined;
+    case "approval":
+      return card.data.service ? `${card.data.action} · ${card.data.service}` : card.data.action;
     default:
       return undefined;
   }

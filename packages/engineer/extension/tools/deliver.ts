@@ -1,3 +1,4 @@
+import { card, withCards } from "@kybernesis/cards";
 import { defineTool } from "eve/tools";
 import { put } from "@vercel/blob";
 import { z } from "zod";
@@ -96,7 +97,14 @@ export default defineTool({
       url = `${hostBase!.replace(/\/$/, "")}/${id}/${encodeURIComponent(name)}`;
     }
 
-    return {
+    // The file as a card in KYBER Studio and the phone. The reply still carries
+    // the URL, because text-only channels never see tool results.
+    const file = card(
+      "file",
+      { url, name, size: bytes.byteLength, mediaType: contentType.split(";")[0] },
+      { actions: [{ label: "Open", url, primary: true }] },
+    );
+    return withCards({
       url,
       filename: name,
       byteSize: bytes.byteLength,
@@ -105,7 +113,12 @@ export default defineTool({
           ? "Share this URL with the user. Text formats render inline; HTML is served as a DOWNLOAD by Vercel Blob (it will not render in a browser) — to show someone a web page, deploy it or use a preview host instead. It is public to anyone with the link. "
           : "Share this URL with the user. Text formats, images, PDF and HTML open in the browser; other files download. Anyone with the link can open it. ") +
         "IMPORTANT: post the URL as PLAIN TEXT on its own line. Never wrap it in bold, italics, backticks, angle-bracket labels, or trailing punctuation — formatting characters get glued onto the URL in chat clients and BREAK the link.",
-    };
+    }, file);
+  },
+  // The model reads the delivery without the card data.
+  toModelOutput: (output) => {
+    const { kyb: _card, ...rest } = output as Record<string, unknown>;
+    return { type: "json", value: rest };
   },
 });
 

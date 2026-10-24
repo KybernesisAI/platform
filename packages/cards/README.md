@@ -57,4 +57,14 @@ cardsOf(state.steps.values());      // the cards, newest version of each
 
 A step's line is eve's own activity label when the tool defines `label` (eve 0.81), otherwise a readable form of the tool name.
 
+Some cards come from tools that are not ours to change. `readStep` makes them from the call's input and result: a memory save becomes a `remembered` card (with Correct it and Forget it), and a pull request a GitHub connector opened becomes a `pull-request` card. `derivedCards(tool, input, output)` is the same thing for one call.
+
+## Approvals and forms
+
+An approval is eve's own question, so its card is built by the client from the waiting call: `approvalCard(toolName, input)` reads an email (to, cc, subject, body), a calendar event (title, time, place, people), a message, or any other action as a few readable fields, and never shows a field that looks like a secret.
+
+A form asks for several things at once. A tool passes `formPrompt(fields, sentence)` to `ctx.ask`; a client draws the fields and answers with `formAnswer(values)`; the tool reads it back with `readFormAnswer(answer.text)`, which gives `{ values }`, or `{ text }` when someone on a text channel answered in their own words.
+
+`describeCron(cron)` and `nextCronRun(cron)` put a routine's schedule in words and say when it next runs.
+
 No dependencies. Works in Node, a browser and React Native.
