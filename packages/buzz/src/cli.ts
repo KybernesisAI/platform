@@ -241,6 +241,7 @@ function run(): void {
     ...(process.env.BUZZ_AGENT_WORK_TIMEOUT_MS
       ? { agentWorkTimeoutMs: Number(process.env.BUZZ_AGENT_WORK_TIMEOUT_MS) }
       : {}),
+    ...(process.env.BUZZ_CARDS === "off" ? { cards: false } : {}),
     ...(process.env.BUZZ_AGENT_SILENCE_TIMEOUT_MS
       ? { agentSilenceTimeoutMs: Number(process.env.BUZZ_AGENT_SILENCE_TIMEOUT_MS) }
       : {}),
@@ -439,6 +440,7 @@ else if (command === "id") {
     BUZZ_SESSIONS_FILE             channel-to-session continuity store
     BUZZ_AGENT_SILENCE_TIMEOUT_MS   maximum silence before a turn is acknowledged (default 300000ms)
     BUZZ_AGENT_WORK_TIMEOUT_MS      ceiling on a turn once acknowledged (default 3600000ms)
+    BUZZ_CARDS=off                  post replies without the cards tools handed back
     BUZZ_PROFILE_SYNC_MS           how often the profile is re-checked against the name and
                                    picture its owner set (default 900000ms, fifteen
                                    minutes; 0 turns it off)

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@kybernesis/cards": ["../../cards/src/index.ts"],
+      "@kybernesis/cards-react": ["../../cards-react/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

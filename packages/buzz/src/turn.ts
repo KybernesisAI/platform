@@ -8,6 +8,7 @@ import {
   type MessageStreamEvent,
   type SendTurnInput,
  type CreatedClientSession } from "eve/client";
+import { cardsOf, newStepState, readStep, type Card } from "@kybernesis/cards";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
 import { SessionStore } from "./sessions.js";
 
@@ -105,6 +106,8 @@ export interface TurnOutcome {
   streamIndex: number;
   /** Failures seen on the stream, in order. Empty on a clean turn. */
   failures: readonly TurnFailure[];
+  /** Cards the turn's tools handed back, read the way the apps read them. */
+  cards: readonly Card[];
 }
 
 const clip = (text: unknown, max = 200): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -291,6 +294,7 @@ async function collectResponse(
   let status: MessageResult["status"] = "completed";
   let inputRequests: InputRequest[] = [];
   let failures: TurnFailure[] = [];
+  let steps = newStepState();
   let sawTurnStart = false;
   let endedAtOwnBoundary = false;
   let staleBoundaryFirst = false;
@@ -321,8 +325,10 @@ async function collectResponse(
       status = "completed";
       inputRequests = [];
       failures = [];
+      steps = newStepState();
       return false;
     }
+    readStep(steps, event.type, event.data);
     const failure = failureFromEvent(event as { type: string; data?: unknown });
     if (failure) failures.push(failure);
     if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
@@ -372,6 +378,7 @@ async function collectResponse(
       sessionId: response.sessionId,
       streamIndex: streamIndex(),
       failures,
+      cards: cardsOf(steps.steps.values()),
     };
   } finally {
     watchdog.dispose();

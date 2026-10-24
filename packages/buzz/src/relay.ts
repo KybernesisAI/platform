@@ -456,10 +456,12 @@ export class BuzzRelay {
     return () => clearInterval(timer);
   }
 
-  reply(channel: string, text: string, replyTo?: NostrEvent): string | null {
+  /** `mention: false` threads under `replyTo` without notifying its author again, as a follow-up to a reply does. */
+  reply(channel: string, text: string, replyTo?: NostrEvent, options: { mention?: boolean } = {}): string | null {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
-      tags.push(["e", replyTo.id], ["p", replyTo.pubkey]);
+      tags.push(["e", replyTo.id]);
+      if (options.mention !== false) tags.push(["p", replyTo.pubkey]);
     }
     return this.publish({ kind: KIND_MESSAGE, tags, content: text });
   }

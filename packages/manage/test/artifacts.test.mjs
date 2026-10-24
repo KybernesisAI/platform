@@ -87,13 +87,93 @@ test("content is served as text that never runs, latest or by version", async ()
   assert.equal((await call(content, `/eve/v1/kyb/artifacts/${OTHER}/content`, { id: OTHER })).status, 404);
 });
 
-test("a refused caller gets the refusal", async () => {
+test("a refused caller gets the refusal, on every route but an open share link", async () => {
   const routes = artifactRoutes({ prefix: "/eve/v1/kyb", options: { dir: seed() }, identify: async () => new Response("no", { status: 401 }) });
-  for (const r of routes) assert.equal((await r.handler(new Request("http://x/"), { params: { id: DANA } })).status, 401);
+  const signedIn = routes.filter((r) => !(r.method === "GET" && r.path.endsWith("/shared/:token")));
+  assert.equal(signedIn.length, routes.length - 1);
+  for (const r of signedIn) assert.equal((await r.handler(new Request("http://x/"), { params: { id: DANA, token: "f".repeat(32) } })).status, 401);
 });
 
 test("no directory means no artifacts, not an error", async () => {
   const routes = artifactRoutes({ prefix: "/eve/v1/kyb", options: { dir: join(tmpdir(), "nope-artifacts-missing") }, identify: as("user_dana") });
   const body = await (await call(route(routes, "/eve/v1/kyb/artifacts"), "/eve/v1/kyb/artifacts")).json();
   assert.deepEqual(body, { ok: true, artifacts: [] });
+});
+
+const post = (r, body, params) =>
+  r.handler(new Request("http://x/", { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }), { params });
+
+test("the owner shares a version by link; the link opens without sign-in, sandboxed", async () => {
+  const dir = seed();
+  const sharesDir = mkdtempSync(join(tmpdir(), "shares-"));
+  const options = { dir, sharesDir, publicUrl: "https://agent.example/" };
+  const routes = artifactRoutes({ prefix: "/eve/v1/kyb", options, identify: as("user_dana") });
+  const share = route(routes, "/eve/v1/kyb/artifacts/:id/share");
+
+  const made = await (await post(share, { version: 1 }, { id: DANA })).json();
+  assert.equal(made.ok, true);
+  assert.equal(made.version, 1);
+  assert.match(made.url, /^https:\/\/agent\.example\/eve\/v1\/kyb\/artifacts\/shared\/[0-9a-f]{32}$/);
+  // The same version again is the same link.
+  assert.equal((await (await post(share, { version: 1 }, { id: DANA })).json()).url, made.url);
+  // Latest by default.
+  assert.equal((await (await post(share, undefined, { id: DANA })).json()).version, 2);
+
+  // Anyone holding the link, no identity at all.
+  const open = route(artifactRoutes({ prefix: "/eve/v1/kyb", options, identify: async () => new Response("no", { status: 401 }) }), "/eve/v1/kyb/artifacts/shared/:token");
+  const page = await call(open, "/", { token: made.token });
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), "<p>a v1</p>");
+  assert.equal(page.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.match(page.headers.get("content-security-policy"), /^sandbox allow-scripts;/);
+  assert.doesNotMatch(page.headers.get("content-security-policy"), /allow-same-origin/);
+  assert.equal((await call(open, "/", { token: "f".repeat(32) })).status, 404);
+  assert.equal((await call(open, "/", { token: "../x" })).status, 404);
+});
+
+test("only the owner can share, and only the person who shared can withdraw", async () => {
+  const dir = seed();
+  const sharesDir = mkdtempSync(join(tmpdir(), "shares-"));
+  const options = { dir, sharesDir, publicUrl: "https://agent.example" };
+  const other = artifactRoutes({ prefix: "/eve/v1/kyb", options, identify: as("user_other") });
+  assert.equal((await post(route(other, "/eve/v1/kyb/artifacts/:id/share"), {}, { id: DANA })).status, 404);
+
+  const dana = artifactRoutes({ prefix: "/eve/v1/kyb", options, identify: as("user_dana") });
+  const made = await (await post(route(dana, "/eve/v1/kyb/artifacts/:id/share"), {}, { id: DANA })).json();
+  const withdraw = (routes) => routes.find((r) => r.path === "/eve/v1/kyb/artifacts/shared/:token" && r.method === "DELETE");
+  assert.equal((await withdraw(other).handler(new Request("http://x/", { method: "DELETE" }), { params: { token: made.token } })).status, 404);
+
+  const listed = await (await call(route(dana, "/eve/v1/kyb/artifacts/:id/shares"), "/", { id: DANA })).json();
+  assert.deepEqual(listed.shares.map((s) => s.token), [made.token]);
+
+  assert.equal((await withdraw(dana).handler(new Request("http://x/", { method: "DELETE" }), { params: { token: made.token } })).status, 200);
+  const open = dana.find((r) => r.path === "/eve/v1/kyb/artifacts/shared/:token" && r.method === "GET");
+  assert.equal((await call(open, "/", { token: made.token })).status, 404);
+});
+
+test("a markdown artifact is shared as a readable page, its text escaped", async () => {
+  const dir = seed();
+  writeFileSync(join(dir, ROUTINE, "v1.md"), "# Notes\n<script>alert(1)</script>");
+  const sharesDir = mkdtempSync(join(tmpdir(), "shares-"));
+  const options = { dir, sharesDir, publicUrl: "https://agent.example" };
+  const routes = artifactRoutes({ prefix: "/eve/v1/kyb", options, identify: as("user_owner", "manage") });
+  const made = await (await post(route(routes, "/eve/v1/kyb/artifacts/:id/share"), {}, { id: ROUTINE })).json();
+  const open = routes.find((r) => r.path === "/eve/v1/kyb/artifacts/shared/:token" && r.method === "GET");
+  const html = await (await call(open, "/", { token: made.token })).text();
+  assert.match(html, /# Notes/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+});
+
+test("without a public address there is no link to make", async () => {
+  const dir = seed();
+  const saved = { EVE_PUBLIC_URL: process.env.EVE_PUBLIC_URL, EXE_VM_NAME: process.env.EXE_VM_NAME };
+  delete process.env.EVE_PUBLIC_URL;
+  delete process.env.EXE_VM_NAME;
+  try {
+    const routes = artifactRoutes({ prefix: "/eve/v1/kyb", options: { dir, sharesDir: mkdtempSync(join(tmpdir(), "shares-")) }, identify: as("user_dana") });
+    assert.equal((await post(route(routes, "/eve/v1/kyb/artifacts/:id/share"), {}, { id: DANA })).status, 409);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
+  }
 });

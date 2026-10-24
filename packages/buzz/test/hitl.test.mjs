@@ -112,6 +112,32 @@ test("the follower persists cursors and is the publisher for out-of-band resumed
   assert.equal(states.at(-1).speakerPublicKey, "speaker");
 });
 
+test("a resumed turn hands its cards to the room with its words", async () => {
+  const delivered = [];
+  const link = { kyb: 1, card: "link", data: { url: "https://example.com/report", title: "Report" } };
+  const session = fakeSession([
+    event("input.resolved", { resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }] }),
+    event("action.result", { status: "completed", result: { callId: "c9", toolName: "share_report", output: { kyb: link } } }),
+    event("message.completed", { finishReason: "stop", message: "Done.", sequence: 2, stepIndex: 1, turnId: "turn-1" }),
+    event("turn.completed", { sequence: 3, turnId: "turn-1" }),
+  ]);
+
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, pendingInputRequests: [request], speakerPublicKey: "speaker" },
+    {
+      onState: () => {},
+      onInputRequested: () => assert.fail("no second question"),
+      onMessage: (message, cards) => delivered.push({ message, cards }),
+    },
+    new AbortController().signal,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].message, "Done.");
+  assert.deepEqual(delivered[0].cards.map((c) => c.card), ["link"]);
+});
+
 test("the follower handles another HITL round and does not terminate at its waiting boundary", async () => {
   const second = { ...request, requestId: "request-2", prompt: "One more choice?" };
   const states = [];

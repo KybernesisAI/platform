@@ -256,6 +256,17 @@ test("a reply is anchored to the message it answers and addressed back to its au
   assert.deepEqual(message.tags, [["h", "channel-1"], ["e", "msg-1"], ["p", "a".repeat(64)]]);
 });
 
+test("a follow-up card threads under the same message without notifying its author twice", () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+
+  const asked = { id: "msg-1", pubkey: "a".repeat(64), created_at: 1, kind: 9, tags: [], content: "?", sig: "" };
+  relay.reply("channel-1", "a card", asked, { mention: false });
+
+  const message = socket.published(KIND_MESSAGE).at(-1);
+  assert.deepEqual(message.tags, [["h", "channel-1"], ["e", "msg-1"]]);
+});
+
 test("a reaction is signed, sent over HTTP, and binds the signature to the body", async () => {
   const { relay, socket } = connected();
   authenticate(socket);

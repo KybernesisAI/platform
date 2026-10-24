@@ -5,7 +5,7 @@ import {
   type InputResponse,
   type MessageStreamEvent,
 } from "eve/client";
-import { promptText } from "@kybernesis/cards";
+import { cardsOf, newStepState, promptText, readStep, type Card } from "@kybernesis/cards";
 import type { StoredSession } from "./sessions.js";
 
 /**
@@ -107,7 +107,8 @@ export interface PendingFollowerCallbacks {
   /** Persist the latest cursor and supervision state before publishing outward. */
   onState(state: Omit<StoredSession, "updated">): void | Promise<void>;
   onInputRequested(requests: readonly InputRequest[]): void | Promise<void>;
-  onMessage(message: string): void | Promise<void>;
+  /** The resumed turn's words, and the cards its tools handed back. */
+  onMessage(message: string, cards: readonly Card[]): void | Promise<void>;
   onLog?: (message: string) => void;
 }
 
@@ -152,6 +153,7 @@ export async function followPendingConversation(
   let state = { ...initial };
   let streamIndex = initial.streamIndex;
   let completedMessage = "";
+  let steps = newStepState();
 
   const persist = async () => {
     state = { ...state, streamIndex };
@@ -162,7 +164,8 @@ export async function followPendingConversation(
     // Do not persist past message.completed/turn.completed until publication
     // succeeds. If this callback throws or the process dies, recovery replays
     // the unpublished output from the last safe cursor.
-    if (completedMessage.trim()) await callbacks.onMessage(completedMessage);
+    const cards = cardsOf(steps.steps.values());
+    if (completedMessage.trim() || cards.length) await callbacks.onMessage(completedMessage, cards);
     state = withoutSupervision(state);
     await persist();
   };
@@ -178,10 +181,12 @@ export async function followPendingConversation(
     // closes; count yielded durable events so crash recovery can persist while
     // the follower is still open.
     streamIndex += 1;
+    readStep(steps, streamEvent.type, streamEvent.data);
 
     switch (streamEvent.type) {
       case "input.requested":
         completedMessage = "";
+        steps = newStepState();
         state = withPending(state, streamEvent.data.requests);
         // Keep the durable cursor before the prompt until Buzz accepts it for
         // relay delivery; a reconnect can then replay and render the request.
