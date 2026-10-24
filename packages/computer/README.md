@@ -15,6 +15,11 @@ type, scroll, keypress, launch a terminal) with one change — every result carr
 screenshot **as an image**. eve's own tool returns only a path and window text, and its
 `read_file` reads PNGs as text, so an agent on eve's tool alone is blind.
 
+`showScreenTool()` puts the screen in front of the person: a screenshot card in KYBER
+Studio and the phone. The image stays on the agent's host (`SCREENS_DIR`, default
+`~/.kybernesis/screens`) and `@kybernesis/manage` serves it only to the person it was taken
+for, at `/eve/v1/kyb/screens/<id>`.
+
 ## Install
 
 ```sh
@@ -70,7 +75,7 @@ Deployments extend the host list: `openBrowserTool({ connectorHosts: { ...CONNEC
 - `prepareComputer(sandbox)` / `startComputer(sandbox)` — the build-time and per-session steps
 - `bakeComputerImage({ prepare, log? })`, `bakedImageTag()`, `bakeKey()` — bake prepare into an image for new agents
 - `installChrome`, `installDesktopShell`, `startDesktopShell`, `openChromeCommand(url)`
-- `computerTool({ vision? })`, `openBrowserTool(options?)`, `closeTabsTool()`
+- `computerTool({ vision? })`, `showScreenTool({ dir? })`, `openBrowserTool(options?)`, `closeTabsTool()`
 - `COMPUTER_INSTRUCTIONS`, `CONNECTOR_HOSTS`, `decideBrowserUse`, `serviceForUrl`
 
 ## Baking the computer on a provisioning host

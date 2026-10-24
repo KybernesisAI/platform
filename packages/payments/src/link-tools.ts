@@ -1,3 +1,4 @@
+import { card, forModel, withCards, type Card } from "@kybernesis/cards";
 import { Link } from "@stripe/link-sdk";
 import { createLinkTools } from "@stripe/link-sdk/tools";
 import { defineTool, type ToolDefinition } from "eve/tools";
@@ -69,8 +70,52 @@ export function linkTool<N extends LinkToolName>(name: N, options: LinkCliAuthOp
     // reporting do not; Link's own approval step still gates every card.
     approval: name === "create_spend_request" ? always() : never(),
     async execute(input, ctx) {
-      const result = await tool.execute(input as never, ctx);
-      return sanitizeLinkOutput(result);
+      const result = sanitizeLinkOutput(await tool.execute(input as never, ctx));
+      if (name !== "create_report") return result;
+      const receipt = await receiptFor(input as { outcome?: string; spend_request_id?: string }, options).catch(() => null);
+      return receipt && result && typeof result === "object" ? withCards(result as Record<string, unknown>, receipt) : result;
     },
+    // A receipt card is for the person; the model reads the report and a note.
+    ...(name === "create_report" ? { toModelOutput: (output: unknown) => forModel(output) } : {}),
   }) as unknown as ToolDefinition<Record<string, unknown>, unknown>;
+}
+
+/**
+ * The receipt the person sees when a purchase is reported as a success: the
+ * merchant and the total, read back from the spend request in Link rather
+ * than from what the model wrote, and a link to the purchase in Link.
+ */
+async function receiptFor(report: { outcome?: string; spend_request_id?: string }, options: LinkCliAuthOptions): Promise<Card | null> {
+  if (report.outcome !== "success" || !report.spend_request_id) return null;
+  const request = await linkClient(options).spendRequests.retrieve(report.spend_request_id);
+  return receiptCard(request);
+}
+
+/** A receipt card from a spend request, or null when it lacks a merchant or a total. */
+export function receiptCard(request: {
+  id: string;
+  merchant_name?: string;
+  merchant_url?: string;
+  amount?: number;
+  currency?: string;
+  activity_url?: string;
+}): Card | null {
+  let merchant = request.merchant_name?.trim();
+  if (!merchant && request.merchant_url) {
+    try {
+      merchant = new URL(request.merchant_url).host;
+    } catch {
+      merchant = undefined;
+    }
+  }
+  if (!merchant || typeof request.amount !== "number" || !request.currency) return null;
+  return card(
+    "receipt",
+    { merchant, amount: request.amount, currency: request.currency.toUpperCase() },
+    {
+      id: `receipt-${request.id}`,
+      source: "Link",
+      actions: request.activity_url?.startsWith("https://") ? [{ label: "View in Link", url: request.activity_url }] : [],
+    },
+  );
 }

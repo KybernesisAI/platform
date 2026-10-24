@@ -2,7 +2,7 @@
   "name": "cards",
   "type": "registry:item",
   "title": "Kybernesis Cards",
-  "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data. Text channels get each card's plain text, so a reply still reads without it.",
+  "description": "Cards under a reply in KYBER Studio and the phone: key numbers, a chart, a table, a checklist, a short profile of a person or company, or a link, through a show tool the model calls once it has the data, and short forms through ask_form. Text channels get each card's plain text, so a reply still reads without it.",
   "dependencies": [
     "@kybernesis/cards",
     "zod"
@@ -19,6 +19,12 @@
       "type": "registry:file",
       "target": "agent/instructions/cards.md",
       "content": "# Cards\n\nWhen the answer is structured data, such as a few key numbers, a trend, rows, progress or a short profile of a person or company, show it with `show` once you have the data, and say in a sentence or two what matters about it. Don't repeat the card's contents in the reply.\n\nCards are drawn only in KYBER Studio and the phone app. On a text channel (Slack, Buzz, iMessage) write the answer in words.\n"
+    },
+    {
+      "path": "registry/cards-ask-form.ts",
+      "type": "registry:file",
+      "target": "agent/tools/ask_form.ts",
+      "content": "import { formPrompt, readFormAnswer } from \"@kybernesis/cards\";\nimport { defineWorkflowTool } from \"eve/tools\";\nimport { z } from \"zod\";\n\n// Ask the person for several things at once, as a form: KYBER Studio and the\n// phone draw the fields with a Send button, and a text channel shows the\n// sentence and numbered questions for the person to answer in their own words.\n// Runs as a task, so the question stays open through any other message the\n// person sends. Authored here because eve compiles \"use workflow\" from source.\nexport default defineWorkflowTool({\n  description:\n    \"Ask the person for several pieces of information at once, as a short form, when you need two or more answers before you can go on (details for a booking, the parts of a request). One question needs no form: ask it in your reply. Never ask for a password, a card number or a one-time code with this. The answers come back to you later in the conversation.\",\n  inputSchema: z.object({\n    title: z.string().max(80).optional().describe(\"A few words naming the form, e.g. Trip details\"),\n    sentence: z.string().max(300).describe(\"One sentence on why you are asking, shown above the fields\"),\n    fields: z\n      .array(\n        z.object({\n          id: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,39}$/).describe(\"A short key for the answer, e.g. arrival_date\"),\n          label: z.string().max(80),\n          kind: z.enum([\"text\", \"long\", \"number\", \"date\", \"email\", \"choice\"]),\n          options: z.array(z.string().max(80)).max(12).optional().describe(\"The choices, for kind choice\"),\n          required: z.boolean().optional(),\n          placeholder: z.string().max(80).optional(),\n        }),\n      )\n      .min(1)\n      .max(12),\n    submit: z.string().max(30).optional().describe(\"The button's label; defaults to Send\"),\n  }),\n  async task(input, ctx) {\n    \"use workflow\";\n    const answer = await ctx.ask({\n      prompt: formPrompt(input.fields, input.sentence, { title: input.title, submit: input.submit }),\n      allowFreeform: true,\n      options: [{ id: \"cancel\", label: \"Never mind\" }],\n    });\n    if (answer.status !== \"answered\" || answer.optionId === \"cancel\") {\n      return { answered: false, note: \"The person did not fill in the form. Do not ask again unless they bring it up.\" };\n    }\n    const read = readFormAnswer(answer.text ?? \"\");\n    return \"values\" in read\n      ? { answered: true, values: read.values }\n      : { answered: true, reply: read.text, note: \"They answered in their own words; read the values from the reply.\" };\n  },\n});\n"
     }
   ],
   "$schema": "https://ui.shadcn.com/schema/registry-item.json"

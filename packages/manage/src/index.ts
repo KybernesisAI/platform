@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
+import { card, describeCron, forModel, nextCronRun, withCards } from "@kybernesis/cards";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineSource } from "./routine-source.js";
 import { listSessions } from "./sessions.js";
@@ -10,6 +11,7 @@ import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
 import { memoryRoutes, type MemoryOptions } from "./memory.js";
 import { artifactRoutes, type ArtifactsOptions, type ArtifactViewer } from "./artifacts.js";
+import { screenRoutes, type ScreensOptions } from "./screens.js";
 import { fileRoutes, type FilesOptions } from "./files.js";
 
 /**
@@ -249,6 +251,13 @@ export interface ManageOptions {
    * agent without the package simply has none.
    */
   artifacts?: ArtifactsOptions | false;
+  /**
+   * Screenshots the agent showed someone (`show_screen`), under
+   * /eve/v1/kyb/screens/<id>. Each caller sees only the ones taken for them;
+   * one taken for nobody is shown to people who manage the agent. On by
+   * default; an agent without a computer simply has none.
+   */
+  screens?: ScreensOptions | false;
 }
 
 /**
@@ -434,6 +443,9 @@ export function manageChannel(options: ManageOptions = {}) {
       ...(options.artifacts === false
         ? []
         : artifactRoutes({ prefix: PREFIX, options: options.artifacts ?? {}, identify: (req) => identify(req, options) })),
+      ...(options.screens === false
+        ? []
+        : screenRoutes({ prefix: PREFIX, options: options.screens ?? {}, identify: (req) => identify(req, options) })),
       ...(options.memory === false
         ? []
         : memoryRoutes({ prefix: PREFIX, options: options.memory ?? {}, authorize: (req) => authorize(req, options, "manage") })),
@@ -831,16 +843,37 @@ export function routineTools(options: ManageOptions = {}) {
         );
 
         applyInBackground();
-        return {
-          created: true,
-          name: slug,
-          cron: input.cron,
-          file: `agent/schedules/${slug}.ts`,
-          note: options.restartCommand
-            ? "Written. It goes live in about a minute, when I reload — tell the user it is set and finish your reply now."
-            : "Written. It needs a rebuild and restart to take effect.",
-        };
+        // The card the person sees: the schedule in words, so they can catch a
+        // wrong cron at a glance, and the next run. Clients read it from the
+        // result; a tool passing `forModel` to `toModelOutput` keeps it out of
+        // the model's context.
+        const nextRun = nextCronRun(input.cron);
+        return withCards(
+          {
+            created: true,
+            name: slug,
+            cron: input.cron,
+            file: `agent/schedules/${slug}.ts`,
+            note: options.restartCommand
+              ? "Written. It goes live in about a minute, when I reload — tell the user it is set and finish your reply now."
+              : "Written. It needs a rebuild and restart to take effect.",
+          },
+          card(
+            "routine",
+            { name: input.name.trim().slice(0, 120) || slug, schedule: describeCron(input.cron), ...(nextRun ? { nextRun } : {}) },
+            {
+              id: `routine-${slug}`,
+              source: "Routine",
+              actions: [
+                { label: "Run it now", say: `Run the "${slug}" routine now, as if it were its scheduled time.`, primary: true },
+                { label: "Change it", say: `I'd like to change the "${slug}" routine. Ask me what to change.` },
+              ],
+            },
+          ),
+        );
       },
+      /** For the tool's `toModelOutput`: the model reads the result and a note, not the card. */
+      toModelOutput: (output: unknown) => forModel(output),
     },
 
     list_routines: {
@@ -899,6 +932,7 @@ export function routineTools(options: ManageOptions = {}) {
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export { artifactRoutes, artifactsDir, listVisible, visibleTo, type ArtifactsOptions, type ArtifactViewer } from "./artifacts.js";
+export { screenRoutes, screensDir, type ScreensOptions } from "./screens.js";
 export { memoryRoutes, memoryConfig, callMemory, contentOf, MEMORY_MCP_URL, type MemoryOptions } from "./memory.js";
 
 /** The name `eve add` needs: bare catalog names belong to the Kybernesis registry. */

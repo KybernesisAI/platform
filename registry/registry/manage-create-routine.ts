@@ -12,4 +12,6 @@ export default defineTool({
     instruction: z.string().describe("What to do each time, written to yourself with enough context to act on alone"),
   }),
   execute: (input) => routines.create_routine.execute(input),
+  // The person sees a routine card; the model reads the result without it.
+  toModelOutput: routines.create_routine.toModelOutput,
 });
