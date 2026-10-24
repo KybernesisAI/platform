@@ -99,7 +99,8 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
    is always the same, however many packages moved:
    `cd ~/platform && npm run release` (`scripts/release.mjs`: clean master,
    `npm ci`, build, eve-line check, then publishes every version npm lacks in
-   dependency order, tags each `eve-<line>`, and waits for its tarball; a
+   dependency order, tags each `eve-<line>`, then waits up to 10 minutes for
+   the tarballs and only warns about a slow one, never stops; a
    brand-new package is skipped unless signed in as kybernesis, so he reruns
    it under that account). `npm run release -- --dry-run` lists what would go.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
