@@ -38,6 +38,25 @@ const EVENT = /(create|update|add|insert|quick_add)_?(calendar_)?event$/;
 const MESSAGE = /(send|post)_?(chat_|channel_|slack_)?message$/;
 const SECRET = /pass(word)?|secret|token|api_?key|cvc|card_?number|credential/i;
 
+/**
+ * An event's end from its start and a length, for tools that take
+ * `event_duration_hour` / `event_duration_minutes` instead of an end time.
+ * Kept in the start's own form, so a wall-clock time stays one.
+ */
+function endFromDuration(o: Obj): string | undefined {
+  const start = when(pick(o, "start", "start_time", "startTime", "start_datetime"));
+  const hours = Number(pick(o, "event_duration_hour", "duration_hours") ?? 0);
+  const minutes = Number(pick(o, "event_duration_minutes", "duration_minutes") ?? 0);
+  const length = (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0);
+  if (!start || length <= 0) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(.*)$/.exec(start);
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, sec, zone] = m;
+  const t = new Date(Date.UTC(+y!, +mo! - 1, +d!, +h!, +mi! + length, +(sec ?? 0)));
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}${sec !== undefined ? `:${p(t.getUTCSeconds())}` : ""}${zone ?? ""}`;
+}
+
 function readable(v: unknown): string | undefined {
   if (typeof v === "string") return text(v);
   if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -90,7 +109,7 @@ export function approvalCard(tool: string, input: unknown, id?: string): Card | 
       action: /update/.test(name) ? "Change event" : "Create event",
       subject: text(pick(o, "summary", "title", "name", "text")),
       when: when(pick(o, "start", "start_time", "startTime", "start_datetime", "when")),
-      until: when(pick(o, "end", "end_time", "endTime", "end_datetime")),
+      until: when(pick(o, "end", "end_time", "endTime", "end_datetime")) ?? endFromDuration(o),
       where: text(pick(o, "location", "where")),
       people: list(pick(o, "attendees", "guests", "invitees")),
       body: text(pick(o, "description")),

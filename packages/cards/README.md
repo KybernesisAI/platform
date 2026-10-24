@@ -65,6 +65,6 @@ An approval is eve's own question, so its card is built by the client from the w
 
 A form asks for several things at once. A tool passes `formPrompt(fields, sentence)` to `ctx.ask`; a client draws the fields and answers with `formAnswer(values)`; the tool reads it back with `readFormAnswer(answer.text)`, which gives `{ values }`, or `{ text }` when someone on a text channel answered in their own words.
 
-`describeCron(cron)` and `nextCronRun(cron)` put a routine's schedule in words and say when it next runs.
+`describeCron(cron)` and `nextCronRun(cron)` put a routine's schedule in words and say when it next runs. Cron runs in the host's time, and agent hosts run on UTC, so a routine card also carries its `cron` and the host's `offset`; `routineSchedule(data)` says the schedule in the reader's own time zone ("Weekdays at 8:40 AM" in Bangkok for `40 1 * * 1-5`).
 
 No dependencies. Works in Node, a browser and React Native.

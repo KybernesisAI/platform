@@ -860,7 +860,14 @@ export function routineTools(options: ManageOptions = {}) {
           },
           card(
             "routine",
-            { name: input.name.trim().slice(0, 120) || slug, schedule: describeCron(input.cron), ...(nextRun ? { nextRun } : {}) },
+            {
+              name: input.name.trim().slice(0, 120) || slug,
+              schedule: describeCron(input.cron),
+              ...(nextRun ? { nextRun } : {}),
+              // The cron runs in host time; with it and the host's offset the apps say it in the reader's zone.
+              cron: input.cron.trim(),
+              offset: -new Date(nextRun ?? Date.now()).getTimezoneOffset(),
+            },
             {
               id: `routine-${slug}`,
               source: "Routine",

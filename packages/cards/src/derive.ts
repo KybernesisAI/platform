@@ -45,7 +45,7 @@ export function outputObject(output: unknown): Obj | undefined {
 }
 
 const REMEMBER = /(^|_)(remember|add_memory)$/;
-const PULL_REQUEST = /(^|_)(create|open)_(pull_request|pr)$/;
+const PULL_REQUEST = /(^|_)(create|open)_(a_)?(pull_request|pr)$/;
 const PR_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/;
 
 /** What a memory save stored, as a remembered card. */
@@ -67,9 +67,27 @@ function remembered(input: unknown): Card | null {
   );
 }
 
+/**
+ * The API object inside a connector's answer.
+ *
+ * A broker wraps what GitHub returned: `{ data: {...}, successful }`, sometimes
+ * one level deeper under `response_data`. The pull request is the first level
+ * that has its address.
+ */
+function unwrapped(output: unknown): Obj | undefined {
+  let o = outputObject(output);
+  for (let i = 0; o && i < 3; i++) {
+    if (text(o.html_url) ?? text(o.url)) return o;
+    const inner = isObj(o.data) ? o.data : isObj(o.response_data) ? o.response_data : typeof o.data === "string" ? outputObject(o.data) : undefined;
+    if (!inner) return o;
+    o = inner;
+  }
+  return o;
+}
+
 /** A pull request a connector opened, from the API object it returned. */
 function pullRequest(input: unknown, output: unknown): Card | null {
-  const pr = outputObject(output);
+  const pr = unwrapped(output);
   if (!pr) return null;
   const url = text(pr.html_url) ?? text(pr.url);
   const m = url ? PR_URL.exec(url) : null;
