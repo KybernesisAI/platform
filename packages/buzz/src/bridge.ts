@@ -24,6 +24,7 @@ import {
   resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
+  resumeFailedReply,
   resumeStalledReply,
   STALE_ANSWER_REPLY,
 } from "./hitl.js";
@@ -402,6 +403,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           if (message.trim()) log(`posted resumed reply in ${channel.slice(0, 8)} (${message.length} chars)`);
           await postCards(relay, channel, cards, stored.speakerPublicKey!);
         }),
+        onFailed: (failures) => serialize(community, channel, async () => {
+          if (followers.get(conversation) !== controller) return;
+          const current = sessions.get(community, channel);
+          if (current?.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
+          if (!relay.reply(channel, resumeFailedReply(failures))) throw new Error("Buzz relay is not connected");
+          log(`resumed turn failed in ${channel.slice(0, 8)} (${describeSilentTurn(failures)}); told the room`);
+        }),
         onLog: log,
       },
       controller.signal,
@@ -546,7 +554,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           const session = clientFor(event.pubkey).sessions.attach(pending.id, {
             streamIndex: pending.streamIndex,
           });
-          await respondToPendingConversation(session, responses, from, channel);
+          await respondToPendingConversation(session, responses);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
           /**
            * The answer is in, so this conversation is no longer waiting on a
