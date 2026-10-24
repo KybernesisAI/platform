@@ -11,9 +11,12 @@ details and a link.
 
 ## Install
 
-Settings → Plugins → Manage plugins → Load from folder, choose `release/`, then enable
-**Kybernesis cards**. `release/` is committed so the folder, or this repository, installs without
-a build.
+Settings → Plugins → Manage plugins, enter `KybernesisAI/platform` (Buzz reads it over HTTPS, no
+sign-in), pick **Kybernesis cards**, and install. A folder works too: Load from folder and choose
+`release/`. `release/` is committed so either way installs without a build.
+
+`release/` also carries `README.md` and `icon.png` from `assets/`, which Buzz shows on its Plugins
+screen.
 
 ## Build
 
@@ -26,3 +29,17 @@ npm run build                                           # tsc, then release/plug
 Buzz lends its own React (`ctx.react`); the build points `react` and `react/jsx-runtime` at
 `src/react.ts` and `src/jsx-runtime.ts`, which bind to it in `apply`. The build refuses any output
 that is not one self-contained module.
+
+## Sign
+
+A signed release names its publisher in Buzz, and only that publisher can ship updates to it.
+After `npm run build` (which empties `release/`, so an old signature never outlives its build),
+sign the folder and commit the two files it writes:
+
+```sh
+buzzodz plugin sign release   # writes plugin.artifact.json + plugin.signature.json
+```
+
+`buzzodz plugin sign` signs with the Buzz identity saved on that computer. Every later release must
+be signed by the same publisher; changing publisher means everyone removes and reinstalls.
+
