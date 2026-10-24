@@ -65,7 +65,7 @@ const THEME = `
   --kyb-ink: var(--text-color-primary, #16181d);
   --kyb-ink-secondary: var(--text-color-secondary, #5c6270);
   --kyb-ink-tertiary: var(--text-color-tertiary, #8b91a0);
-  --kyb-ink-inverse: var(--surface-base, #ffffff);
+  --kyb-ink-inverse: var(--text-color-inverse, #ffffff);
   --kyb-surface: var(--surface-base, #ffffff);
   --kyb-surface-raised: var(--surface-popover, #ffffff);
   --kyb-stroke: var(--border-color-standard, rgba(22, 24, 29, 0.09));
@@ -79,10 +79,17 @@ const THEME = `
   max-width: 640px;
 }
 .kyb-buzz .kcards { margin-top: 2px; }
+/* The message list restyles buttons; the primary one keeps its own colours. */
+.kyb-buzz .kbtn--primary {
+  background: var(--surface-inverse, #16181d) !important;
+  color: var(--text-color-inverse, #ffffff) !important;
+}
+/* The card shows the page itself: the host's address bar and its buttons stay hidden. */
+.kyb-buzz__page [role="toolbar"][aria-label="Browser controls"] { display: none !important; }
 .kyb-buzz__page {
   display: flex;
   flex-direction: column;
-  height: 420px;
+  height: 460px;
   border: 1px solid var(--kyb-stroke);
   border-radius: 8px;
   overflow: hidden;

@@ -33,7 +33,7 @@ export function forModel(output: { artifactId: string; version: number; title: s
     type: "text" as const,
     value:
       `${verb} artifact "${output.title}" (id ${output.artifactId}, version ${output.version}). ` +
-      "The person sees it as a card in KYBER Studio and the phone app, so do not paste its content into your reply. " +
+      "The person sees it as a card in KYBER Studio, the phone app and Buzz, so do not paste its content into your reply. " +
       "Say in a sentence or two what it shows. On a channel without cards, tell them it is under this agent's Artifacts in KYBER Studio.",
   };
 }
