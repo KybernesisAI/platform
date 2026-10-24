@@ -109,6 +109,10 @@ bridge accepts a hidden answer only as a direct reply to a prompt it posted, onl
 still open, and only with that request's own options. Replies inside a thread count, whichever
 `e` tag names the prompt. A vault request never takes a secret in the channel.
 
+If the work an answer restarts fails (a model refusing the continuation, say), the bridge says so
+in the channel with the stream's own error, rather than leaving the person who answered with
+silence. A declined call is the person's choice and is not reported as a failure.
+
 ## Configuration
 
 | Variable | Meaning |
