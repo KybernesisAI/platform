@@ -166,6 +166,7 @@ test("chips name what a tool touches", () => {
   assert.equal(chipFor("posthog_query_insights"), "PostHog");
   assert.equal(chipFor("github__create_pull_request"), "GitHub");
   assert.equal(chipFor("googlecalendar_events_list"), "Google Calendar");
+  assert.equal(chipFor("connect_service"), "Connectors");
   assert.equal(chipFor("create_routine"), "Routines");
   assert.equal(chipFor("create_report"), "Payments");
   assert.equal(chipFor("ask_form"), "Form");
