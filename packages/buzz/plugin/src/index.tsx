@@ -76,7 +76,10 @@ const THEME = `
   --kyb-bad: var(--text-color-danger, #dc2626);
   --kyb-font-label: var(--font-mono, ui-monospace, monospace);
   --kyb-font-mono: var(--font-mono, ui-monospace, monospace);
-  max-width: 640px;
+  /* A message sizes to its content; a card is one width, like Buzz's own wide blocks. */
+  width: 640px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .kyb-buzz .kcards { margin-top: 2px; }
 /* The message list restyles buttons; the primary one keeps its own colours. */
