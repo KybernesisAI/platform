@@ -125,15 +125,39 @@ export function profileFromFace(face: Face, pictureUrl: string | null): Profile 
   };
 }
 
+/** A relay's own HTTP origin, where its media store answers. */
+function originOf(relay: string): string {
+  return relay.replace(/^wss:/, "https:").replace(/^ws:/, "http:").replace(/\/+$/, "");
+}
+
+/** The hash a community media URL addresses (`…/media/<sha256>[.ext]`), or null for any other URL. */
+export function relayMediaHash(url: string): string | null {
+  try {
+    return /^\/media\/([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?$/.exec(new URL(url).pathname)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a URL is this community's own copy of the blob with this hash. */
+function heldBy(relay: string, url: string | undefined, sha256: string): boolean {
+  return Boolean(url?.startsWith(`${originOf(relay)}/media/`) && relayMediaHash(url) === sha256);
+}
+
 /**
  * Bring this agent's profile in every community in line with its face.
  *
  * @remarks
  * Each community is read first; only one whose copy differs is written, so running this on a
- * timer costs one read per community when nothing has changed. A picture is uploaded at most
- * once per change, to the first community that takes it, and that address is used everywhere,
- * the way `kybernesis-buzz profile --picture` always has. Fields the face does not decide are
- * kept. A community that refuses or cannot be reached is reported, not fatal.
+ * timer costs one read per community when nothing has changed. Fields the face does not decide
+ * are kept. A community that refuses or cannot be reached is reported, not fatal.
+ *
+ * Every community gets its OWN copy of the picture. A community's media store refuses
+ * anonymous reads, so the Buzz app loads a picture through the session of the community it is
+ * showing, and only when the address is that community's. An address on another community is
+ * fetched anonymously and refused, and the agent shows no face there: that is how an agent in
+ * two communities lost its picture in one of them when the app changed. So the picture is
+ * uploaded to each community that does not already hold it, and each profile points at its own.
  */
 export async function syncProfile(options: {
   face: Face;
@@ -142,11 +166,19 @@ export async function syncProfile(options: {
   read?: typeof profile.read;
   write?: typeof profile.write;
   upload?: typeof profile.uploadImage;
+  /** Reads a picture held in one community's media store, to copy it to another. */
+  fetchBlob?: (url: string, sha256: string) => Promise<{ bytes: Uint8Array; mediaType: string }>;
 }): Promise<SyncOutcome[]> {
   const read = options.read ?? profile.read;
   const write = options.write ?? profile.write;
   const upload = options.upload ?? profile.uploadImage;
   const { face, key } = options;
+  const fetchBlob =
+    options.fetchBlob ??
+    (async (url: string, sha256: string) => {
+      const { fetchMedia } = await import("./media.js");
+      return fetchMedia(key, { url, sha256 });
+    });
 
   const current = new Map<string, Profile | null>();
   const outcomes = new Map<string, SyncOutcome>();
@@ -159,30 +191,45 @@ export async function syncProfile(options: {
     }
   }
 
-  // Where the picture lives. Null leaves each community's picture as it is.
-  let pictureUrl: string | null = null;
+  // What the picture is. An ordinary https address is used as it is, everywhere. A data URL,
+  // or a picture already in some community's media store, is copied into each community.
+  let external: string | null = null;
+  let sha256: string | null = null;
+  let source: string | null = null;
+  let bytes: { bytes: Uint8Array; mediaType: string } | null = null;
   let pictureProblem: string | null = null;
-  if (face.picture && /^https:\/\//.test(face.picture)) {
-    pictureUrl = face.picture;
-  } else if (face.picture) {
+  if (face.picture?.startsWith("data:")) {
     const picture = await pictureBytes(face.picture);
-    if (!picture) {
-      pictureProblem = "the picture is not an image this can send";
+    if (picture) {
+      sha256 = picture.sha256;
+      bytes = picture;
     } else {
-      pictureUrl = [...current.values()].map((p) => p?.picture).find((url) => url?.includes(picture.sha256)) ?? null;
-      for (const relay of current.keys()) {
-        if (pictureUrl) break;
-        try {
-          pictureUrl = await upload(relay, key, picture.bytes, picture.mediaType);
-        } catch (error) {
-          pictureProblem = (error as Error).message;
-        }
-      }
+      pictureProblem = "the picture is not an image this can send";
+    }
+  } else if (face.picture && /^https:\/\//.test(face.picture)) {
+    sha256 = relayMediaHash(face.picture);
+    if (sha256) source = face.picture;
+    else external = face.picture;
+  }
+
+  /** Where this community's copy of the picture lives; null leaves its picture as it is. */
+  async function pictureFor(relay: string): Promise<{ url: string | null; problem: string | null }> {
+    if (external) return { url: external, problem: null };
+    if (!sha256) return { url: null, problem: pictureProblem };
+    const existing = current.get(relay)?.picture;
+    if (heldBy(relay, existing, sha256)) return { url: existing!, problem: null };
+    if (source && heldBy(relay, source, sha256)) return { url: source, problem: null };
+    try {
+      bytes ??= await fetchBlob(source!, sha256);
+      return { url: await upload(relay, key, bytes.bytes, bytes.mediaType), problem: null };
+    } catch (error) {
+      return { url: null, problem: (error as Error).message };
     }
   }
 
-  const wanted = profileFromFace(face, pictureUrl);
   for (const [relay, existing] of current) {
+    const picture = await pictureFor(relay);
+    const wanted = profileFromFace(face, picture.url);
     const matches = existing && (Object.keys(wanted) as Array<keyof Profile>).every((field) => existing[field] === wanted[field]);
     if (matches) {
       outcomes.set(relay, { relay, outcome: "unchanged" });
@@ -190,7 +237,7 @@ export async function syncProfile(options: {
     }
     try {
       await write(relay, key, { ...(existing ?? {}), ...wanted });
-      outcomes.set(relay, { relay, outcome: "updated", ...(pictureProblem ? { detail: `picture not sent: ${pictureProblem}` } : {}) });
+      outcomes.set(relay, { relay, outcome: "updated", ...(picture.problem ? { detail: `picture not sent: ${picture.problem}` } : {}) });
     } catch (error) {
       const why = (error as Error).message;
       outcomes.set(relay, { relay, outcome: why.includes("not a relay member") ? "not-member" : "failed", detail: why });

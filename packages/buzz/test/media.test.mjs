@@ -63,6 +63,11 @@ test("media is fetched with signed authorization, because an anonymous GET is re
   const media = await fetchMedia(key, { url: "https://relay.example/abc" }, fetchImpl);
   assert.equal(media.mediaType, "image/png");
   assert.ok(seen.auth?.startsWith("Nostr "), "the request must carry the agent's own signature");
+  // NIP-FI strict Blossom: a proof names its server and lives at most a minute.
+  const proof = JSON.parse(Buffer.from(seen.auth.slice("Nostr ".length), "base64url").toString("utf8"));
+  const tags = Object.fromEntries(proof.tags);
+  assert.equal(tags.server, "relay.example");
+  assert.ok(Number(tags.expiration) - proof.created_at <= 60);
 });
 
 test("the server's content type wins over the sender's claim", async () => {

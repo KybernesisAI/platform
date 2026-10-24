@@ -391,7 +391,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     const answersPrompt = Boolean(
       repliedTo && open?.pendingInputRequests?.length && open.promptEventIds?.includes(repliedTo),
     );
-    if (!channel || !(addressed || answersPrompt)) return;
+    // In a one-to-one DM every message is to the agent, mention or not, as with Buzz's own
+    // agents. Not one written by another agent (it carries its owner's `auth` attestation):
+    // two agents in a DM would otherwise answer each other forever.
+    const direct = Boolean(
+      channel && relay.isDirect(channel) && !event.tags.some((t) => t[0] === "auth"),
+    );
+    if (!channel || !(addressed || answersPrompt || direct)) return;
 
     const text = String(event.content ?? "").trim();
     const attachments = parseMedia(event);

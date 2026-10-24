@@ -163,9 +163,11 @@ async function setProfile(): Promise<void> {
     process.exit(1);
   }
 
-  // A local file is uploaded to the community and becomes a URL; a URL is used
-  // as given. Nobody should need storage of their own to give an agent a face.
+  // A local file is uploaded to each community and becomes that community's URL; a URL is
+  // used as given. Each community needs its own copy: the Buzz app loads a community's media
+  // only through that community, so another community's address shows no picture at all.
   let picture = flag("picture");
+  const pictures = new Map<string, string>();
   if (picture && !/^https?:\/\//.test(picture)) {
     const path = picture.startsWith("~/")
       ? join(homedir(), picture.slice(2))
@@ -175,21 +177,19 @@ async function setProfile(): Promise<void> {
       process.exit(1);
     }
     const bytes = readFileSync(path);
-    let uploaded: string | undefined;
     for (const url of urls) {
       try {
-        uploaded = await profile.uploadImage(url, key, bytes, profile.mediaTypeOf(path));
+        pictures.set(url, await profile.uploadImage(url, key, bytes, profile.mediaTypeOf(path)));
         console.log(`  uploaded ${path.split("/").pop()} to ${url}`);
-        break;
       } catch (error) {
         console.log(`  · ${url} — ${(error as Error).message}`);
       }
     }
-    if (!uploaded) {
+    if (pictures.size === 0) {
       console.error("\n  Could not upload the image to any community.\n");
       process.exit(1);
     }
-    picture = uploaded;
+    picture = undefined;
   }
 
   const wanted: profile.Profile = {
@@ -207,7 +207,9 @@ async function setProfile(): Promise<void> {
   let published = 0;
   for (const url of urls) {
     try {
-      await profile.write(url, key, wanted);
+      // A community that refused the upload still gets a picture, if not one it can show.
+      const own = pictures.get(url) ?? pictures.values().next().value;
+      await profile.write(url, key, own ? { ...wanted, picture: own } : wanted);
       console.log(`  ✓ ${url}`);
       published += 1;
     } catch (error) {

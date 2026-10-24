@@ -62,10 +62,10 @@ test("no source at all is an error, not an empty profile", async () => {
   await assert.rejects(resolveFace({ name: null, issuer: "https://cp.example", credential: "cred", fetch: impl }), /404/);
 });
 
-test("a data URL picture is uploaded once, used everywhere, and the name lands with it", async () => {
+test("a data URL picture is uploaded to each community, and each profile points at its own copy", async () => {
   const stored = {
-    "wss://a": { name: "planner", display_name: "planner", lud16: "x@example.com" },
-    "wss://b": null,
+    "wss://a.example": { name: "planner", display_name: "planner", lud16: "x@example.com" },
+    "wss://b.example": null,
   };
   const uploads = [];
   const writes = [];
@@ -77,27 +77,27 @@ test("a data URL picture is uploaded once, used everywhere, and the name lands w
     write: async (url, _key, profile) => writes.push([url, profile]),
     upload: async (url, _key, bytes, mediaType) => {
       uploads.push([url, mediaType, bytes.length]);
-      return `https://a.example/${PNG_SHA}.png`;
+      return `${url.replace("wss:", "https:")}/media/${PNG_SHA}.png`;
     },
   });
   assert.deepEqual(outcomes.map((o) => o.outcome), ["updated", "updated"]);
-  assert.equal(uploads.length, 1, "uploaded to the first community only");
+  assert.deepEqual(uploads.map((u) => u[0]), ["wss://a.example", "wss://b.example"]);
   assert.equal(uploads[0][1], "image/png");
-  for (const [, profile] of writes) {
+  for (const [url, profile] of writes) {
     assert.equal(profile.display_name, "Pip");
-    assert.equal(profile.picture, `https://a.example/${PNG_SHA}.png`);
+    assert.equal(profile.picture, `${url.replace("wss:", "https:")}/media/${PNG_SHA}.png`);
     assert.equal(profile.bot, true);
   }
   assert.equal(writes[0][1].lud16, "x@example.com", "fields the face does not decide are kept");
 });
 
-test("a community already showing this picture and name is left alone, with no upload", async () => {
-  const current = { name: "planner", display_name: "Pip", picture: `https://a.example/${PNG_SHA}.png`, bot: true };
+test("a community already showing its own copy of this picture and name is left alone, with no upload", async () => {
+  const current = { name: "planner", display_name: "Pip", picture: `https://a.example/media/${PNG_SHA}.png`, bot: true };
   let uploaded = false;
   let written = false;
   const outcomes = await syncProfile({
     face: { handle: "planner", displayName: "Pip", picture: DATA_URL, about: null, nip05: null },
-    relays: ["wss://a"],
+    relays: ["wss://a.example"],
     key: KEY,
     read: async () => current,
     write: async () => {
@@ -111,6 +111,69 @@ test("a community already showing this picture and name is left alone, with no u
   assert.deepEqual(outcomes.map((o) => o.outcome), ["unchanged"]);
   assert.equal(uploaded, false);
   assert.equal(written, false);
+});
+
+/**
+ * Reported from a live deployment: an agent in two communities showed its picture in one and
+ * none in the other once Buzz shipped its new app. Both profiles pointed at the first
+ * community's media store; the app loads a community's media only through that community, so
+ * in the second one the picture was fetched anonymously and refused.
+ */
+test("a picture held by another community is copied, so each community shows its own", async () => {
+  const held = `https://a.example/media/${PNG_SHA}.png`;
+  const stored = {
+    "wss://a.example": { name: "planner", display_name: "Pip", picture: held, bot: true },
+    "wss://b.example": { name: "planner", display_name: "Pip", picture: held, bot: true },
+  };
+  const fetched = [];
+  const uploads = [];
+  const writes = [];
+  const outcomes = await syncProfile({
+    face: { handle: "planner", displayName: "Pip", picture: DATA_URL, about: null, nip05: null },
+    relays: Object.keys(stored),
+    key: KEY,
+    read: async (url) => stored[url],
+    write: async (url, _key, profile) => writes.push([url, profile]),
+    upload: async (url) => {
+      uploads.push(url);
+      return `https://b.example/media/${PNG_SHA}.png`;
+    },
+    fetchBlob: async (url) => {
+      fetched.push(url);
+      throw new Error("a data URL needs no fetch");
+    },
+  });
+  assert.deepEqual(outcomes.map((o) => o.outcome), ["unchanged", "updated"]);
+  assert.deepEqual(uploads, ["wss://b.example"]);
+  assert.deepEqual(fetched, []);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][1].picture, `https://b.example/media/${PNG_SHA}.png`);
+});
+
+test("a face whose picture is in one community's store is read from there and copied to the others", async () => {
+  const held = `https://a.example/media/${PNG_SHA}.png`;
+  const fetched = [];
+  const writes = [];
+  await syncProfile({
+    face: { handle: "planner", displayName: "Pip", picture: held, about: null, nip05: null },
+    relays: ["wss://a.example", "wss://b.example"],
+    key: KEY,
+    read: async () => null,
+    write: async (url, _key, profile) => writes.push([url, profile.picture]),
+    upload: async (url, _key, bytes) => {
+      assert.equal(bytes.length, Buffer.from(PNG_B64, "base64").length);
+      return `${url.replace("wss:", "https:")}/media/${PNG_SHA}.png`;
+    },
+    fetchBlob: async (url, sha) => {
+      fetched.push([url, sha]);
+      return { bytes: new Uint8Array(Buffer.from(PNG_B64, "base64")), mediaType: "image/png" };
+    },
+  });
+  assert.deepEqual(fetched, [[held, PNG_SHA]]);
+  assert.deepEqual(writes, [
+    ["wss://a.example", held],
+    ["wss://b.example", `https://b.example/media/${PNG_SHA}.png`],
+  ]);
 });
 
 test("nothing chosen keeps a name and picture someone set there by hand", async () => {

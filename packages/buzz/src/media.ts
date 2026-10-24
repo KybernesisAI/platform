@@ -68,15 +68,18 @@ export async function fetchMedia(
   ref: MediaRef,
   fetchImpl: typeof fetch = fetch,
 ): Promise<FetchedMedia> {
-  const expires = Math.floor(Date.now() / 1000) + 300;
+  // NIP-FI's strict Blossom rules, which a community may switch on: a proof lives at most a
+  // minute and names the server it is for. Older servers accept the same proof.
+  const issued = Math.floor(Date.now() / 1000);
   const auth = finalizeEvent(
     {
       kind: 24242,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: issued,
       tags: [
         ["t", "get"],
         ...(ref.sha256 ? [["x", ref.sha256]] : []),
-        ["expiration", String(expires)],
+        ["expiration", String(issued + BLOSSOM_PROOF_SECONDS)],
+        ...serverTag(ref.url),
       ],
       content: "Fetch buzz-media",
     },
@@ -105,6 +108,18 @@ export async function fetchMedia(
     }
   }
   return { url: ref.url, mediaType, bytes };
+}
+
+/** How long a Blossom proof may live under NIP-FI's strict rules. */
+export const BLOSSOM_PROOF_SECONDS = 60;
+
+/** The `server` tag a strict Blossom server requires: the host the proof is for. */
+function serverTag(url: string): string[][] {
+  try {
+    return [["server", new URL(url).host]];
+  } catch {
+    return [];
+  }
 }
 
 /** Whether the model can be shown this directly, or only told about it. */

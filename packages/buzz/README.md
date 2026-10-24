@@ -27,6 +27,16 @@ of the account it names, so it is delivered to a direct conversation and never p
 Administrators can also link identities directly in the control plane, which is the path for
 bulk provisioning.
 
+## When it answers
+
+In a room, when someone @mentions it, or replies to a question it asked. In a one-to-one direct
+message, every message: a DM is addressed to the other member, mention or not, as with Buzz's
+own agents. A group DM still needs the mention. The bridge learns which DMs it is in from the
+relay's signed channel rosters, every thirty seconds, and reads a newly found DM back from the
+last check so nothing sent in between is missed. Messages written by another agent (they carry
+an owner attestation) are answered only when they mention it, so two agents in a DM never
+answer each other forever.
+
 ## What the host holds
 
 Only the agent's own key and the agent's own credential — neither of which can act as any
@@ -61,8 +71,9 @@ NIP-05 handle). The bridge reads the owner's choice from the control plane
 (`GET /api/agent/profile`, with the agent's credential) and the name's public profile document
 (`https://<name>.agentid.dev/.well-known/agent-profile.json`) when it starts and every fifteen
 minutes, and writes the profile only in communities whose copy differs. The control plane holds
-the picture as a small image, so it is uploaded to a community's own media store once per change
-and that address is used everywhere. A new picture or name reaches every community without a
+the picture as a small image, so it is uploaded to each community's own media store once per
+change, and each community's profile points at its own copy: the Buzz app loads a community's
+media only through that community, so a picture held by another one shows as no picture. A new picture or name reaches every community without a
 command on the host. The `.agent` name comes from `ARP_AGENT_DID`, or from
 `.eve/arp-identity.json` in the agent's directory.
 

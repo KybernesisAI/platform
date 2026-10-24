@@ -29,6 +29,10 @@ export const KIND_PRESENCE = 20001;
 export const KIND_TYPING = 20002;
 /** Open (or find) a direct conversation with a set of people. */
 export const KIND_DM_OPEN = 41010;
+/** Relay-signed channel metadata (NIP-29); its first `t` tag is the channel type. */
+export const KIND_CHANNEL_METADATA = 39000;
+/** Relay-signed channel roster (NIP-29): one `p` tag per member. */
+export const KIND_CHANNEL_MEMBERS = 39002;
 
 /**
  * A receiving client expires a typing indicator shortly after the event's own timestamp, so
@@ -38,6 +42,11 @@ export const TYPING_INTERVAL_MS = 3_000;
 export const PRESENCE_INTERVAL_MS = 60_000;
 /** Enough overlap for same-second redelivery without retaining every event forever. */
 export const MAX_SEEN_EVENT_IDS = 10_000;
+/** How often to re-read which direct conversations this agent is in. */
+export const DIRECT_REFRESH_MS = 30_000;
+/** Ids per `#d`/`#h` filter, and filters per request: the relay caps a request at ten. */
+const IDS_PER_FILTER = 200;
+const MAX_FILTERS = 8;
 
 export type NostrEvent = {
   id: string;
@@ -90,6 +99,32 @@ export class BuzzRelay {
   private cursor = now();
   /** Prompts this agent posted; replies to them are polled for even when they carry no mention. */
   private readonly replyWatch = new Set<string>();
+  /**
+   * One-to-one direct conversations this agent is in, by channel id.
+   *
+   * @remarks
+   * A direct message used to reach the bridge because the client tagged every other
+   * participant, so the `#p` poll found it like a mention. The current Buzz app tags only
+   * explicit mentions, so a person typing to the agent in a DM was never seen: the agent
+   * answered in a DM only when named, which is not how anyone talks to one person. Buzz's own
+   * agents decide by the channel instead (a DM of exactly two members is addressed to the
+   * other one), and so does this: the relay's signed rosters say which DMs the agent is in,
+   * and those channels are polled whole.
+   */
+  private direct = new Set<string>();
+  /** The relay's own signing key (NIP-11 `self`), which every roster must carry. */
+  private relaySelf: string | null | undefined = undefined;
+  private discoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One discovery at a time: rosters first, then the metadata for those channels. */
+  private discovery: {
+    rosterSub: string;
+    metadataSub: string | null;
+    rosters: Map<string, Set<string>>;
+    dms: Set<string>;
+    startedAt: number;
+  } | null = null;
+  /** Since when a newly found DM is read back, so a message sent before it was found is not lost. */
+  private discoveredAt: number | null = null;
 
   private readonly url: string;
   private readonly rest: string;
@@ -138,14 +173,21 @@ export class BuzzRelay {
     });
   }
 
+  /** Whether this channel is a one-to-one DM with this agent: every message in it is addressed. */
+  isDirect(channel: string): boolean {
+    return this.direct.has(channel);
+  }
+
   close(): void {
     this.closed = true;
     if (this.presenceTimer) clearInterval(this.presenceTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.discoveryTimer) clearTimeout(this.discoveryTimer);
     this.presenceTimer = null;
     this.pollTimer = null;
     this.reconnectTimer = null;
+    this.discoveryTimer = null;
     try {
       this.socket?.close();
     } catch {
@@ -157,8 +199,11 @@ export class BuzzRelay {
     if (this.closed) return;
     if (this.presenceTimer) clearInterval(this.presenceTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.discoveryTimer) clearTimeout(this.discoveryTimer);
     this.presenceTimer = null;
     this.pollTimer = null;
+    this.discoveryTimer = null;
+    this.discovery = null;
     if (this.reconnectTimer) return;
     // Backs off rather than hammering. A membership refusal is the common case
     // here — an agent whose invite has not happened yet — and it is not
@@ -222,6 +267,7 @@ export class BuzzRelay {
       this.refusal = null;
       this.log(`authenticated as ${this.key.publicKey.slice(0, 12)}…`);
       this.keepPresent();
+      this.discoverDirect();
       this.poll();
       return;
     }
@@ -230,10 +276,21 @@ export class BuzzRelay {
       // One poll's worth delivered. Closing it matters: the relay caps how many subscriptions one
       // connection may hold, and a bridge that never closes them stops receiving within minutes.
       this.send(["CLOSE", String(frame[1])]);
+      this.discoveryDone(String(frame[1]));
+      return;
+    }
+
+    if (type === "CLOSED") {
+      // A refused discovery must not wedge the next one.
+      this.discoveryDone(String(frame[1]), true);
       return;
     }
 
     if (type !== "EVENT") return;
+    if (this.discovery && (frame[1] === this.discovery.rosterSub || frame[1] === this.discovery.metadataSub)) {
+      this.discovered(frame[2] as NostrEvent | undefined);
+      return;
+    }
     const event = frame[2] as NostrEvent | undefined;
     if (!event || event.pubkey === this.key.publicKey) return;
     if (this.seen.has(event.id)) return;
@@ -272,8 +329,107 @@ export class BuzzRelay {
     if (this.replyWatch.size > 0) {
       filters.push({ kinds: [KIND_MESSAGE], "#e": [...this.replyWatch], since: this.cursor });
     }
+    for (const ids of chunks([...this.direct], MAX_FILTERS - filters.length)) {
+      filters.push({ kinds: [KIND_MESSAGE], "#h": ids, since: this.cursor });
+    }
     this.send(["REQ", `m${Date.now()}`, ...filters]);
     this.pollTimer = setTimeout(() => this.poll(), this.pollMs);
+  }
+
+  /**
+   * Find the one-to-one DMs this agent is in: its rosters, then which of those channels are DMs.
+   *
+   * @remarks
+   * Rosters and metadata are relay-signed; anything else claiming to be one is ignored, so a
+   * member cannot publish a roster that makes the agent answer every message in a room.
+   */
+  private discoverDirect(): void {
+    if (this.closed) return;
+    if (this.discoveryTimer) clearTimeout(this.discoveryTimer);
+    this.discoveryTimer = setTimeout(() => this.discoverDirect(), DIRECT_REFRESH_MS);
+    if (this.discovery && now() - this.discovery.startedAt < 60) return;
+    void this.relayKey().then((self) => {
+      if (this.closed || self === undefined) return;
+      const rosterSub = `r${Date.now()}`;
+      this.discovery = { rosterSub, metadataSub: null, rosters: new Map(), dms: new Set(), startedAt: now() };
+      this.send(["REQ", rosterSub, { kinds: [KIND_CHANNEL_MEMBERS], "#p": [this.key.publicKey], limit: 1000 }]);
+    });
+  }
+
+  /** NIP-11 `self`: null when the relay names none, undefined when it could not be asked. */
+  private async relayKey(): Promise<string | null | undefined> {
+    if (this.relaySelf !== undefined) return this.relaySelf;
+    try {
+      const response = await fetch(this.rest, {
+        headers: { accept: "application/nostr+json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const info = (await response.json()) as { self?: unknown; pubkey?: unknown };
+      const self = [info.self, info.pubkey].find((value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value));
+      this.relaySelf = (self as string | undefined) ?? null;
+    } catch (error) {
+      this.log(`could not read the relay's information document (${(error as Error).message}); direct messages wait for the next try`);
+    }
+    return this.relaySelf;
+  }
+
+  private discovered(event: NostrEvent | undefined): void {
+    const discovery = this.discovery;
+    if (!discovery || !event) return;
+    if (this.relaySelf && event.pubkey !== this.relaySelf) return;
+    const id = event.tags.find((t) => t[0] === "d")?.[1];
+    if (!id) return;
+    if (event.kind === KIND_CHANNEL_MEMBERS) {
+      discovery.rosters.set(id, new Set(event.tags.filter((t) => t[0] === "p" && t[1]).map((t) => t[1]!)));
+      return;
+    }
+    // NIP-29 as Buzz writes it: the FIRST `t` is the channel's type; later ones are labels.
+    const type = event.tags.find((t) => t[0] === "t")?.[1];
+    const members = discovery.rosters.get(id);
+    if (event.kind === KIND_CHANNEL_METADATA && type === "dm" && members?.size === 2 && members.has(this.key.publicKey)) {
+      discovery.dms.add(id);
+    }
+  }
+
+  private discoveryDone(sub: string, refused = false): void {
+    const discovery = this.discovery;
+    if (!discovery) return;
+    if (refused) {
+      // Only a subscription still in flight can be refused. This relay answers every CLOSE we
+      // send with a CLOSED of its own, so the roster's echo arrives after the metadata request
+      // has gone out; treating it as a refusal dropped every discovery.
+      const inFlight = discovery.metadataSub === null ? discovery.rosterSub : discovery.metadataSub;
+      if (sub === inFlight) this.discovery = null;
+      return;
+    }
+    if (sub === discovery.rosterSub) {
+      const ids = [...discovery.rosters.keys()];
+      if (ids.length === 0) return this.adopt(new Set());
+      discovery.metadataSub = `g${Date.now()}`;
+      this.send([
+        "REQ",
+        discovery.metadataSub,
+        ...chunks(ids, MAX_FILTERS).map((chunk) => ({ kinds: [KIND_CHANNEL_METADATA], "#d": chunk })),
+      ]);
+      return;
+    }
+    if (sub === discovery.metadataSub) this.adopt(discovery.dms);
+  }
+
+  /** Take the DMs just found; read back any that are new, from when they could last have been missed. */
+  private adopt(found: Set<string>): void {
+    // Overlap the last discovery by a few seconds; the first one starts where polling did.
+    const since = this.discoveredAt === null ? this.cursor : this.discoveredAt - 5;
+    const fresh = [...found].filter((id) => !this.direct.has(id));
+    this.direct = new Set(found);
+    this.discovery = null;
+    this.discoveredAt = now();
+    if (fresh.length > 0) {
+      this.log(`direct messages: ${found.size} conversation(s), ${fresh.length} new`);
+      // The poll's cursor may already be past a message sent in a DM before it was found.
+      const filters = chunks(fresh, MAX_FILTERS).map((ids) => ({ kinds: [KIND_MESSAGE], "#h": ids, since }));
+      this.send(["REQ", `m${Date.now()}c`, ...filters]);
+    }
   }
 
   /** Publish one event; returns its id when it left this process, null when the socket was down. */
@@ -387,4 +543,13 @@ export class BuzzRelay {
       return null;
     }
   }
+}
+
+/** Split ids into at most `max` filters' worth; ids beyond that are dropped, never a filter too many. */
+function chunks(ids: string[], max: number): string[][] {
+  const out: string[][] = [];
+  for (let at = 0; at < ids.length && out.length < max; at += IDS_PER_FILTER) {
+    out.push(ids.slice(at, at + IDS_PER_FILTER));
+  }
+  return out;
 }

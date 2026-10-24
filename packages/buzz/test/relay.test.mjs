@@ -17,6 +17,14 @@ import { join } from "node:path";
 const keyFile = join(mkdtempSync(join(tmpdir(), "buzz-relay-")), "agent.json");
 const { key } = loadOrCreateKey(keyFile);
 
+/** The relay's own key, as its information document (NIP-11 `self`) names it. */
+const RELAY_SELF = "e".repeat(64);
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => new Response(JSON.stringify({ self: RELAY_SELF }), { status: 200 });
+after(() => {
+  globalThis.fetch = realFetch;
+});
+
 /** A WebSocket stand-in: records what was sent, lets a test push frames back. */
 class FakeSocket {
   static last = null;
@@ -319,4 +327,95 @@ test("stopping says goodbye rather than letting presence lapse", () => {
   relay.setPresence("offline");
   assert.equal(socket.published(KIND_PRESENCE).at(-1).content, "offline");
   relay.close();
+});
+
+/**
+ * Reported live after Buzz shipped its new app: talking to an agent in a DM did nothing unless
+ * the agent was @mentioned. The old app tagged every other DM participant on each message, so
+ * the `#p` poll saw them; the new one tags only explicit mentions. A one-to-one DM is now found
+ * from the relay's signed rosters and read whole.
+ */
+test("one-to-one DMs are found from the relay's signed rosters and polled whole", async () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const rosterReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39002);
+  assert.ok(rosterReq, "the agent's rosters are asked for once signed in");
+  assert.deepEqual(rosterReq[2]["#p"], [key.publicKey]);
+
+  const other = "a".repeat(64);
+  const third = "b".repeat(64);
+  const roster = (id, members, pubkey = RELAY_SELF) => ({
+    id: `r-${id}-${pubkey.slice(0, 2)}`, pubkey, created_at: 1, kind: 39002, sig: "", content: "",
+    tags: [["d", id], ...members.map((m) => ["p", m])],
+  });
+  const metadata = (id, type, pubkey = RELAY_SELF) => ({
+    id: `g-${id}`, pubkey, created_at: 1, kind: 39000, sig: "", content: "",
+    tags: [["d", id], ["name", "DM"], ["t", type], ["t", "dm"], ["hidden"]],
+  });
+  socket.deliver(["EVENT", rosterReq[1], roster("dm-1", [key.publicKey, other])]);
+  socket.deliver(["EVENT", rosterReq[1], roster("group-dm", [key.publicKey, other, third])]);
+  socket.deliver(["EVENT", rosterReq[1], roster("general", [key.publicKey, other])]);
+  // A roster anyone could publish is not the relay's word.
+  socket.deliver(["EVENT", rosterReq[1], roster("forged", [key.publicKey, other], "f".repeat(64))]);
+  socket.deliver(["EOSE", rosterReq[1]]);
+  // The relay acknowledges our CLOSE with a CLOSED of its own; that is not a refusal.
+  socket.deliver(["CLOSED", rosterReq[1], ""]);
+
+  const metaReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39000);
+  assert.ok(metaReq, "then the metadata of those channels");
+  assert.deepEqual(new Set(metaReq[2]["#d"]), new Set(["dm-1", "group-dm", "general"]));
+  socket.deliver(["EVENT", metaReq[1], metadata("dm-1", "dm")]);
+  socket.deliver(["EVENT", metaReq[1], metadata("group-dm", "dm")]);
+  // The first `t` is the type; a stream labelled "dm" is still a stream.
+  socket.deliver(["EVENT", metaReq[1], metadata("general", "stream")]);
+  socket.deliver(["EVENT", metaReq[1], metadata("forged", "dm")]);
+  socket.deliver(["EOSE", metaReq[1]]);
+  socket.deliver(["CLOSED", metaReq[1], ""]);
+
+  assert.equal(relay.isDirect("dm-1"), true);
+  assert.equal(relay.isDirect("group-dm"), false, "a group DM still needs the mention");
+  assert.equal(relay.isDirect("general"), false);
+  assert.equal(relay.isDirect("forged"), false);
+
+  const catchUp = socket.sent.find((f) => f[0] === "REQ" && f[2]["#h"]);
+  assert.ok(catchUp, "a DM found late is read back, so a message sent before it was found is answered");
+  assert.deepEqual(catchUp[2]["#h"], ["dm-1"]);
+  assert.deepEqual(catchUp[2].kinds, [KIND_MESSAGE]);
+
+  relay.poll();
+  const poll = socket.sent.filter((f) => f[0] === "REQ" && f[1].startsWith("m")).at(-1);
+  const byChannel = poll.slice(2).find((filter) => filter["#h"]);
+  assert.deepEqual(byChannel["#h"], ["dm-1"], "every poll reads the DM, mention or not");
+});
+
+test("a discovery event never reaches the bridge as a message, nor moves the poll cursor", async () => {
+  const seen = [];
+  const { socket } = connected((event) => seen.push(event.id));
+  authenticate(socket);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const rosterReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39002);
+  socket.deliver(["EVENT", rosterReq[1], {
+    id: "roster", pubkey: RELAY_SELF, created_at: 4_000_000_000, kind: 39002, sig: "", content: "",
+    tags: [["d", "dm-1"], ["p", key.publicKey]],
+  }]);
+  assert.deepEqual(seen, []);
+  const before = socket.sent.filter((f) => f[0] === "REQ" && f[1].startsWith("m")).at(-1);
+  assert.ok(before[2].since < 4_000_000_000);
+});
+
+test("a refused roster request clears the discovery, so the next one can run", async () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const rosterReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39002);
+  socket.deliver(["CLOSED", rosterReq[1], "restricted: no"]);
+  socket.deliver(["EVENT", rosterReq[1], {
+    id: "late", pubkey: RELAY_SELF, created_at: 1, kind: 39002, sig: "", content: "",
+    tags: [["d", "dm-1"], ["p", key.publicKey], ["p", "a".repeat(64)]],
+  }]);
+  socket.deliver(["EOSE", rosterReq[1]]);
+  assert.equal(socket.sent.some((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39000), false);
+  assert.equal(relay.isDirect("dm-1"), false);
 });
