@@ -34,3 +34,21 @@ export {
   readHiddenCards,
   withoutHiddenCards,
 } from "./hidden.js";
+export {
+  HIDDEN_ASK_OPEN,
+  HIDDEN_ANSWER_OPEN,
+  ANSWER_TEXT_MAX,
+  askFrom,
+  askText,
+  hiddenAsk,
+  readHiddenAsks,
+  answerMessage,
+  readHiddenAnswers,
+  withoutHiddenAsks,
+  type Ask,
+  type AskAnswer,
+  type AskOption,
+  type AskSource,
+  type SpendNeed,
+  type VaultNeed,
+} from "./carried-asks.js";

@@ -95,6 +95,20 @@ share link as the person who asked (`POST /eve/v1/kyb/artifacts/:id/share`, `@ky
 app and opens it beside the conversation; everywhere else the link is in the text. The person
 can withdraw the link from the agent. `BUZZ_CARDS=off` stops card messages.
 
+## Questions and approvals
+
+When the agent needs a yes or an answer, the bridge posts the question as a reply to the message
+that asked: an approval as the email, event or message it would send (recipients, subject and
+the whole body, not "Approve tool call"), any other question as its sentence, then the options by
+number. Anyone can answer by replying with a number, an option or their own words. Since 0.14 the
+question also travels hidden (`<!-- kyb:ask v1 {...} -->`), and the plugin draws it as Studio
+does, with Send it, Edit and Don't send on an email, the amount and Approve in Link on a
+purchase, and the fields of a form. A press posts the person's answer as a reply to the
+question: a short line, with the answer hidden after it (`<!-- kyb:answer v1 {...} -->`). The
+bridge accepts a hidden answer only as a direct reply to a prompt it posted, only for a request
+still open, and only with that request's own options. Replies inside a thread count, whichever
+`e` tag names the prompt. A vault request never takes a secret in the channel.
+
 ## Configuration
 
 | Variable | Meaning |
@@ -105,7 +119,7 @@ can withdraw the link from the agent. `BUZZ_CARDS=off` stops card messages.
 | `BUZZ_SESSIONS_FILE` | Channel-to-session continuity store (default beside the key file; an existing legacy `.buzz-sessions.json` is reused) |
 | `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence before the agent acknowledges a request: unread drain, send and create acknowledgement (default `300000`, five minutes). This is where a genuine stall shows: no run is ever created. |
 | `BUZZ_AGENT_WORK_TIMEOUT_MS` | Ceiling on silence once the response stream is open (default `3600000`, sixty minutes). The stream is quiet while the agent works, a long tool call or a delegated subagent produces nothing until it returns, so this is a ceiling on work, not a stall detector. |
-| `BUZZ_CARDS` | `off` stops posting cards after replies (default on) |
+| `BUZZ_CARDS` | `off` stops posting cards after replies and hidden questions in prompts (default on) |
 | `BUZZ_PROFILE_SYNC_MS` | How often the profile is re-checked against the name and picture its owner set and its `.agent` name (default `900000`, fifteen minutes; `0` turns it off) |
 | `AGENTID_MIRROR_SUFFIX` | Where names serve their public documents (default `.agentid.dev`); for staging only |
 | `KYBERNESIS_ISSUER` | The control plane |

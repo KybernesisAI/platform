@@ -1,6 +1,6 @@
 import type { Context } from "@buzz/author";
-import { HIDDEN_CARD_OPEN, readHiddenCards, type Card } from "@kybernesis/cards";
-import { CardStack, cardStyles, type CardContext } from "@kybernesis/cards-react";
+import { answerMessage, HIDDEN_ASK_OPEN, HIDDEN_CARD_OPEN, readHiddenAsks, readHiddenCards, type Ask, type Card } from "@kybernesis/cards";
+import { AskView, CardStack, cardStyles, type AskReply, type CardContext } from "@kybernesis/cards-react";
 import { bindReact, useEffect, useRef, useState } from "./react.js";
 
 /**
@@ -15,12 +15,18 @@ import { bindReact, useEffect, useRef, useState } from "./react.js";
  * desktop app the page is drawn inside its card by Buzz's own browser view,
  * and Open puts it beside the conversation.
  *
+ * A question the agent is waiting on travels the same way. The plugin draws
+ * it as Studio does (an approval as the email it would send, a purchase with
+ * its amount, a form with its fields) and a press answers it as the person:
+ * a reply to the question, with a line anyone can read and the answer hidden
+ * after it. The bridge takes it exactly as it takes a typed reply.
+ *
  * Without the plugin, or if it fails, people read the text: nothing is lost.
  */
 
-export const inject = ["react", "conversation", "panels", "browser"];
+export const inject = ["react", "conversation", "panels", "browser", "relay"];
 
-type Message = { content: string };
+type Message = { id: string; channelId: string; authorId: string; content: string; threadRootId?: string };
 type Opener = { canOpen(target: string): boolean; open(target: string): boolean };
 
 /** Messages are frozen and long-lived, so a parse per message object is enough. */
@@ -33,6 +39,46 @@ function cardsIn(message: Message): Card[] {
     parsed.set(message, cards);
   }
   return cards;
+}
+
+const parsedAsks = new WeakMap<object, Ask[]>();
+
+function asksIn(message: Message): Ask[] {
+  let asks = parsedAsks.get(message);
+  if (!asks) {
+    asks = message.content.includes(HIDDEN_ASK_OPEN) ? readHiddenAsks(message.content) : [];
+    parsedAsks.set(message, asks);
+  }
+  return asks;
+}
+
+/**
+ * What this person already answered, so a question they pressed shows its
+ * outcome after the conversation scrolls away or the app restarts. Only on
+ * this device; it is a reminder, not the record (the reply is).
+ */
+const ANSWERED_KEY = "kybernesis.cards.answered.v1";
+const ANSWERED_MAX = 200;
+
+function answeredStore(): Record<string, AskReply> {
+  try {
+    const raw = localStorage.getItem(ANSWERED_KEY);
+    const value: unknown = raw ? JSON.parse(raw) : {};
+    return value && typeof value === "object" ? (value as Record<string, AskReply>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function remember(key: string, reply: AskReply): void {
+  try {
+    const all = { ...answeredStore(), [key]: { optionId: reply.optionId, label: reply.label.slice(0, 500) } };
+    const keys = Object.keys(all);
+    for (const old of keys.slice(0, Math.max(0, keys.length - ANSWERED_MAX))) delete all[old];
+    localStorage.setItem(ANSWERED_KEY, JSON.stringify(all));
+  } catch {
+    // Storage unavailable: the outcome lasts as long as the message is on screen.
+  }
 }
 
 /** An artifact page the agent shared, at its share route. */
@@ -82,6 +128,7 @@ const THEME = `
   box-sizing: border-box;
 }
 .kyb-buzz .kcards { margin-top: 2px; }
+.kyb-buzz .kask + .kask { margin-top: 8px; }
 /* The message list restyles buttons; the primary one keeps its own colours. */
 .kyb-buzz .kbtn--primary {
   background: var(--surface-inverse, #16181d) !important;
@@ -159,8 +206,49 @@ export function apply(ctx: Context) {
     component: ({ target }) => <View url={target} storage={STORAGE} />,
   });
 
+  /**
+   * Post as the person, in the conversation the message is in: a reply to it,
+   * inside its thread when it has one. `mentions` addresses the agent where
+   * the words alone would not reach it.
+   */
+  function replyTo(message: Message, content: string, mentions: string[] = []): string | null {
+    const connection = ctx.relay.snapshot();
+    if (connection.status !== "ready") return "Not connected to the community right now. Try again in a moment.";
+    try {
+      connection.session.messages.reply(message.channelId, message.threadRootId ?? message.id, content, mentions, [], message.id);
+      return null;
+    } catch (error) {
+      return `Could not send: ${(error as Error).message}`;
+    }
+  }
+
+  function AskMessage({ message, ask, host }: { message: Message; ask: Ask; host: CardContext }) {
+    const key = `${message.id}:${ask.requestId}`;
+    const [answered, setAnswered] = useState<AskReply | undefined>(() => answeredStore()[key]);
+    const [error, setError] = useState<string | undefined>();
+    return (
+      <AskView
+        ask={ask}
+        ctx={host}
+        answered={answered}
+        error={error}
+        onAnswer={(reply) => {
+          const failed = replyTo(message, answerMessage({ requestId: ask.requestId, optionId: reply.optionId, text: reply.text }, reply.label));
+          if (failed) {
+            setError(failed);
+            return;
+          }
+          setError(undefined);
+          remember(key, reply);
+          setAnswered(reply);
+        }}
+      />
+    );
+  }
+
   function CardMessage({ message, canOpen, open }: Opener & { message: Message }) {
     const cards = cardsIn(message);
+    const asks = asksIn(message);
     const host: CardContext = {
       // A target Buzz has a panel for (a pull request, say) opens beside the conversation.
       openUrl: (url) => {
@@ -168,10 +256,18 @@ export function apply(ctx: Context) {
       },
       renderArtifact: (artifact, title) =>
         artifact.url && browsing() && isSharedPage(artifact.url) ? <InlinePage url={artifact.url} title={title} /> : null,
+      // A button that says something: the person's next message to the agent, in this thread.
+      onSay: (text) => {
+        const failed = replyTo(message, text, [message.authorId]);
+        if (failed) console.warn(`[kybernesis.cards] ${failed}`);
+      },
     };
     return (
       <div className="kyb-buzz">
         <style>{THEME + cardStyles}</style>
+        {asks.map((ask) => (
+          <AskMessage key={ask.requestId} message={message} ask={ask} host={host} />
+        ))}
         <CardStack cards={cards} ctx={host} />
       </div>
     );
@@ -180,7 +276,7 @@ export function apply(ctx: Context) {
   ctx.conversation.registerMessage({
     id: "cards",
     title: "Kybernesis cards",
-    matches: (message) => cardsIn(message).length > 0,
+    matches: (message) => cardsIn(message).length > 0 || asksIn(message).length > 0,
     component: CardMessage,
   });
 }

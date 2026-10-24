@@ -85,6 +85,22 @@ export const cardStyles: string = `
 .kbrief__facts dd { margin: 2px 0 0; }
 .kbrief .kstats { margin-top: 12px; }
 
+.kform__field { display: flex; flex-direction: column; gap: 4px; }
+.kinput {
+  width: 100%; box-sizing: border-box; min-height: 30px; padding: 5px 9px; border-radius: 8px;
+  border: 1px solid var(--kyb-stroke-strong, rgba(22, 24, 29, 0.16)); background: var(--kyb-surface, #ffffff);
+  color: var(--kyb-ink, #16181d); font: inherit; font-size: var(--kyb-fs-base, 14px);
+}
+.kinput--long { resize: vertical; min-height: 90px; }
+.kbtn:disabled { opacity: 0.5; cursor: default; }
+.kask-stack { display: flex; flex-direction: column; gap: 8px; }
+.kask__text { white-space: pre-wrap; margin-bottom: 4px; }
+.kask__note { font-size: var(--kyb-fs-sm, 13px); color: var(--kyb-ink-tertiary, #8b91a0); margin-top: 8px; }
+.kask__error { font-size: var(--kyb-fs-sm, 13px); color: var(--kyb-bad, #dc2626); margin-top: 8px; }
+.kask__amount { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.kask__amount .kask__note { margin-top: 0; }
+.kask__total { font-size: 22px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kask__typed { display: flex; gap: 7px; margin-top: 10px; }
 .klink { display: block; width: 100%; text-align: left; padding: 0; }
 .klink__desc { color: var(--kyb-ink-secondary, #5c6270); margin-bottom: 4px; }
 .klink__url { font-size: var(--kyb-fs-sm, 13px); color: var(--kyb-ink-tertiary, #8b91a0); text-decoration: underline; text-decoration-color: var(--kyb-stroke-strong, rgba(22, 24, 29, 0.16)); }

@@ -65,6 +65,10 @@ An approval is eve's own question, so its card is built by the client from the w
 
 A form asks for several things at once. A tool passes `formPrompt(fields, sentence)` to `ctx.ask`; a client draws the fields and answers with `formAnswer(values)`; the tool reads it back with `readFormAnswer(answer.text)`, which gives `{ values }`, or `{ text }` when someone on a text channel answered in their own words.
 
+## Questions in chat text
+
+A chat bridge can post only words, so a question travels like a card: its words for people, and the question hidden after them. `askFrom(request)` turns an eve input request into an `Ask` (the approval's card, a form, a purchase from `[kyb:spend-request]` or a vault need from `[kyb:vault-item]`); `askText(ask)` is how it reads on a text-only channel (an approval as the whole email); `hiddenAsk(ask)` is the `<!-- kyb:ask v1 {...} -->` comment, and `readHiddenAsks(content)` reads them back. A client answers with `answerMessage({ requestId, optionId?, text? }, label)`, a short line with `<!-- kyb:answer v1 {...} -->` after it, which the bridge reads with `readHiddenAnswers(content)`.
+
 `describeCron(cron)` and `nextCronRun(cron)` put a routine's schedule in words and say when it next runs. Cron runs in the host's time, and agent hosts run on UTC, so a routine card also carries its `cron` and the host's `offset`; `routineSchedule(data)` says the schedule in the reader's own time zone ("Weekdays at 8:40 AM" in Bangkok for `40 1 * * 1-5`).
 
 No dependencies. Works in Node, a browser and React Native.

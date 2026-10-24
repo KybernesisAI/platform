@@ -7,10 +7,13 @@ import {
   formatInputRequests,
   invalidInputReply,
   needsPendingFollower,
+  resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
   resumeStalledReply,
+  STALE_ANSWER_REPLY,
 } from "../dist/hitl.js";
+import { answerMessage, readHiddenAnswers, readHiddenAsks } from "@kybernesis/cards";
 
 const request = {
   action: { callId: "call-1", input: {}, kind: "tool-call", toolName: "ask_question" },
@@ -373,4 +376,53 @@ test("giving up on a resumed turn tells the room what happened", () => {
   assert.match(reply, /nothing was posted/i, "says no work landed");
   assert.match(reply, /ask me again/i, "says the channel is usable");
   assert.match(resumeStalledReply(60_000), /1 minute\b/, "reads correctly in the singular");
+});
+
+const approval = {
+  action: {
+    callId: "call-2",
+    input: { to: ["dana@example.com"], subject: "Q3 numbers", body: "Hi Dana,\n\nThe numbers are in." },
+    kind: "tool-call",
+    toolName: "gmail__send_email",
+  },
+  kind: "tool-approval",
+  options: [
+    { id: "approve", label: "Approve" },
+    { id: "cancel", label: "Cancel" },
+  ],
+  prompt: "Approve tool call: gmail__send_email",
+  requestId: "request-2",
+};
+
+test("an approval reads as the email it would send, with the question hidden after it", () => {
+  const rendered = formatInputRequests([approval], { carry: true });
+  assert.match(rendered, /^Send email · Gmail\nTo: dana@example\.com\nSubject: Q3 numbers\n\nHi Dana,\n\nThe numbers are in\./);
+  assert.match(rendered, /1\. Approve \[approve\]/);
+  const [ask] = readHiddenAsks(rendered);
+  assert.equal(ask.requestId, "request-2");
+  assert.equal(ask.card.data.subject, "Q3 numbers");
+  // Without carry, and in a correction, the words alone.
+  assert.equal(readHiddenAsks(formatInputRequests([approval])).length, 0);
+  assert.equal(readHiddenAsks(invalidInputReply([approval])).length, 0);
+});
+
+test("a pressed answer resolves only against what is open, with its own options", () => {
+  const press = (answer) => resolveCarriedAnswers(readHiddenAnswers(answerMessage(answer, "Pressed")), [request, approval]);
+  assert.deepEqual(press({ requestId: "request-2", optionId: "approve" }).responses, [{ requestId: "request-2", optionId: "approve" }]);
+  assert.deepEqual(press({ requestId: "request-2", optionId: "cancel", text: "Not as written." }).responses, [
+    { requestId: "request-2", optionId: "cancel", text: "Not as written." },
+  ]);
+  // An option the request does not have, or words on a closed choice, are not answers.
+  assert.deepEqual(press({ requestId: "request-2", optionId: "reset" }), { responses: null, stale: false });
+  assert.deepEqual(press({ requestId: "request-1", text: "whatever" }), { responses: null, stale: false });
+  // A question nobody is waiting on any more.
+  assert.deepEqual(press({ requestId: "request-9", optionId: "approve" }), { responses: null, stale: true });
+  assert.match(STALE_ANSWER_REPLY, /already answered/);
+});
+
+test("words answer a pressed question that takes words", () => {
+  const open = { ...request, allowFreeform: true };
+  assert.deepEqual(resolveCarriedAnswers([{ requestId: "request-1", text: "  Thursday  " }], [open]).responses, [
+    { requestId: "request-1", text: "Thursday" },
+  ]);
 });
