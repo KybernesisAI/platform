@@ -95,8 +95,13 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
    packages in the @kybernesis scope). Agents never publish: hand him the exact
    command, never with `--otp`. `scripts/prepublish.mjs` rebuilds `dist/` (it is not in git, so a stale one shipped manage 0.13.0 without its routes) and refuses a version
    already on npm. The packument shows about a minute before the tarball, so
-   poll the tarball URL before deploying a consumer:
-   `cd ~/platform/packages/<name> && git pull --ff-only && npm publish`
+   poll the tarball URL before deploying a consumer. The command to hand him
+   is always the same, however many packages moved:
+   `cd ~/platform && npm run release` (`scripts/release.mjs`: clean master,
+   `npm ci`, build, eve-line check, then publishes every version npm lacks in
+   dependency order, tags each `eve-<line>`, and waits for its tarball; a
+   brand-new package is skipped unless signed in as kybernesis, so he reruns
+   it under that account). `npm run release -- --dry-run` lists what would go.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
    + regenerate `registry/r/<item>.json` (content-embedded copy) + the catalog
    `registry/r/registry.json` + `registry/index.html`, run
