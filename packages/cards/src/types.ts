@@ -224,6 +224,10 @@ export interface RoutineData {
   nextRun?: string;
   /** Where each run posts. */
   posts?: string[];
+  /** The 5-field cron the scheduler runs, so a client can say it in the reader's own time zone. */
+  cron?: string;
+  /** The host's UTC offset in minutes when the routine next runs (cron runs in host time). */
+  offset?: number;
 }
 
 /** Every type this version knows, with its data. */

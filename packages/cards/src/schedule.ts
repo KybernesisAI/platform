@@ -113,3 +113,70 @@ export function nextCronRun(cron: string, from: Date = new Date()): string | und
   }
   return undefined;
 }
+
+const mod = (n: number, m: number): number => ((n % m) + m) % m;
+
+/** A day-of-week field as day numbers 0–6, or null when it is not one this reads. */
+function weekdays(spec: string): number[] | null {
+  const days = field(spec, 0, 7);
+  if (!days) return null;
+  return [...new Set([...days].map((d) => d % 7))].sort((a, b) => a - b);
+}
+
+/** Day numbers back as a field `describeCron` says well: "1-5", "0,6", or Monday-first lists. */
+function weekdayField(days: number[]): string {
+  const key = days.join(",");
+  if (key === "1,2,3,4,5") return "1-5";
+  if (key === "0,6") return "0,6";
+  if (days.length === 7) return "*";
+  return [...days].sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b)).join(",");
+}
+
+/**
+ * The same schedule moved by `shift` minutes: the cron a reader in another
+ * time zone would have written. Undefined for a shape that does not move
+ * cleanly (a monthly day that would cross midnight, a range of hours).
+ */
+export function shiftCron(cron: string, shift: number): string | undefined {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return undefined;
+  const [min, hr, dom, mon, dow] = parts as [string, string, string, string, string];
+  if (mon !== "*") return undefined;
+  if (shift === 0) return parts.join(" ");
+  if (/^\*\/\d+$/.test(min) && hr === "*") return parts.join(" ");
+  if (/^\d+$/.test(min) && (hr === "*" || /^\*\/\d+$/.test(hr))) {
+    return [String(mod(Number(min) + shift, 60)), hr, dom, mon, dow].join(" ");
+  }
+  if (!/^\d+$/.test(min) || !/^\d+$/.test(hr)) return undefined;
+  const total = Number(hr) * 60 + Number(min) + shift;
+  const days = Math.floor(total / 1440);
+  const at = mod(total, 1440);
+  let newDow = dow;
+  if (dow !== "*" && days !== 0) {
+    const list = weekdays(dow);
+    if (!list) return undefined;
+    newDow = weekdayField(list.map((d) => mod(d + days, 7)).sort((a, b) => a - b));
+  }
+  if (dom !== "*" && days !== 0) return undefined;
+  return [String(at % 60), String(Math.floor(at / 60)), dom, mon, newDow].join(" ");
+}
+
+/**
+ * A routine's schedule in the reader's own time zone.
+ *
+ * The scheduler runs cron in the host's time, and agent hosts run on UTC, so a
+ * routine asked for "8:40 AM" in Bangkok is stored as `40 1 * * 1-5` and its
+ * card used to say "1:40 AM". When the card carries the cron and the host's
+ * offset, this says it the way the person asked; otherwise the card's own words.
+ */
+export function routineSchedule(data: { schedule: string; cron?: string; offset?: number; nextRun?: string }): string {
+  if (!data.cron || typeof data.offset !== "number") return data.schedule;
+  const at = data.nextRun ? new Date(data.nextRun) : new Date();
+  if (Number.isNaN(at.getTime())) return data.schedule;
+  const shift = -at.getTimezoneOffset() - data.offset;
+  const moved = shiftCron(data.cron, shift);
+  if (!moved) return data.schedule;
+  const said = describeCron(moved);
+  // describeCron hands back the expression when it cannot say it; the card's words read better.
+  return said === moved.trim() ? data.schedule : said;
+}

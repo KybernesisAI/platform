@@ -278,7 +278,16 @@ const DATA: { [T in KnownCardType]: (d: Obj) => CardDataByType[T] | null } = {
     const schedule = str(d.schedule, 200);
     if (!name || !schedule) return null;
     const posts = list(d.posts, 6).flatMap((p) => str(p, 80) ?? []);
-    return { name, schedule, nextRun: str(d.nextRun, 40), posts: posts.length ? posts : undefined };
+    const cron = str(d.cron, 100);
+    const offset = num(d.offset);
+    return {
+      name,
+      schedule,
+      nextRun: str(d.nextRun, 40),
+      posts: posts.length ? posts : undefined,
+      cron: cron && cron.split(/\s+/).length === 5 ? cron : undefined,
+      offset: offset !== undefined && Math.abs(offset) <= 16 * 60 ? Math.round(offset) : undefined,
+    };
   },
   approval(d) {
     const kind = APPROVAL_KINDS.includes(d.kind as ApprovalKind) ? (d.kind as ApprovalKind) : "action";

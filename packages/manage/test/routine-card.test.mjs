@@ -21,6 +21,9 @@ test("a new routine comes back with a card: the schedule in words, the next run,
   assert.deepEqual([next.getHours(), next.getMinutes()], [8, 40]);
   assert.ok([1, 2, 3, 4, 5].includes(next.getDay()));
   assert.deepEqual(out.kyb.actions.map((a) => a.label), ["Run it now", "Change it"]);
+  // The cron and the host's offset ride along, so an app can say it in the reader's zone.
+  assert.equal(out.kyb.data.cron, "40 8 * * 1-5");
+  assert.equal(out.kyb.data.offset, -next.getTimezoneOffset());
   const model = tools.create_routine.toModelOutput(out);
   assert.equal("kyb" in model.value, false);
   assert.match(model.value.shownToPerson, /routine/);

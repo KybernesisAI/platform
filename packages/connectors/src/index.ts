@@ -2,8 +2,12 @@ import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool }
 import { z } from "zod";
 import { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
 import { type McpServer, callMcpTool, listMcpTools } from "./mcp.js";
+import { askBeforeSending } from "./approval.js";
+import { type AgentLinkAnswer, connectAnswer } from "./connect.js";
 
 export { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
+export { asksFirst, personApproves } from "./approval.js";
+export { connectAnswer, type AgentLinkAnswer } from "./connect.js";
 
 /** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -57,6 +61,14 @@ export interface ConnectorToolsOptions {
    * cut) with a note saying so. Defaults to 60,000. See `boundResult`.
    */
   maxResultChars?: number;
+  /**
+   * Ask the person before a connector sends mail or a message, or creates,
+   * changes or deletes a calendar event. Defaults to true. Routines and
+   * webhooks, with nobody to ask, run as before. See `asksFirst`.
+   */
+  askBeforeSending?: boolean;
+  /** Offer `connect_service`, so a person can connect a service from a chat. Defaults to true. */
+  connectFromChat?: boolean;
 }
 
 interface RemoteTool {
@@ -329,6 +341,24 @@ async function runTool(
   return boundResult(body.result, options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS);
 }
 
+/** Ask the control plane for this person's sign-in link, and turn the answer into something to show. */
+async function connectService(options: ConnectorToolsOptions, user: string, service?: string): Promise<unknown> {
+  const credential = credentialOf(options);
+  if (!credential) throw new Error("This agent has no control-plane credential, so it cannot connect services.");
+  const res = await fetch(`${base(options)}/api/connectors/agent-link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
+    body: JSON.stringify({ user, ...(service?.trim() ? { service: service.trim() } : {}) }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as AgentLinkAnswer & { error?: string };
+  if (res.status === 404 && !body.reason) {
+    throw new Error("Connecting from a chat is not available on this control plane yet. Connect it from the Connectors page in KYBER Studio.");
+  }
+  if (!res.ok && !body.reason) throw new Error(body.error ?? `Connecting failed (${res.status}).`);
+  return connectAnswer(body);
+}
+
 /** Tools for every service the current principal has connected. */
 /**
  * The options of the live mount, for durable callbacks.
@@ -363,6 +393,7 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
           `${server.slug}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
           defineTool({
             description: `${tool.description ?? tool.name} — from ${server.name}.`,
+            ...(options.askBeforeSending === false ? {} : { approval: askBeforeSending() }),
             inputSchema: defineDurableSchema({
               closure: {},
               schema: () => z.object({}).passthrough(),
@@ -409,6 +440,7 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
               (tool.description ??
                 `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`) +
               qualifier,
+            ...(options.askBeforeSending === false ? {} : { approval: askBeforeSending() }),
             inputSchema: defineDurableSchema({
               closure: { spec: (tool.inputSchema ?? null) as JsonObject | null },
               schema: ({ spec }) => toolInputSchema({ inputSchema: (spec ?? undefined) as Record<string, unknown> | undefined }),
@@ -421,6 +453,28 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
           }),
         ]);
       }
+    }
+
+    // Connecting needs a person: a routine has nobody to sign in.
+    if (user && options.connectFromChat !== false && credentialOf(options)) {
+      entries.push([
+        "connect_service",
+        defineTool({
+          description:
+            "Connect an app or service (for example Gmail, Google Calendar, HubSpot) for the person you are talking to. It gives them a button to sign in with their own account in their browser; you never see a password. Use it when they ask to connect, link or sign in to something, or when a task needs a service they have not connected. Leave service empty to list what this company can connect.",
+          inputSchema: defineDurableSchema({
+            closure: {},
+            schema: () =>
+              z.object({
+                service: z.string().max(80).optional().describe("The service as the person said it, e.g. HubSpot or Google Calendar"),
+              }),
+          }),
+          execute: defineDurableCallback({
+            closure: { user },
+            callback: ({ user }, input: { service?: string }) => connectService(mounted, user, input.service),
+          }),
+        }),
+      ]);
     }
 
     return entries.length ? Object.fromEntries(entries) : null;

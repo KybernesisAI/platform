@@ -23,6 +23,8 @@ import {
   readFormAnswer,
   describeCron,
   nextCronRun,
+  routineSchedule,
+  shiftCron,
   readStep,
   sparkline,
   visibleSteps,
@@ -347,4 +349,44 @@ test("the next run is the first matching minute after now, in host time", () => 
   assert.deepEqual([quarter.getHours(), quarter.getMinutes()], [9, 45]);
   assert.equal(nextCronRun("not a cron", from), undefined);
   assert.equal(nextCronRun("0 9 31 2 *", from), undefined);
+});
+
+test("a pull request opened through a broker connector, wrapped in data, becomes a card", () => {
+  const state = newStepState();
+  const wrapped = { successful: true, error: null, data: { number: 5, title: "Add a README line", html_url: "https://github.com/acme/app/pull/5", body: "Safe to close." } };
+  feed(state, [
+    { type: "actions.requested", data: { actions: [{ callId: "c", kind: "tool-call", toolName: "github_create_a_pull_request", input: { title: "Add a README line" } }] } },
+    { type: "action.result", data: { status: "completed", result: { callId: "c", toolName: "github_create_a_pull_request", output: wrapped } } },
+  ]);
+  const [made] = cardsOf(state.steps.values());
+  assert.equal(made.card, "pull-request");
+  assert.deepEqual([made.data.repo, made.data.number, made.data.title], ["acme/app", 5, "Add a README line"]);
+});
+
+test("an event booked by length gets its end time, in the start's own form", () => {
+  const event = approvalCard("googlecalendar_create_event", { summary: "Card test", start_datetime: "2026-10-25T15:00:00", event_duration_minutes: 15, timezone: "Asia/Bangkok" });
+  assert.deepEqual([event.data.when, event.data.until], ["2026-10-25T15:00:00", "2026-10-25T15:15:00"]);
+  const late = approvalCard("googlecalendar_create_event", { summary: "Late", start_datetime: "2026-10-25T23:30", event_duration_hour: 1 });
+  assert.equal(late.data.until, "2026-10-26T00:30");
+});
+
+test("a cron moves to another time zone, days and all", () => {
+  assert.equal(shiftCron("40 1 * * 1-5", 420), "40 8 * * 1-5");
+  assert.equal(shiftCron("0 20 * * 1-5", 420), "0 3 * * 2,3,4,5,6");
+  assert.equal(shiftCron("30 2 * * 1", -180), "30 23 * * 0");
+  assert.equal(shiftCron("0 9 * * *", 330), "30 14 * * *");
+  assert.equal(shiftCron("15 * * * *", 330), "45 * * * *");
+  assert.equal(shiftCron("*/10 * * * *", 420), "*/10 * * * *");
+  assert.equal(shiftCron("0 23 1 * *", 120), undefined);
+  assert.equal(shiftCron("0 9 * 1 *", 60), undefined);
+});
+
+test("a routine card says its time in the reader's own zone", () => {
+  const local = -new Date("2026-10-26T01:40:00Z").getTimezoneOffset();
+  const data = { name: "Day summary", schedule: "Weekdays at 1:40 AM", cron: "40 1 * * 1-5", offset: 0, nextRun: "2026-10-26T01:40:00Z" };
+  const expected = describeCron(shiftCron("40 1 * * 1-5", local));
+  assert.equal(routineSchedule(data), expected);
+  assert.equal(routineSchedule({ name: "x", schedule: "Weekdays at 1:40 AM" }), "Weekdays at 1:40 AM");
+  const parsed = parseCard(card("routine", data));
+  assert.deepEqual([parsed.data.cron, parsed.data.offset], ["40 1 * * 1-5", 0]);
 });
