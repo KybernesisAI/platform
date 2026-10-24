@@ -11,9 +11,12 @@ details and a link.
 
 ## Install
 
-Settings → Plugins → Manage plugins → Load from folder, choose `release/`, then enable
-**Kybernesis cards**. `release/` is committed so the folder, or this repository, installs without
-a build.
+Settings → Plugins → Manage plugins, enter `KybernesisAI/platform` (Buzz reads it over HTTPS, no
+sign-in), pick **Kybernesis cards**, and install. A folder works too: Load from folder and choose
+`release/`. `release/` is committed so either way installs without a build.
+
+`release/` also carries `README.md` and `icon.png` from `assets/`, which Buzz shows on its Plugins
+screen.
 
 ## Build
 
@@ -26,3 +29,19 @@ npm run build                                           # tsc, then release/plug
 Buzz lends its own React (`ctx.react`); the build points `react` and `react/jsx-runtime` at
 `src/react.ts` and `src/jsx-runtime.ts`, which bind to it in `apply`. The build refuses any output
 that is not one self-contained module.
+
+## Sign
+
+A signed release names its publisher in Buzz, and only that publisher can ship updates. The
+publisher is Kybernesis, not a person, so `scripts/sign.mjs` signs with a key kept in the
+publishing Mac's Keychain (`ai.kybernesis.buzz-plugin-publisher`) instead of `buzzodz plugin sign`,
+which can only use the Buzz identity of whoever is signed in. It writes the same NIP-PS pair
+Buzz's tool writes; the artifact is byte-identical to buzz-app's own.
+
+```sh
+npm run sign -- --create-key   # once, on the publishing Mac
+npm run build && npm run sign  # every release; commit release/ including the two signed files
+```
+
+`npm run build` empties `release/`, so a signature never outlives its build. Losing the key ends
+updates under this publisher (everyone would reinstall), so keep a copy of it somewhere safe.
