@@ -1,0 +1,18 @@
+{
+  "id": "98bc9aedebc9dc1039092f6bda92ecb9abff5f12da26ae23dcc6d2f163fb2946",
+  "pubkey": "ffe9508b159f103cae31314a95dac32cde59889d3c0349316606ba6bb83c3eb9",
+  "created_at": 1792846752,
+  "kind": 1064,
+  "tags": [
+    [
+      "x",
+      "39f85ae4f3be936128714cc7642d2dd2198089368ef14a8381e0e90ed36a0d0c"
+    ],
+    [
+      "t",
+      "buzz-plugin-release-v1"
+    ]
+  ],
+  "content": "",
+  "sig": "9722b3ef0b6c145cae5581a6009570f99672cb60cd3fd189d16392f09dfc27a9f55b26c88114834b4bdaff51b80d7fd0c55debf89b5729bac160235826863627"
+}
