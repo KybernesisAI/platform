@@ -68,7 +68,11 @@ export function connectAnswer(answer: AgentLinkAnswer): Record<string, unknown> 
       {
         id: `connect-${answer.slug ?? service.toLowerCase()}`,
         source: "Connectors",
-        actions: [{ label: `Connect ${service}`, url: answer.url, primary: true }],
+        actions: [
+          { label: `Connect ${service}`, url: answer.url, primary: true },
+          // Changing their mind is an answer too; it goes back as their next message.
+          { label: "Cancel", say: `Never mind, don't connect ${service}.` },
+        ],
         text: `Connect ${service}: ${answer.url}`,
       },
     ),
