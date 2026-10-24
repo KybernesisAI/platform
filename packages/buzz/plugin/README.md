@@ -11,6 +11,10 @@ A press replies to the question as the person, in its thread, so the agent reads
 typed answer. A button on a card that says something (Correct it, say) sends that sentence to
 the agent the same way.
 
+In a shared channel a question is for the person who asked (bridge 0.15 or later): everyone else
+sees it with "Waiting on" and no buttons. When it ends, the bridge edits its own message to say
+how, under `kyb:settled`, so every viewer and device shows the outcome instead of the buttons.
+
 Shared artifacts are drawn inside their card with Buzz's browser view (macOS desktop only), shown
 while the card sits wholly in the conversation, and open beside it from Open. Other hosts get the
 details and a link.

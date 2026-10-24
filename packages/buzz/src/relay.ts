@@ -19,6 +19,8 @@ import type { AgentKey } from "./keys.js";
 export const KIND_MESSAGE = 9;
 /** NIP-25 reaction. */
 export const KIND_REACTION = 7;
+/** A replacement edit of a message, by its author only (the relay enforces it). */
+export const KIND_EDIT = 40003;
 /** NIP-42 relay authentication. */
 export const KIND_AUTH = 22242;
 /** NIP-98 HTTP authentication. */
@@ -452,7 +454,7 @@ export class BuzzRelay {
     const signed = finalizeEvent({ created_at: now(), ...event }, this.key.secretKey);
     if (this.authenticated && this.send(["EVENT", signed])) return signed.id;
     // Held only between connections of a running relay; one never started or closed sends nothing.
-    if (this.closed || !this.socket || (event.kind !== KIND_MESSAGE && event.kind !== KIND_REACTION)) return null;
+    if (this.closed || !this.socket || ![KIND_MESSAGE, KIND_REACTION, KIND_EDIT].includes(event.kind)) return null;
     if (this.outbox.length >= MAX_OUTBOX) this.outbox.shift();
     this.outbox.push({ event: signed, at: Date.now() });
     return signed.id;
@@ -499,6 +501,16 @@ export class BuzzRelay {
       if (options.mention !== false) tags.push(["p", replyTo.pubkey]);
     }
     return this.publish({ kind: KIND_MESSAGE, tags, content: text });
+  }
+
+  /**
+   * Replace the words of a message this agent posted. Every client shows the
+   * latest edit by the author, and only the author's edits count, so nobody
+   * else can make a message of the agent's say something else. No mention
+   * tag: an edit is not news, so nobody is notified again.
+   */
+  edit(channel: string, eventId: string, text: string): string | null {
+    return this.publish({ kind: KIND_EDIT, tags: [["h", channel], ["e", eventId]], content: text });
   }
 
   /** Sign one HTTP request as this agent (NIP-98), binding the signature to the body. */

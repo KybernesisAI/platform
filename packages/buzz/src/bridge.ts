@@ -1,9 +1,9 @@
-import { cardMessage, cardText, readHiddenAnswers, type Card } from "@kybernesis/cards";
+import { cardMessage, cardText, readHiddenAnswers, type AskSettled, type Card } from "@kybernesis/cards";
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
 import { speakerCredentials } from "./credentials.js";
 import { surfaceWriter } from "./surface.js";
-import { SessionStore } from "./sessions.js";
+import { SessionStore, type StoredAsker, type StoredPrompt } from "./sessions.js";
 import {
   agentSilenceReply,
   answerTurn,
@@ -16,11 +16,16 @@ import {
   validateAgentSilenceTimeoutMs,
 } from "./turn.js";
 import {
+  applySettlements,
   followPendingConversation,
   followerRetryDelayMs,
   formatInputRequests,
   invalidInputReply,
+  isAsker,
   needsPendingFollower,
+  notTheAskerReply,
+  settlementsFor,
+  settleRemaining,
   resolveCarriedAnswers,
   resolveInputReply,
   respondToPendingConversation,
@@ -89,6 +94,15 @@ export type BuzzBridgeOptions = {
    * Default true; false posts the reply and questions as words alone.
    */
   cards?: boolean;
+  /**
+   * Who may answer a question the agent asks in a shared channel. `asker`
+   * (the default): only the person whose message raised it; anyone else is
+   * told so, and the plugin shows them the question without buttons.
+   * `anyone`: anyone the agent knows in the channel, as before 0.15.
+   * Either way, once a question ends the bridge edits it to say how, for
+   * everyone who can see it.
+   */
+  answers?: "asker" | "anyone";
   onLog?: (message: string) => void;
 };
 
@@ -102,6 +116,8 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   const agentSilenceTimeoutMs = validateAgentSilenceTimeoutMs(
     options.agentSilenceTimeoutMs ?? DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   );
+  const askerOnly = options.answers !== "anyone";
+  const carry = options.cards !== false;
 
   /**
    * An artifact card, with a link everyone in the channel can open.
@@ -352,6 +368,47 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     followers.delete(conversation);
   }
 
+  /**
+   * Edit each posted question whose requests just ended, so everyone who can
+   * see it reads how it ended and nobody is offered its buttons again.
+   *
+   * @remarks
+   * The plugin used to keep a pressed question's outcome only on the device
+   * that pressed it. In a shared channel everyone else, and the same person on
+   * another device, still saw Send it on an email that had gone. The prompt is
+   * the agent's own message and only its author may edit it, so the edit is
+   * the one record every client draws. Runs inside the conversation's queue.
+   */
+  function settlePrompts(relay: BuzzRelay, community: string, channel: string, settlements: ReadonlyMap<string, AskSettled>): void {
+    const current = sessions.get(community, channel);
+    if (!current?.prompts?.length || settlements.size === 0) return;
+    const { edits, open } = applySettlements(current.prompts, settlements, { carry, askerOnly });
+    for (const { eventId, content } of edits) {
+      if (relay.edit(channel, eventId, content)) log(`marked a question in ${channel.slice(0, 8)} as ${[...new Set(settlements.values())].map((s) => s.outcome).join(", ")}`);
+      else log(`could not mark a question in ${channel.slice(0, 8)} as ended: not connected`);
+    }
+    const { prompts: _prompts, ...rest } = current;
+    sessions.set(community, channel, open.length ? { ...rest, prompts: open } : rest);
+  }
+
+  /** Every question still open in this conversation ends the same way: answered elsewhere, or no longer waited on. */
+  function settleOpenPrompts(relay: BuzzRelay, community: string, channel: string, outcome: "answered" | "withdrawn"): void {
+    const current = sessions.get(community, channel);
+    if (!current?.prompts?.length) return;
+    settlePrompts(relay, community, channel, settleRemaining(current.prompts, { outcome, at: Date.now() }));
+  }
+
+  /** Remember a posted question, so it can be edited when it ends. */
+  function rememberPrompt(community: string, channel: string, prompt: StoredPrompt): void {
+    const current = sessions.get(community, channel);
+    if (!current) return;
+    sessions.set(community, channel, {
+      ...current,
+      promptEventIds: [...(current.promptEventIds ?? []), prompt.eventId],
+      prompts: [...(current.prompts ?? []), prompt],
+    });
+  }
+
   function startFollower(community: string, channel: string): void {
     if (stopped) return;
     const conversation = SessionStore.key(community, channel);
@@ -376,25 +433,29 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         onState: (state) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
           const current = sessions.get(community, channel);
+          // The follower began from a copy; who asked and what was posted are the store's.
+          const { prompts: _stale, asker: _staleAsker, ...fresh } = state;
+          const kept = {
+            ...(current?.asker ? { asker: current.asker } : {}),
+            ...(current?.prompts?.length ? { prompts: current.prompts } : {}),
+          };
           if (state.pendingInputRequests?.length) {
-            sessions.set(community, channel, { ...state, promptEventIds: current?.promptEventIds });
+            sessions.set(community, channel, { ...fresh, ...kept, promptEventIds: current?.promptEventIds });
             return;
           }
           if (current?.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
-          sessions.set(community, channel, state);
+          sessions.set(community, channel, { ...fresh, ...kept });
+          // Nothing is waiting on a person any more. A question the bridge did not see answered
+          // was answered elsewhere if the turn resumed, and is no longer waited on if it ended.
+          settleOpenPrompts(relay, community, channel, state.resumeInFlight ? "answered" : "withdrawn");
         }),
         onInputRequested: (requests) => serialize(community, channel, async () => {
           if (followers.get(conversation) !== controller) return;
-          const promptId = relay.reply(channel, formatInputRequests(requests, { carry: options.cards !== false }));
+          const asker = sessions.get(community, channel)?.asker;
+          const promptId = relay.reply(channel, formatInputRequests(requests, { carry, asker, askerOnly }));
           if (!promptId) throw new Error("Buzz relay is not connected");
           relay.watchReplies([promptId]);
-          const current = sessions.get(community, channel);
-          if (current) {
-            sessions.set(community, channel, {
-              ...current,
-              promptEventIds: [...(current.promptEventIds ?? []), promptId],
-            });
-          }
+          rememberPrompt(community, channel, { eventId: promptId, requests, ...(asker ? { asker } : {}) });
           log(`posted another input request in ${channel.slice(0, 8)}`);
         }),
         onMessage: (message, cards) => serialize(community, channel, async () => {
@@ -446,7 +507,8 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           const current = sessions.get(community, channel);
           if (!current || !needsPendingFollower(current)) return;
           if (current.promptEventIds?.length) relay.unwatchReplies(current.promptEventIds);
-          const { pendingInputRequests: _p, resumeInFlight: _r, promptEventIds: _e, ...cleared } = current;
+          settleOpenPrompts(relay, community, channel, "answered");
+          const { pendingInputRequests: _p, resumeInFlight: _r, promptEventIds: _e, prompts: _q, ...cleared } = sessions.get(community, channel) ?? current;
           sessions.set(community, channel, cleared);
           relay.reply(channel, resumeStalledReply(agentWorkTimeoutMs));
           log(`gave up on the resumed turn in ${channel.slice(0, 8)}: no progress past index ${retry.index}`);
@@ -520,6 +582,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         if (pending?.pendingInputRequests?.length) {
           let responses: readonly import("eve/client").InputResponse[] | null;
           const carried = readHiddenAnswers(text);
+          if (askerOnly && pending.asker && !isAsker(pending.asker, event.pubkey, speaker.user.id)) {
+            // Someone else's question. A remark in its thread is people talking, not an answer:
+            // only a press, or a message that names the agent, is told whose answer it waits for.
+            if (carried.length || addressed) relay.reply(channel, notTheAskerReply(pending.asker), event);
+            log(`ignored an answer in ${channel.slice(0, 8)} from ${speaker.user.email}: the question is for someone else`);
+            return;
+          }
           if (carried.length) {
             // A press in the plugin. It counts only as a direct reply to a prompt this bridge
             // posted, so a message quoting someone else's question cannot answer this one.
@@ -556,6 +625,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           });
           await respondToPendingConversation(session, responses);
           log(`submitted ${responses.length} input response(s) in ${channel.slice(0, 8)}`);
+          const settlements = settlementsFor(responses, pending.pendingInputRequests, speaker.user.displayName?.trim() || undefined);
           /**
            * The answer is in, so this conversation is no longer waiting on a
            * person. It is waiting on the agent, and that is a thing the bridge
@@ -581,6 +651,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
               remaining.length ? { ...rest, pendingInputRequests: remaining } : { ...rest, resumeInFlight: true },
             );
           }
+          settlePrompts(relay, from, channel, settlements);
           return;
         }
 
@@ -610,17 +681,19 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         );
 
         if (result.status === "waiting" && result.inputRequests.length > 0) {
+          const name = speaker.user.displayName?.trim();
+          const asker: StoredAsker = { key: event.pubkey, ...(speaker.user.id ? { userId: speaker.user.id } : {}), ...(name ? { name } : {}) };
           sessions.set(from, channel, {
             id: result.sessionId,
             streamIndex: result.streamIndex,
             pendingInputRequests: result.inputRequests,
             speakerPublicKey: event.pubkey,
+            asker,
           });
-          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests, { carry: options.cards !== false }), event);
+          const promptId = relay.reply(channel, formatInputRequests(result.inputRequests, { carry, asker, askerOnly }), event);
           if (promptId) {
             relay.watchReplies([promptId]);
-            const current = sessions.get(from, channel);
-            if (current) sessions.set(from, channel, { ...current, promptEventIds: [promptId] });
+            rememberPrompt(from, channel, { eventId: promptId, requests: result.inputRequests, asker });
           }
           log(`posted ${result.inputRequests.length} input request(s) in ${channel.slice(0, 8)}`);
           startFollower(from, channel);

@@ -100,7 +100,7 @@ can withdraw the link from the agent. `BUZZ_CARDS=off` stops card messages.
 When the agent needs a yes or an answer, the bridge posts the question as a reply to the message
 that asked: an approval as the email, event or message it would send (recipients, subject and
 the whole body, not "Approve tool call"), any other question as its sentence, then the options by
-number. Anyone can answer by replying with a number, an option or their own words. Since 0.14 the
+number. The person who asked answers by replying with a number, an option or their own words. Since 0.14 the
 question also travels hidden (`<!-- kyb:ask v1 {...} -->`), and the plugin draws it as Studio
 does, with Send it, Edit and Don't send on an email, the amount and Approve in Link on a
 purchase, and the fields of a form. A press posts the person's answer as a reply to the
@@ -108,6 +108,16 @@ question: a short line, with the answer hidden after it (`<!-- kyb:answer v1 {..
 bridge accepts a hidden answer only as a direct reply to a prompt it posted, only for a request
 still open, and only with that request's own options. Replies inside a thread count, whichever
 `e` tag names the prompt. A vault request never takes a secret in the channel.
+
+Since 0.15 a question is for the person whose message raised it. Anyone else who presses an
+answer, or names the agent while it waits, is told whose answer it needs; a remark in the
+question's thread is left alone. The question carries who asked, so the plugin shows everyone
+else the email with "Waiting on" and no buttons. `BUZZ_ANSWERS=anyone` keeps the older rule.
+When a question ends (answered, declined, sent back with changes, or no longer waited on because
+its work stopped) the bridge edits its own prompt to say how and by whom, with the question
+hidden as `<!-- kyb:settled v1 {...} -->` instead. Only a message's author can edit it, so every
+client, with the plugin or without, shows the same outcome and nobody is offered the buttons
+again. The edit names nobody, so it notifies nobody.
 
 If the work an answer restarts fails (a model refusing the continuation, say), the bridge says so
 in the channel with the stream's own error, rather than leaving the person who answered with
@@ -124,6 +134,7 @@ silence. A declined call is the person's choice and is not reported as a failure
 | `BUZZ_AGENT_SILENCE_TIMEOUT_MS` | Maximum silence before the agent acknowledges a request: unread drain, send and create acknowledgement (default `300000`, five minutes). This is where a genuine stall shows: no run is ever created. |
 | `BUZZ_AGENT_WORK_TIMEOUT_MS` | Ceiling on silence once the response stream is open (default `3600000`, sixty minutes). The stream is quiet while the agent works, a long tool call or a delegated subagent produces nothing until it returns, so this is a ceiling on work, not a stall detector. |
 | `BUZZ_CARDS` | `off` stops posting cards after replies and hidden questions in prompts (default on) |
+| `BUZZ_ANSWERS` | Who may answer a question in a shared channel: `asker` (default), only the person whose message raised it, or `anyone` the agent knows there |
 | `BUZZ_PROFILE_SYNC_MS` | How often the profile is re-checked against the name and picture its owner set and its `.agent` name (default `900000`, fifteen minutes; `0` turns it off) |
 | `AGENTID_MIRROR_SUFFIX` | Where names serve their public documents (default `.agentid.dev`); for staging only |
 | `KYBERNESIS_ISSUER` | The control plane |

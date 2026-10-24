@@ -6,9 +6,36 @@ import {
   type InputResponse,
   type MessageStreamEvent,
 } from "eve/client";
-import { askFrom, askText, cardsOf, hiddenAsk, newStepState, readStep, type AskAnswer, type Card } from "@kybernesis/cards";
-import type { StoredSession } from "./sessions.js";
+import {
+  askFrom,
+  askText,
+  cardsOf,
+  hiddenAsk,
+  hiddenSettled,
+  newStepState,
+  readStep,
+  settledLine,
+  settleWith,
+  type Ask,
+  type AskAnswer,
+  type AskPerson,
+  type AskSettled,
+  type Card,
+} from "@kybernesis/cards";
+import type { StoredAsker, StoredPrompt, StoredSession } from "./sessions.js";
 import { failureFromEvent, silentTurnReply, type TurnFailure } from "./turn.js";
+
+/** How a question is posted: who it is for, and which of its requests have ended. */
+export interface PromptOptions {
+  /** Carry each question hidden after the words, for the plugin. */
+  carry?: boolean;
+  /** The person whose message raised it. */
+  asker?: StoredAsker;
+  /** Only the asker may answer it. */
+  askerOnly?: boolean;
+  /** Requests that have ended, by request id: shown as how they ended, with nothing to answer. */
+  settled?: Readonly<Record<string, AskSettled>>;
+}
 
 /**
  * Render pending Eve input in a Buzz channel.
@@ -19,15 +46,27 @@ import { failureFromEvent, silentTurnReply, type TurnFailure } from "./turn.js";
  * (`<!-- kyb:ask v1 … -->`), so the Kybernesis plugin can draw it the way
  * Studio does and answer it with a press. Only a posted prompt carries them:
  * a press is accepted only as a reply to a prompt the bridge is watching.
+ *
+ * The same text, with `settled`, is what the prompt is edited to once a
+ * question ends: how it ended and who ended it, then what it asked, and the
+ * question hidden as `kyb:settled` so no client offers to answer it again.
  */
-export function formatInputRequests(requests: readonly InputRequest[], options: { carry?: boolean } = {}): string {
-  const asks = requests.map((request) => askFrom(request));
+export function formatInputRequests(requests: readonly InputRequest[], options: PromptOptions = {}): string {
+  const person: AskPerson | undefined = options.asker ? { key: options.asker.key, ...(options.asker.name ? { name: options.asker.name } : {}) } : undefined;
+  const only = Boolean(options.askerOnly && person);
+  const asks: Ask[] = requests.map((request) => ({
+    ...askFrom(request),
+    ...(person ? { asker: person } : {}),
+    ...(only ? { askerOnly: true as const } : {}),
+  }));
+  const settledOf = (ask: Ask) => options.settled?.[ask.requestId];
   const text = asks.map((ask, requestIndex) => {
     const request = requests[requestIndex]!;
     const prompt = askText(ask);
-    const lines = [
-      requests.length > 1 ? `Question ${requestIndex + 1}: ${prompt}` : prompt,
-    ];
+    const numbered = (line: string) => (requests.length > 1 ? `Question ${requestIndex + 1}: ${line}` : line);
+    const settled = settledOf(ask);
+    if (settled) return [numbered(settledLine({ ...ask, settled })), "", prompt].join("\n");
+    const lines = [numbered(prompt)];
     if (request.options?.length) {
       lines.push(
         "",
@@ -37,16 +76,92 @@ export function formatInputRequests(requests: readonly InputRequest[], options: 
         }),
       );
     }
+    const who = only && person?.name ? `${person.name}, reply` : "Reply";
     if (request.allowFreeform === true || !request.options?.length) {
-      lines.push("", "Reply to this message with an option number, option ID, exact label, or your own answer.");
+      lines.push("", `${who} to this message with an option number, option ID, exact label, or your own answer.`);
     } else {
-      lines.push("", "Reply to this message with an option number, option ID, or exact label.");
+      lines.push("", `${who} to this message with an option number, option ID, or exact label.`);
     }
     return lines.join("\n");
   }).join("\n\n");
   if (!options.carry) return text;
-  const hidden = asks.map((ask) => hiddenAsk(ask)).filter((h): h is string => h !== null);
+  const hidden = asks
+    .map((ask) => {
+      const settled = settledOf(ask);
+      return settled ? hiddenSettled({ ...ask, settled }) : hiddenAsk(ask);
+    })
+    .filter((h): h is string => h !== null);
   return hidden.length ? `${text}\n\n${hidden.join("\n")}` : text;
+}
+
+/** What someone other than the asker hears when they try to answer. */
+export function notTheAskerReply(asker: StoredAsker): string {
+  return `Only ${asker.name ?? "the person who asked"} can answer this one. I can take something new once it's answered.`;
+}
+
+/** Whether `pubkey`, resolved to `userId`, is the person a question is for. */
+export function isAsker(asker: StoredAsker, pubkey: string, userId?: string): boolean {
+  return asker.key === pubkey || Boolean(asker.userId && userId && asker.userId === userId);
+}
+
+/** How each response settles its request, said by `by`. */
+export function settlementsFor(
+  responses: readonly InputResponse[],
+  requests: readonly InputRequest[],
+  by?: string,
+  at = Date.now(),
+): Map<string, AskSettled> {
+  const open = new Map(requests.map((request) => [request.requestId, request]));
+  const out = new Map<string, AskSettled>();
+  for (const response of responses) {
+    const request = open.get(response.requestId);
+    if (!request) continue;
+    const answer = {
+      ...(response.optionId !== undefined ? { optionId: response.optionId } : {}),
+      ...(response.text !== undefined ? { text: response.text } : {}),
+    };
+    out.set(response.requestId, settleWith(askFrom(request), answer, by, at));
+  }
+  return out;
+}
+
+/**
+ * Prompts with `settlements` applied: each one that changed, with the text it
+ * is edited to, and the prompts still waiting on something afterwards.
+ */
+export function applySettlements(
+  prompts: readonly StoredPrompt[],
+  settlements: ReadonlyMap<string, AskSettled>,
+  options: { carry?: boolean; askerOnly?: boolean },
+): { edits: { eventId: string; content: string }[]; open: StoredPrompt[] } {
+  const edits: { eventId: string; content: string }[] = [];
+  const open: StoredPrompt[] = [];
+  for (const prompt of prompts) {
+    const fresh = prompt.requests.filter((request) => settlements.has(request.requestId) && !prompt.settled?.[request.requestId]);
+    let next = prompt;
+    if (fresh.length) {
+      const settled = { ...prompt.settled };
+      for (const request of fresh) settled[request.requestId] = settlements.get(request.requestId)!;
+      next = { ...prompt, settled };
+      edits.push({
+        eventId: prompt.eventId,
+        content: formatInputRequests(prompt.requests, { carry: options.carry, asker: prompt.asker, askerOnly: options.askerOnly, settled }),
+      });
+    }
+    if (next.requests.some((request) => !next.settled?.[request.requestId])) open.push(next);
+  }
+  return { edits, open };
+}
+
+/** Every request in `prompts` that has not ended yet, settled the same way. */
+export function settleRemaining(prompts: readonly StoredPrompt[], settled: AskSettled): Map<string, AskSettled> {
+  const out = new Map<string, AskSettled>();
+  for (const prompt of prompts) {
+    for (const request of prompt.requests) {
+      if (!prompt.settled?.[request.requestId]) out.set(request.requestId, settled);
+    }
+  }
+  return out;
 }
 
 /**

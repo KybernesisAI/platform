@@ -1,4 +1,4 @@
-import { cardTitle, formAnswer, isKnownCard, money, type Ask, type ApprovalData, type FormData, type FormField } from "@kybernesis/cards";
+import { cardTitle, formAnswer, isKnownCard, money, settledLabel, settledLine, type Ask, type ApprovalData, type FormData, type FormField } from "@kybernesis/cards";
 import { type ReactNode, useState } from "react";
 import { ApprovalBody, CardView, type CardContext } from "./CardView.js";
 
@@ -11,6 +11,10 @@ import { ApprovalBody, CardView, type CardContext } from "./CardView.js";
  * buttons and, when it takes words, a box to type them. The host sends the
  * answer the way it answers anything (`onAnswer`); a pressed question then
  * shows what was said, so it is still on record.
+ *
+ * In a shared conversation a question can be someone else's. `waitingOn`
+ * draws it without buttons, saying whose answer it waits for, and a question
+ * that carries `settled` shows how it ended for everyone who sees it.
  */
 
 export interface AskReply {
@@ -29,6 +33,8 @@ export interface AskViewProps {
   error?: string;
   /** True while an answer is on its way. */
   sending?: boolean;
+  /** Someone else's question: drawn without buttons, waiting on this name. */
+  waitingOn?: string;
   onAnswer(reply: AskReply): void;
 }
 
@@ -240,9 +246,66 @@ function outcome(reply: AskReply): { label: string; good: boolean } {
   return { label: reply.optionId === "approve" || reply.optionId === "approved" ? "Approved" : "Answered", good: true };
 }
 
+function askTitle(ask: Ask): string {
+  const card = ask.card && isKnownCard(ask.card) ? ask.card : undefined;
+  if (card?.card === "approval") return cardTitle(card) ?? card.data.action;
+  if (card?.card === "form") return card.title ?? "A few details";
+  if (ask.spend) return "Purchase approval";
+  return ask.text.split("\n")[0]!.slice(0, 120) || "Question";
+}
+
+/** What the question asks, without anything to press: the email, the amount, or the sentence. */
+function AskBody({ ask }: { ask: Ask }): ReactNode {
+  const card = ask.card && isKnownCard(ask.card) ? ask.card : undefined;
+  if (card?.card === "approval") return <ApprovalBody data={card.data} />;
+  if (ask.spend) {
+    const s = ask.spend;
+    return (
+      <div className="kask__amount">
+        <span className="kask__total">{money(s.amount, s.currency)}</span>
+        <span className="kask__note">at {s.merchant ?? (s.merchant_url ? host(s.merchant_url) : "a merchant")}</span>
+      </div>
+    );
+  }
+  return ask.text ? <div className="kask__text">{ask.text}</div> : null;
+}
+
+/** A question answered or let go, as everyone in the conversation sees it. */
+function Settled({ ask }: { ask: Ask }): ReactNode {
+  const outcome = ask.settled!.outcome;
+  const good = outcome === "approved" || outcome === "answered";
+  const card = ask.card && isKnownCard(ask.card) ? ask.card : undefined;
+  return (
+    <div className="kcard kask is-done">
+      <div className="kcard__head">
+        <span className="kcard__title">{askTitle(ask)}</span>
+        <span className={`kpill${good ? " is-good" : ""}`}>{settledLabel(ask)}</span>
+      </div>
+      {card?.card === "approval" && card.data.subject ? <div className="kcard__text">{card.data.subject}</div> : null}
+      <div className="kask__note">{settledLine(ask)}</div>
+    </div>
+  );
+}
+
+/** Someone else's question, open: what it asks, and whose answer it waits for. */
+function Waiting({ ask, name }: { ask: Ask; name: string }): ReactNode {
+  return (
+    <div className="kcard kask">
+      <div className="kcard__head">
+        <span className="kcard__title">{askTitle(ask)}</span>
+        <span className="kpill">Waiting on {name}</span>
+      </div>
+      <AskBody ask={ask} />
+    </div>
+  );
+}
+
 export function AskView(props: AskViewProps): ReactNode {
   const { ask, ctx, answered } = props;
   const card = ask.card && isKnownCard(ask.card) ? ask.card : undefined;
+
+  if (ask.settled) return <Settled ask={ask} />;
+  if (props.waitingOn && !answered) return <Waiting ask={ask} name={props.waitingOn} />;
 
   if (card?.card === "approval") {
     const title = cardTitle(card) ?? card.data.action;

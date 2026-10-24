@@ -1,5 +1,15 @@
 import type { Context } from "@buzz/author";
-import { answerMessage, HIDDEN_ASK_OPEN, HIDDEN_CARD_OPEN, readHiddenAsks, readHiddenCards, type Ask, type Card } from "@kybernesis/cards";
+import {
+  answerMessage,
+  HIDDEN_ASK_OPEN,
+  HIDDEN_CARD_OPEN,
+  HIDDEN_SETTLED_OPEN,
+  readHiddenAsks,
+  readHiddenCards,
+  readSettledAsks,
+  type Ask,
+  type Card,
+} from "@kybernesis/cards";
 import { AskView, CardStack, cardStyles, type AskReply, type CardContext } from "@kybernesis/cards-react";
 import { bindReact, useEffect, useRef, useState } from "./react.js";
 
@@ -20,6 +30,11 @@ import { bindReact, useEffect, useRef, useState } from "./react.js";
  * its amount, a form with its fields) and a press answers it as the person:
  * a reply to the question, with a line anyone can read and the answer hidden
  * after it. The bridge takes it exactly as it takes a typed reply.
+ *
+ * A question is for the person who asked it. Everyone else in the channel
+ * sees what it asks and whose answer it waits for, with nothing to press.
+ * Once it ends, the bridge edits its own message to say how, so everyone sees
+ * the outcome on every device, and the buttons are gone for all of them.
  *
  * Without the plugin, or if it fails, people read the text: nothing is lost.
  */
@@ -43,10 +58,14 @@ function cardsIn(message: Message): Card[] {
 
 const parsedAsks = new WeakMap<object, Ask[]>();
 
+/** The message's questions, open and settled, in the order they were asked. */
 function asksIn(message: Message): Ask[] {
   let asks = parsedAsks.get(message);
   if (!asks) {
-    asks = message.content.includes(HIDDEN_ASK_OPEN) ? readHiddenAsks(message.content) : [];
+    const open = message.content.includes(HIDDEN_ASK_OPEN) ? readHiddenAsks(message.content) : [];
+    const settled = message.content.includes(HIDDEN_SETTLED_OPEN) ? readSettledAsks(message.content) : [];
+    const order = (ask: Ask) => message.content.indexOf(`"requestId":${JSON.stringify(ask.requestId)}`);
+    asks = [...open, ...settled].sort((a, b) => order(a) - order(b));
     parsedAsks.set(message, asks);
   }
   return asks;
@@ -222,15 +241,26 @@ export function apply(ctx: Context) {
     }
   }
 
+  /** Who is looking, by their key in this community; kept current as the connection comes and goes. */
+  function useViewer(): string | undefined {
+    const [viewer, setViewer] = useState<string | undefined>(() => ctx.relay.snapshot().viewer);
+    useEffect(() => ctx.relay.subscribe(() => setViewer(ctx.relay.snapshot().viewer)), []);
+    return viewer;
+  }
+
   function AskMessage({ message, ask, host }: { message: Message; ask: Ask; host: CardContext }) {
     const key = `${message.id}:${ask.requestId}`;
     const [answered, setAnswered] = useState<AskReply | undefined>(() => answeredStore()[key]);
     const [error, setError] = useState<string | undefined>();
+    const viewer = useViewer();
+    // Someone else's question. Until the viewer is known, nobody gets buttons they may not use.
+    const theirs = ask.askerOnly && ask.asker && ask.asker.key !== viewer;
     return (
       <AskView
         ask={ask}
         ctx={host}
         answered={answered}
+        waitingOn={theirs ? (ask.asker!.name ?? "the person who asked") : undefined}
         error={error}
         onAnswer={(reply) => {
           const failed = replyTo(message, answerMessage({ requestId: ask.requestId, optionId: reply.optionId, text: reply.text }, reply.label));

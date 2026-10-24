@@ -64,3 +64,20 @@ test("a form draws its fields; a plain question its options and a box for words"
   assert.ok(plain.includes("First"));
   assert.ok(plain.includes("Your answer"));
 });
+
+test("someone else's question shows what it asks and whose answer it waits for, with nothing to press", () => {
+  const html = draw(email, { waitingOn: "Planner" });
+  for (const words of ["Send email · Gmail", "dana@example.com", "The numbers are in.", "Waiting on Planner"]) assert.ok(html.includes(words), words);
+  for (const words of ["Send it", "Edit", "Don&#x27;t send", "<button"]) assert.ok(!html.includes(words), words);
+});
+
+test("a settled question shows how it ended to everyone, waiting or not", () => {
+  const sent = { ...email, settled: { outcome: "approved", by: "Planner" } };
+  for (const extra of [{}, { waitingOn: "Planner" }]) {
+    const html = draw(sent, extra);
+    assert.ok(html.includes("Approved by Planner."));
+    assert.ok(!html.includes("<button"));
+  }
+  assert.ok(draw({ ...email, settled: { outcome: "declined", by: "Planner" } }).includes("Not sent"));
+  assert.ok(draw({ ...email, settled: { outcome: "withdrawn" } }).includes("No longer waiting"));
+});

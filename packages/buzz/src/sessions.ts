@@ -1,6 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { AskSettled } from "@kybernesis/cards";
 import type { InputRequest } from "eve/client";
+
+/** The person whose message raised a question: their chat key, account and name. */
+export interface StoredAsker {
+  key: string;
+  /** Their control-plane account, so another device of theirs counts as them. */
+  userId?: string;
+  name?: string;
+}
+
+/** A question the bridge posted, kept until every request in it has settled, so it can be rewritten. */
+export interface StoredPrompt {
+  eventId: string;
+  requests: readonly InputRequest[];
+  asker?: StoredAsker;
+  /** Requests that have ended, by request id. */
+  settled?: Readonly<Record<string, AskSettled>>;
+}
 
 /** One conversation: which eve session it is, and how far the bridge has read. */
 export interface StoredSession {
@@ -17,6 +35,10 @@ export interface StoredSession {
    * counts as an answer whether or not it mentions this agent.
    */
   promptEventIds?: readonly string[];
+  /** Who the open questions are for. Absent on conversations from before 0.15: anyone may answer those. */
+  asker?: StoredAsker;
+  /** The posted questions not yet fully settled, so the bridge can rewrite each one when it ends. */
+  prompts?: readonly StoredPrompt[];
   /** When it was last used, so a store that runs for years does not grow forever. */
   updated: number;
 }

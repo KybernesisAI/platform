@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 
 import {
   BuzzRelay,
+  KIND_EDIT,
   KIND_MESSAGE,
   KIND_PRESENCE,
   KIND_REACTION,
@@ -223,6 +224,18 @@ test("reply returns the published event id, or null when no socket is connected"
   const published = socket.published(KIND_MESSAGE).at(-1);
   assert.equal(published.content, "sent");
   assert.equal(id, published.id);
+});
+
+test("an edit replaces the agent's own message in its channel and names nobody", () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  const target = "f".repeat(64);
+  const id = relay.edit("channel-1", target, "Approved by Planner.");
+  const [edit] = socket.published(KIND_EDIT);
+  assert.equal(edit.id, id);
+  assert.equal(edit.kind, 40003);
+  assert.equal(edit.content, "Approved by Planner.");
+  assert.deepEqual(edit.tags, [["h", "channel-1"], ["e", target]]);
 });
 
 test("watched prompts add a reply filter to the poll, so an answer needs no mention", () => {
