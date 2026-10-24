@@ -539,9 +539,10 @@ export async function answerTurn(
 
 /** What the room is told when eve refuses the turn itself. */
 /**
- * The two answers from eve that mean the stored session cannot carry another
- * turn: an unknown session id (404), and a session that ended (409 with
- * `session_not_active`, "The session is no longer active."). A session ends
+ * The answers from eve that mean the stored session cannot carry another
+ * turn: an unknown session id (404), a session that ended (409 with
+ * `session_not_active`, "The session is no longer active."), and one whose
+ * history expired (410 `session_expired`). A session ends
  * when one of its turns fails hard, for instance a model call that 404s at
  * the gateway; the channel must then start a fresh one.
  *
@@ -554,7 +555,10 @@ export async function answerTurn(
  */
 export function isSessionGone(error: unknown): boolean {
   if (!(error instanceof ClientError)) return false;
-  if (error.status === 404) return true;
+  // 410 session_expired, "Session history is no longer available.": a run that
+  // ended (a failed turn ends the session) can no longer be read. Seen on
+  // 2026-10-24 when the next message in a channel failed instead of starting over.
+  if (error.status === 404 || error.status === 410) return true;
   return (
     error.status === 409 &&
     (error.code === "session_not_active" || /no longer active/i.test(String(error.message ?? "")))
