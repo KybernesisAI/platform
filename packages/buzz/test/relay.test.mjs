@@ -360,6 +360,8 @@ test("one-to-one DMs are found from the relay's signed rosters and polled whole"
   // A roster anyone could publish is not the relay's word.
   socket.deliver(["EVENT", rosterReq[1], roster("forged", [key.publicKey, other], "f".repeat(64))]);
   socket.deliver(["EOSE", rosterReq[1]]);
+  // The relay acknowledges our CLOSE with a CLOSED of its own; that is not a refusal.
+  socket.deliver(["CLOSED", rosterReq[1], ""]);
 
   const metaReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39000);
   assert.ok(metaReq, "then the metadata of those channels");
@@ -370,6 +372,7 @@ test("one-to-one DMs are found from the relay's signed rosters and polled whole"
   socket.deliver(["EVENT", metaReq[1], metadata("general", "stream")]);
   socket.deliver(["EVENT", metaReq[1], metadata("forged", "dm")]);
   socket.deliver(["EOSE", metaReq[1]]);
+  socket.deliver(["CLOSED", metaReq[1], ""]);
 
   assert.equal(relay.isDirect("dm-1"), true);
   assert.equal(relay.isDirect("group-dm"), false, "a group DM still needs the mention");
@@ -400,4 +403,19 @@ test("a discovery event never reaches the bridge as a message, nor moves the pol
   assert.deepEqual(seen, []);
   const before = socket.sent.filter((f) => f[0] === "REQ" && f[1].startsWith("m")).at(-1);
   assert.ok(before[2].since < 4_000_000_000);
+});
+
+test("a refused roster request clears the discovery, so the next one can run", async () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const rosterReq = socket.sent.find((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39002);
+  socket.deliver(["CLOSED", rosterReq[1], "restricted: no"]);
+  socket.deliver(["EVENT", rosterReq[1], {
+    id: "late", pubkey: RELAY_SELF, created_at: 1, kind: 39002, sig: "", content: "",
+    tags: [["d", "dm-1"], ["p", key.publicKey], ["p", "a".repeat(64)]],
+  }]);
+  socket.deliver(["EOSE", rosterReq[1]]);
+  assert.equal(socket.sent.some((f) => f[0] === "REQ" && f[2].kinds?.[0] === 39000), false);
+  assert.equal(relay.isDirect("dm-1"), false);
 });

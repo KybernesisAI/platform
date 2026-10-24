@@ -395,7 +395,11 @@ export class BuzzRelay {
     const discovery = this.discovery;
     if (!discovery) return;
     if (refused) {
-      if (sub === discovery.rosterSub || sub === discovery.metadataSub) this.discovery = null;
+      // Only a subscription still in flight can be refused. This relay answers every CLOSE we
+      // send with a CLOSED of its own, so the roster's echo arrives after the metadata request
+      // has gone out; treating it as a refusal dropped every discovery.
+      const inFlight = discovery.metadataSub === null ? discovery.rosterSub : discovery.metadataSub;
+      if (sub === inFlight) this.discovery = null;
       return;
     }
     if (sub === discovery.rosterSub) {
