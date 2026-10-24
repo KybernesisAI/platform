@@ -42,6 +42,9 @@ export const TYPING_INTERVAL_MS = 3_000;
 export const PRESENCE_INTERVAL_MS = 60_000;
 /** Enough overlap for same-second redelivery without retaining every event forever. */
 export const MAX_SEEN_EVENT_IDS = 10_000;
+/** At most this many messages wait for a reconnect, and none older than this goes out late. */
+export const MAX_OUTBOX = 100;
+export const OUTBOX_MAX_AGE_MS = 15 * 60_000;
 /** How often to re-read which direct conversations this agent is in. */
 export const DIRECT_REFRESH_MS = 30_000;
 /** Ids per `#d`/`#h` filter, and filters per request: the relay caps a request at ten. */
@@ -96,6 +99,14 @@ export class BuzzRelay {
   private refusal: string | null = null;
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
+  /**
+   * Messages and reactions signed while the connection was down or not yet signed in.
+   *
+   * The relay drops in and out every few minutes. A question posted in one of those gaps
+   * used to vanish: the person never saw it, and their next message was taken as a wrong
+   * answer to it. They go out, in order, as soon as the connection is signed in again.
+   */
+  private readonly outbox: { event: NostrEvent; at: number }[] = [];
   private cursor = now();
   /** Prompts this agent posted; replies to them are polled for even when they carry no mention. */
   private readonly replyWatch = new Set<string>();
@@ -266,6 +277,7 @@ export class BuzzRelay {
       this.backoff = 5_000;
       this.refusal = null;
       this.log(`authenticated as ${this.key.publicKey.slice(0, 12)}…`);
+      this.flushOutbox();
       this.keepPresent();
       this.discoverDirect();
       this.poll();
@@ -432,10 +444,33 @@ export class BuzzRelay {
     }
   }
 
-  /** Publish one event; returns its id when it left this process, null when the socket was down. */
+  /**
+   * Publish one event; returns its id when it left this process or waits in the outbox, null
+   * when it was dropped. Presence and typing are dropped while offline: late, they are wrong.
+   */
   publish(event: { kind: number; tags: string[][]; content: string }): string | null {
     const signed = finalizeEvent({ created_at: now(), ...event }, this.key.secretKey);
-    return this.send(["EVENT", signed]) ? signed.id : null;
+    if (this.authenticated && this.send(["EVENT", signed])) return signed.id;
+    // Held only between connections of a running relay; one never started or closed sends nothing.
+    if (this.closed || !this.socket || (event.kind !== KIND_MESSAGE && event.kind !== KIND_REACTION)) return null;
+    if (this.outbox.length >= MAX_OUTBOX) this.outbox.shift();
+    this.outbox.push({ event: signed, at: Date.now() });
+    return signed.id;
+  }
+
+  private flushOutbox(): void {
+    const cutoff = Date.now() - OUTBOX_MAX_AGE_MS;
+    const stale = this.outbox.filter(({ at }) => at < cutoff).length;
+    if (stale) this.log(`dropped ${stale} message(s) held too long while disconnected`);
+    const due = this.outbox.splice(0).filter(({ at }) => at >= cutoff);
+    let sent = 0;
+    for (const held of due) {
+      if (!this.send(["EVENT", held.event])) break;
+      sent += 1;
+    }
+    // The connection dropped again mid-flush: the rest wait for the next sign-in, in order.
+    this.outbox.unshift(...due.slice(sent));
+    if (sent) this.log(`sent ${sent} message(s) held while disconnected`);
   }
 
   setPresence(status: PresenceStatus): void {
