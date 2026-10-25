@@ -31,6 +31,14 @@ export {
   type PeerRef,
 } from "./channel.js";
 
+export {
+  CALLBACK_BASE_HEADER,
+  correctCallbackUrl,
+  isLoopbackHost,
+  ownCallbackBase,
+  withCallbackBase,
+} from "./callback-base.js";
+
 export { governedPeers, type GovernedPeersOptions } from "./governed-peers.js";
 
 export {

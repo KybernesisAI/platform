@@ -79,6 +79,25 @@ callback arrives, so request and response are one round trip on one wire. Add
 the mirror-image files only when the *other* agent should also be able to
 **initiate**: each direction is its own declared edge.
 
+## Answers on self-hosted agents
+
+The peer posts its answer to a callback URL eve builds from a Vercel URL or
+`WORKFLOW_LOCAL_BASE_URL`. Off Vercel neither exists, so eve tells the peer to
+answer at `http://localhost:3000`: the peer's own machine. The answer is
+refused there, the peer logs `callback delivery failed`, and the asking turn
+waits forever with nothing logged on its side.
+
+Since 0.8.1 `remotePeer` sends this agent's public address in the
+`x-kybernesis-callback-base` header (`EVE_PUBLIC_URL`, else
+`https://<EXE_VM_NAME>.exe.xyz`), and `dispatchChannel` puts it in place of a
+loopback callback address. Any other callback address is left as eve built it.
+Both ends of an edge need 0.8.1, and every agent that calls a peer needs
+`EXE_VM_NAME` or `EVE_PUBLIC_URL`; `kyb doctor` checks both.
+
+Do not fix this by pointing `WORKFLOW_LOCAL_BASE_URL` at the public address.
+That variable is also the base for every queue delivery the host makes to
+itself, held open for a whole turn; see `hostPreflight()` in `@kybernesis/exe`.
+
 ## Operational rules
 
 - **Scheduled/proactive turns have no human to forward.** A turn triggered by

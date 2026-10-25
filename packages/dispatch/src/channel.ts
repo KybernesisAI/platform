@@ -1,4 +1,5 @@
 import { defaultEveAuth, eveChannel } from "eve/channels/eve";
+import { withCallbackBase } from "./callback-base.js";
 import { recordCurrentSession } from "./current-session.js";
 import {
   localDev,
@@ -125,7 +126,9 @@ export function dispatchChannel(options: DispatchChannelOptions) {
     return governedAuth ? governedAuth(request) : null;
   };
 
-  return eveChannel({
+  // A self-hosted caller's peer answers would otherwise go to this machine's
+  // own localhost and be lost. See ./callback-base.ts.
+  return withCallbackBase(eveChannel({
     // Remember which conversation this agent is in.
     //
     // A schedule is handed `{ to, waitUntil, appAuth }` and has no way to name
@@ -169,5 +172,5 @@ export function dispatchChannel(options: DispatchChannelOptions) {
         forwarder.principalType === "agent" &&
         forwarder.authenticator === "kybernesis" &&
         (forwarder.attributes as Record<string, unknown> | undefined)?.kind === "a2a"),
-  });
+  }));
 }

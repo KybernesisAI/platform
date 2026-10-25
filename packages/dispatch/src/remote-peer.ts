@@ -1,6 +1,7 @@
 import { defineRemoteAgent } from "eve";
 import { vercelOidc } from "eve/agents/auth";
 
+import { CALLBACK_BASE_HEADER, ownCallbackBase } from "./callback-base.js";
 import { createA2ASessionSource, type GovernedOptions } from "./governed.js";
 
 /** Options for {@link remotePeer}. */
@@ -120,10 +121,19 @@ export function remotePeer(options: RemotePeerOptions) {
       }
     : vercelOidc();
 
+  // Where the peer should post its answer. eve tells a self-hosted caller's
+  // peers to answer at localhost, which is the peer's own machine; the
+  // receiver's dispatchChannel swaps this in. See ./callback-base.ts.
+  const headers = (): Readonly<Record<string, string>> => {
+    const base = ownCallbackBase();
+    return base ? { [CALLBACK_BASE_HEADER]: base } : {};
+  };
+
   return defineRemoteAgent({
     url,
     description,
     auth,
+    headers,
     forwardPrincipal: options.forwardPrincipal ?? true,
   });
 }

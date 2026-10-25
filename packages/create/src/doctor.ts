@@ -11,6 +11,7 @@ import { countAbandonedRuns } from "./run-store.js";
 import { describeStaleSidecar, newestPackageChange, staleSidecars } from "./stale-sidecar.js";
 import { checkSelfVersion } from "./self-version.js";
 import { envUrlProblems } from "./env-urls.js";
+import { peerCallbackChecks } from "./peer-callback.js";
 import { migrateManifest, migrateSources } from "./line-hop.js";
 import { missingStudioCore } from "./studio-core.js";
 
@@ -453,6 +454,17 @@ export async function doctor(): Promise<void> {
     }
     if (edgeFiles.length > 0)
       add("warn", "dispatch: verify BOTH ends run compatible eve versions", "an old receiver silently drops forwardPrincipal (runs as service identity)");
+    const dispatchPkg = join(cwd, "node_modules/@kybernesis/dispatch/package.json");
+    for (const check of peerCallbackChecks({
+      dispatchVersion: existsSync(dispatchPkg)
+        ? (JSON.parse(readFileSync(dispatchPkg, "utf8")) as { version?: string }).version
+        : undefined,
+      callsPeers: edgeFiles.some((path) => readFileSync(path, "utf8").includes("remotePeer")),
+      answersPeers: Boolean(eveChannelSrc?.includes("dispatchChannel")),
+      env,
+    })) {
+      add(check.verdict, check.label, check.fix);
+    }
     if (eveChannelSrc) {
       if (/trustedForwarders:\s*(\(\s*\)|\([^)]*\))\s*=>\s*true/.test(eveChannelSrc))
         add("fail", "eve channel: trustedForwarders is () => true", "any authenticated caller can assert any identity — enumerate peers (dispatchChannel)");
