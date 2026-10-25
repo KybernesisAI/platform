@@ -3,6 +3,7 @@ export {
   type ComputerSuiteConfig,
   engineerSuite,
   safetySuite,
+  progressSuite,
   kybernesisBaseline,
   memorySuite,
   routingSuite,
