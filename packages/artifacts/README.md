@@ -44,7 +44,7 @@ reads, which tells it to send the link. The link is written in the layout
 `/eve/v1/kyb/artifact-shares/<token>`, withdrawable by the owner) and is built
 on `EVE_PUBLIC_URL`, else `https://<EXE_VM_NAME>.exe.xyz`. Without either, or
 for an artifact nobody owns, there is no link and the reply points to KYBER
-Studio as before. Other surfaces never get one here: the apps draw the card,
+Studio as before. For a page made earlier, the `link` tool (0.2.1) gives its owner a link on any surface, when they ask for one or when the agent points them to it on a text-only chat. Other surfaces never get a link from create or update: the apps draw the card,
 and the Buzz bridge makes its own link when it posts a card into a channel.
 
 ## Routes (in `@kybernesis/manage`)
