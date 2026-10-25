@@ -44,6 +44,12 @@ export interface BaselineConfig {
    * "it was noisy".
    */
   safety?: boolean;
+  /**
+   * Include the progress suite (default true): a long job starts with one
+   * "on it" note (`working_on_it`, @kybernesis/notify 0.4+), a quick answer
+   * with none. Turn it off only on an agent without notify.
+   */
+  progress?: boolean;
 }
 
 const DEFAULT_ROUTING_PROMPTS: Record<string, string> = {
@@ -353,7 +359,72 @@ export function engineerSuite(): EveEval[] {
   ];
 }
 
-/** The full baseline: smoke + memory + safety + routing (+ engineer when enabled), per config. */
+/** Name of the "on it" tool, matched on its remote-name suffix (see @kybernesis/cards PROGRESS_TOOL). */
+const PROGRESS_SUFFIX = "working_on_it";
+const isProgressResult = (event: { type: string; data?: unknown }): boolean => isResultFrom(event, [PROGRESS_SUFFIX]);
+
+/**
+ * Saying "on it" when, and only when, a job will take a while.
+ *
+ * On a text channel a person sees nothing between asking and the answer, so a
+ * long job opens with one short note the surfaces post as it happens. The
+ * judgement is the model's, which is why both sides are pinned: a quick answer
+ * that opens with a note is noise in every channel, every time.
+ */
+export function progressSuite(): EveEval[] {
+  return [
+    defineEval({
+      description: "Progress: a quick answer goes straight out, with no on-it note first.",
+      tags: ["fast"],
+      timeoutMs: 240_000,
+      async test(t) {
+        await t.send("Quick one: how many days are there in a leap year? Just the number.");
+        t.succeeded();
+        t.eventsSatisfy("no on-it note before a quick answer", (events) => events.every((event) => !isProgressResult(event)));
+        t.judge("Does the submission answer 366?").atLeast(0.5);
+      },
+    }),
+    defineEval({
+      description:
+        "Progress: asked for a page that takes a while to build, the agent first sends one short on-it note, then does the work.",
+      timeoutMs: 900_000,
+      async test(t) {
+        // A fresh title each run, so an artifact from an earlier run is not simply reopened.
+        const day = `day plan ${Date.now().toString(36)}`;
+        const turn = await settleBackgroundWork(
+          t,
+          await t.send(
+            `Create a daily calendar page for me as an artifact, titled "${day}": hourly slots from 8am to 6pm, a short priorities list at the top and a notes area at the bottom, laid out cleanly. Use placeholder entries; no need to check with me first.`,
+          ),
+        );
+        t.succeeded();
+        t.eventsSatisfy("one on-it note was sent", (events) => events.filter(isProgressResult).length === 1);
+        t.eventsSatisfy("the note is one short sentence-sized line", (events) =>
+          events.filter(isProgressResult).every((event) => {
+            const output = (event.data as { result?: { output?: { message?: unknown } } }).result?.output;
+            const message = typeof output?.message === "string" ? output.message.trim() : "";
+            return message.length > 0 && message.length <= 280;
+          }),
+        );
+        // Sent before the work, not after it: a note that arrives with the result tells nobody anything.
+        t.eventsSatisfy("the note came before the page was made", (events) => {
+          const note = events.findIndex(isProgressResult);
+          const made = events.findIndex((event) => {
+            const name = resultToolName(event);
+            return name !== null && name.includes("artifact") && /(^|__|_)create$/.test(name);
+          });
+          return note !== -1 && (made === -1 || note < made);
+        });
+        t.check(
+          turn.message,
+          satisfies((reply) => typeof reply === "string" && reply.trim().length > 0, "a final reply after the note"),
+        );
+      },
+    }),
+  ];
+}
+
+/** The full baseline: smoke + memory + safety + progress + routing (+ engineer when enabled), per config. */
 export function kybernesisBaseline(config?: BaselineConfig): EveEval[] {
   return [
     ...smokeSuite(config),
@@ -362,6 +433,7 @@ export function kybernesisBaseline(config?: BaselineConfig): EveEval[] {
     // knowledge, and the behavior it checks decays with the model rather than
     // with the code.
     ...(config?.safety === false ? [] : safetySuite()),
+    ...(config?.progress === false ? [] : progressSuite()),
     ...routingSuite(config?.routing ?? []),
     ...(config?.engineer === true ? engineerSuite() : []),
   ];

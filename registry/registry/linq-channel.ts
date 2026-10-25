@@ -1,3 +1,4 @@
+import { progressEvents } from "@kybernesis/cards";
 import { channelIdentity } from "@kybernesis/enterprise";
 import { linqEnvCredentials, linqSenderIdentity } from "@kybernesis/exe/linq";
 import { linqChannel } from "eve/channels/linq";
@@ -14,6 +15,10 @@ import { linqChannel } from "eve/channels/linq";
 // gets one text with a claim link and nothing else; receiving it is what proves
 // they control the number. A linked person whose grant on this agent is revoked
 // stops within one token lifetime, with no redeploy.
+//
+// A text thread shows nothing between a request and its answer, so when the
+// agent starts a long job it sends one "on it" line first (`working_on_it`,
+// from @kybernesis/notify) and `progressEvents` posts it here as it happens.
 const issuer = process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
 const credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;
 const agentName = process.env.KYBERNESIS_AGENT;
@@ -21,6 +26,7 @@ const agentName = process.env.KYBERNESIS_AGENT;
 export default linqChannel({
   credentials: linqEnvCredentials(),
   ...(agentName ? { userName: agentName } : {}),
+  events: progressEvents(),
   onMessage: linqSenderIdentity({
     issuer,
     agentName,

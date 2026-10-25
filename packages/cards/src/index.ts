@@ -23,6 +23,16 @@ export {
   type StepStatus,
 } from "./steps.js";
 export { card, withCards, forModel, type CardFields } from "./build.js";
+export {
+  PROGRESS_TOOL,
+  PROGRESS_MAX,
+  isProgressTool,
+  progressText,
+  progressNotes,
+  progressGate,
+  progressEvents,
+  type ProgressNote,
+} from "./progress.js";
 export { derivedCards, outputObject, formPrompt, formAnswer, readFormAnswer } from "./derive.js";
 export { approvalCard } from "./approval.js";
 export { describeCron, nextCronRun, routineSchedule, shiftCron } from "./schedule.js";

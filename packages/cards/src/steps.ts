@@ -81,6 +81,7 @@ const CHIPS: Record<string, string> = {
   web_fetch: "Web",
   ask_question: "Question",
   connect_service: "Connectors",
+  working_on_it: "Update",
 };
 
 /** Namespaces that read better under another name. */

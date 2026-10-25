@@ -10,6 +10,23 @@ const user = askingUser(ctx);
 if (user) await notify({ user, issuer, credential, kind, title, body: preview(text) });
 ```
 
+## Saying it is on a long job
+
+The extension also gives the model `working_on_it` (mounted as
+`notify__working_on_it`). On a text channel a person sees nothing between a
+request and its answer, so for work that takes more than a minute (an artifact,
+a report, research, code, the computer) the model sends one sentence first:
+"On it. Building your daily calendar page now, I'll send it here in a minute."
+Quick answers get no note. The tool does nothing itself; each surface posts
+the call's message as it happens:
+
+- the Buzz bridge (`@kybernesis/buzz` 0.17+) posts it in the channel as a reply;
+- a Chat SDK channel, such as Linq iMessage, posts it with
+  `events: progressEvents()` from `@kybernesis/cards`;
+- KYBER Studio and the phone show it as the turn's live step (its label).
+
+At most one note posts per turn.
+
 ## Which version to install
 
 **There is one build per eve line, and the version numbers are NOT in eve
