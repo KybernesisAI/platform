@@ -129,6 +129,10 @@ test("the owner shares a version by link; the link opens without sign-in, sandbo
   assert.doesNotMatch(page.headers.get("content-security-policy"), /allow-same-origin/);
   assert.equal((await call(open, "/", { token: "f".repeat(32) })).status, 404);
   assert.equal((await call(open, "/", { token: "../x" })).status, 404);
+  // A link texted over iMessage can arrive with the next word glued on.
+  assert.equal((await call(open, "/", { token: `${made.token}I` })).status, 200);
+  assert.equal((await call(open, "/", { token: `${made.token.toUpperCase()}` })).status, 200);
+  assert.equal((await call(open, "/", { token: made.token.slice(0, 31) })).status, 404);
 });
 
 test("only the owner can share, and only the person who shared can withdraw", async () => {

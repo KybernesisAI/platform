@@ -36,7 +36,7 @@ export function forModel(output: { artifactId: string; version: number; title: s
       type: "text" as const,
       value:
         what +
-        "This conversation shows only text, so the person can open it only through this link. Put the link in your reply exactly as written, on its own line, and say in a sentence or two what the page shows: " +
+        "This conversation shows only text, so the person can open it only through this link. Say in a sentence or two what the page shows, then end your reply with the link exactly as written, on its own last line with nothing after it: " +
         output.url,
     };
   }

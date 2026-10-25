@@ -88,6 +88,17 @@ export interface ArtifactShare {
 
 const TOKEN = /^[0-9a-f]{32}$/;
 
+/**
+ * The token in a link someone opened. A link sent over iMessage or SMS can
+ * arrive with the next word glued on ("…519cI" when the reply went on with
+ * "I"), so the first 32 hex characters are the token and anything after them
+ * is ignored. Nothing shorter or different is ever accepted.
+ */
+function linkToken(raw: string): string {
+  const m = /^([0-9a-f]{32})/i.exec(raw);
+  return m ? m[1]!.toLowerCase() : raw;
+}
+
 function readShare(dir: string, token: string): ArtifactShare | null {
   if (!TOKEN.test(token)) return null;
   try {
@@ -193,7 +204,7 @@ export function artifactRoutes(input: {
      * Withdrawn links, and links to an artifact that is gone, are a 404.
      */
     GET(`${sharedBase}/:token`, async (_req, { params }) => {
-      const share = readShare(shares(), String(params.token));
+      const share = readShare(shares(), linkToken(String(params.token)));
       const meta = share ? readMeta(dir(), share.artifactId) : null;
       if (!share || !meta || share.version > meta.version) return NOT_FOUND();
       let body: string;
