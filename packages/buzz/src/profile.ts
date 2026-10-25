@@ -228,7 +228,9 @@ export async function uploadMedia(
     });
     if (response.ok) {
       const answer = (await response.json().catch(() => ({}))) as { url?: unknown; nip94?: unknown };
-      return { url: typeof answer.url === "string" ? answer.url : `${base}/${sha256}`, sha256, size: body.byteLength };
+      // Absolute either way: a message names its picture by full address, and a server may answer with a path.
+      const url = typeof answer.url === "string" ? new URL(answer.url, `${base}/`).toString() : `${base}/${sha256}`;
+      return { url, sha256, size: body.byteLength };
     }
     last = `${response.status} ${(await response.text().catch(() => "")).slice(0, 120)}`;
   }
