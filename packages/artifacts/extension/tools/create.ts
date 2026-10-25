@@ -12,7 +12,7 @@ import { contentFrom, forModel, requireDisk, result } from "../lib/shared.js";
  */
 export default defineTool({
   description:
-    "Make an artifact: a page the person keeps and comes back to, such as a report, a dashboard, a tracker, a plan or an explainer. It shows as a card in the person's chat (KYBER Studio, the phone app, Buzz) with an Open button. Give either `content` (the whole page) or `path` (a file in your sandbox). HTML is one self-contained file: inline CSS and script, data written into the page, no external scripts, fonts, images or network calls (they are blocked). To change an artifact later, use update with its id instead of making a new one.",
+    "Make an artifact: a page the person keeps and comes back to, such as a report, a dashboard, a tracker, a plan or an explainer. It shows as a card in the person's chat (KYBER Studio, the phone app, Buzz) with an Open button, and in a Buzz channel everyone there can open it. This is also how to send someone a page or document you already wrote to a file: pass its `path`, since chat uploads cannot reach your sandbox. Give either `content` (the whole page) or `path` (a file in your sandbox). HTML is one self-contained file: inline CSS and script, data written into the page, no external scripts, fonts, images or network calls (they are blocked). To change an artifact later, use update with its id instead of making a new one.",
   inputSchema: z.object({
     title: z.string().describe("A short name for the page, in the person's words, e.g. \"Website, last 7 days\"."),
     content: z.string().optional().describe("The whole page: one HTML document, or markdown when format is markdown."),
