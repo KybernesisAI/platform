@@ -22,7 +22,7 @@ export {
   decideBrowserUse,
   serviceForUrl,
 } from "./policy.js";
-export { closeTabsTool, openBrowserTool, type OpenBrowserOptions } from "./tools.js";
+export { closeTabsCommand, closeTabsTool, openBrowserTool, type OpenBrowserOptions } from "./tools.js";
 export { computerTool, type ComputerToolOptions } from "./computer-tool.js";
 export { showScreenTool, type ShowScreenOptions } from "./show-screen.js";
 export { prepareComputer, startComputer } from "./lifecycle.js";
