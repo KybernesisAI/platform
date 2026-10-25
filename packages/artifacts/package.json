@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/artifacts",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Artifacts for eve agents: pages an agent makes for a person (reports, dashboards, trackers) that KYBER Studio and the phone draw inline, stored on the agent's own machine.",
   "license": "Apache-2.0",
   "type": "module",

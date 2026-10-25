@@ -18,7 +18,7 @@ export default defineTool({
   async execute({ id, content, path, title, display, note }, ctx) {
     requireDisk();
     const body = await contentFrom({ content, path }, ctx);
-    return result(updateArtifact({ id, content: body, title, display, note }, viewerFromContext(ctx)));
+    return result(updateArtifact({ id, content: body, title, display, note }, viewerFromContext(ctx)), ctx);
   },
   toModelOutput: (output) => forModel(output, "Updated"),
 });

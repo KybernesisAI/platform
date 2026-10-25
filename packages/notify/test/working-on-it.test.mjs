@@ -27,6 +27,7 @@ test("the model is told the note went and that its reply is the result", () => {
 
 test("the description teaches when not to send one", () => {
   assert.match(tool.description, /more than a minute/);
+  assert.match(tool.description, /Always use it before you make or change an artifact/);
   assert.match(tool.description, /Do not use it for a question you can answer straight away/);
   assert.doesNotMatch(tool.description, /—/, "agent-facing text carries no em dashes");
 });

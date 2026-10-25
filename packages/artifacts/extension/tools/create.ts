@@ -27,7 +27,7 @@ export default defineTool({
     requireDisk();
     const body = await contentFrom({ content, path }, ctx);
     const meta = createArtifact({ title, content: body, format, display, owner: viewerFromContext(ctx).person });
-    return result(meta);
+    return result(meta, ctx);
   },
   toModelOutput: (output) => forModel(output, "Made"),
 });

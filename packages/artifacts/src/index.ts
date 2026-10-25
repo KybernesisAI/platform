@@ -260,12 +260,14 @@ export interface ArtifactCard {
     display: ArtifactDisplay;
     format: ArtifactFormat;
     updatedAt: string;
+    /** A share link, when the person is on a surface that shows only text. */
+    url?: string;
   };
   actions: Array<{ label: string; artifact: string }>;
   text: string;
 }
 
-export function artifactCard(meta: ArtifactMeta): ArtifactCard {
+export function artifactCard(meta: ArtifactMeta, url?: string): ArtifactCard {
   return {
     kyb: 1,
     card: "artifact",
@@ -278,10 +280,97 @@ export function artifactCard(meta: ArtifactMeta): ArtifactCard {
       display: meta.display,
       format: meta.format,
       updatedAt: meta.updatedAt,
+      ...(url ? { url } : {}),
     },
     actions: [{ label: "Open", artifact: meta.id }],
-    text: `${meta.title} (artifact, version ${meta.version}). Open it in KYBER Studio or the phone app, under this agent's Artifacts.`,
+    text: url
+      ? `${meta.title}: ${url}`
+      : `${meta.title} (artifact, version ${meta.version}). Open it in KYBER Studio or the phone app, under this agent's Artifacts.`,
   };
+}
+
+/**
+ * Share links, for a conversation that can only show words.
+ *
+ * iMessage and SMS draw no cards, so an artifact made there is out of reach
+ * unless the reply carries a link. A link is made only for the person who
+ * asked, only on those surfaces, and only for the version they were sent: in a
+ * one-to-one text thread the link goes to its owner and nobody else.
+ *
+ * `@kybernesis/manage` serves and withdraws these links; this is the one
+ * place outside it that writes one, in the same layout (a contract between
+ * the two packages, so change both or neither):
+ *
+ *   <sharesDir>/<token>.json   { token, artifactId, version, userId, createdAt }
+ *
+ * served at `<public origin>/eve/v1/kyb/artifact-shares/<token>`.
+ */
+export interface ShareOptions extends StoreOptions {
+  /** Where share links live. Defaults to ARTIFACT_SHARES_DIR, then ~/.kybernesis/artifact-shares. */
+  sharesDir?: string;
+  /** This agent's public https origin. Defaults to EVE_PUBLIC_URL, then `https://<EXE_VM_NAME>.exe.xyz`. */
+  publicUrl?: string;
+}
+
+/** Surfaces that show only text, where an artifact reaches the person as a link. */
+export const LINK_SURFACES: ReadonlySet<string> = new Set(["linq"]);
+
+/** The path `@kybernesis/manage` serves share links under. */
+export const SHARE_PATH = "/eve/v1/kyb/artifact-shares";
+
+const SHARE_TOKEN = /^[0-9a-f]{32}$/;
+
+export function sharesDir(options: ShareOptions = {}): string {
+  return options.sharesDir ?? process.env.ARTIFACT_SHARES_DIR ?? join(homedir(), ".kybernesis", "artifact-shares");
+}
+
+export function publicOrigin(options: ShareOptions = {}): string | undefined {
+  const vm = process.env.EXE_VM_NAME?.trim();
+  const origin = options.publicUrl ?? (process.env.EVE_PUBLIC_URL?.trim() || (vm ? `https://${vm}.exe.xyz` : ""));
+  return origin ? origin.replace(/\/$/, "") : undefined;
+}
+
+/** True when this turn's surface shows only text. Read from the verified auth attributes, never from model input. */
+export function wantsLink(ctx: PrincipalContext): boolean {
+  const surface = ctx.session?.auth?.current?.attributes?.surface;
+  return typeof surface === "string" && LINK_SURFACES.has(surface);
+}
+
+/**
+ * A share link to one version for its owner, made once: the same person and
+ * version always get the same link. Undefined when the agent does not know its
+ * public address, or the artifact has no owner (nobody to send it to).
+ */
+export function shareLink(meta: ArtifactMeta, options: ShareOptions = {}): string | undefined {
+  const origin = publicOrigin(options);
+  if (!origin || !meta.owner) return undefined;
+  const dir = sharesDir(options);
+  let token: string | undefined;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json") || !SHARE_TOKEN.test(name.slice(0, -5))) continue;
+      try {
+        const s = JSON.parse(readFileSync(join(dir, name), "utf8")) as { token?: string; artifactId?: string; version?: number; userId?: string };
+        if (s.token === name.slice(0, -5) && s.artifactId === meta.id && s.version === meta.version && s.userId === meta.owner) {
+          token = s.token;
+          break;
+        }
+      } catch {
+        // A damaged link file is not this one.
+      }
+    }
+  } catch {
+    // No links yet.
+  }
+  if (!token) {
+    token = randomBytes(16).toString("hex");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, `${token}.json`);
+    const share = { token, artifactId: meta.id, version: meta.version, userId: meta.owner, createdAt: new Date().toISOString() };
+    writeFileSync(`${file}.tmp`, JSON.stringify(share), { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+  }
+  return `${origin}${SHARE_PATH}/${token}`;
 }
 
 /** One line per artifact, for the model. */
