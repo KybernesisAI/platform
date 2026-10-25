@@ -45,7 +45,7 @@ export function forModel(output: { artifactId: string; version: number; title: s
     value:
       what +
       "The person sees it as a card in KYBER Studio, the phone app and Buzz, so do not paste its content into your reply. " +
-      "Say in a sentence or two what it shows. On a channel without cards, tell them it is under this agent's Artifacts in KYBER Studio.",
+      "Say in a sentence or two what it shows. If they ask for a link to it, get one with link.",
   };
 }
 
