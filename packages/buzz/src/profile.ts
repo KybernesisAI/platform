@@ -173,6 +173,19 @@ export async function uploadImage(
   bytes: Uint8Array,
   mediaType: string,
 ): Promise<string> {
+  return (await uploadMedia(relay, key, bytes, mediaType)).url;
+}
+
+/** What a community's media store holds after an upload: what a message's `imeta` tag names. */
+export type UploadedMedia = { url: string; sha256: string; size: number };
+
+/** {@link uploadImage}, answering with the hash and size of what was stored too. */
+export async function uploadMedia(
+  relay: string,
+  key: AgentKey,
+  bytes: Uint8Array,
+  mediaType: string,
+): Promise<UploadedMedia> {
   const { createHash } = await import("node:crypto");
   const base = relay.replace(/^wss:/, "https:").replace(/^ws:/, "http:").replace(/\/$/, "");
   // Stripped BEFORE hashing: the hash has to be of what is actually sent, and a
@@ -214,9 +227,10 @@ export async function uploadImage(
       body: body as unknown as BodyInit,
     });
     if (response.ok) {
-      const body = (await response.json().catch(() => ({}))) as { url?: unknown; nip94?: unknown };
-      if (typeof body.url === "string") return body.url;
-      return `${base}/${sha256}`;
+      const answer = (await response.json().catch(() => ({}))) as { url?: unknown; nip94?: unknown };
+      // Absolute either way: a message names its picture by full address, and a server may answer with a path.
+      const url = typeof answer.url === "string" ? new URL(answer.url, `${base}/`).toString() : `${base}/${sha256}`;
+      return { url, sha256, size: body.byteLength };
     }
     last = `${response.status} ${(await response.text().catch(() => "")).slice(0, 120)}`;
   }

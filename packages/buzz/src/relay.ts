@@ -139,7 +139,8 @@ export class BuzzRelay {
   /** Since when a newly found DM is read back, so a message sent before it was found is not lost. */
   private discoveredAt: number | null = null;
 
-  private readonly url: string;
+  /** The community's address, as configured. */
+  readonly url: string;
   private readonly rest: string;
   private readonly key: AgentKey;
   private readonly pollMs: number;
@@ -494,12 +495,19 @@ export class BuzzRelay {
   }
 
   /** `mention: false` threads under `replyTo` without notifying its author again, as a follow-up to a reply does. */
-  reply(channel: string, text: string, replyTo?: NostrEvent, options: { mention?: boolean } = {}): string | null {
+  reply(
+    channel: string,
+    text: string,
+    replyTo?: NostrEvent,
+    options: { mention?: boolean; tags?: readonly string[][] } = {},
+  ): string | null {
     const tags: string[][] = [["h", channel]];
     if (replyTo) {
       tags.push(["e", replyTo.id]);
       if (options.mention !== false) tags.push(["p", replyTo.pubkey]);
     }
+    // Attachments (`imeta`), which the words name.
+    for (const tag of options.tags ?? []) tags.push([...tag]);
     return this.publish({ kind: KIND_MESSAGE, tags, content: text });
   }
 

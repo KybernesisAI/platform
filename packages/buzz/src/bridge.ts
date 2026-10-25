@@ -1,6 +1,7 @@
 import { cardMessage, cardText, readHiddenAnswers, type AskSettled, type Card } from "@kybernesis/cards";
 import { channelIdentity, type SpeakerResolution } from "@kybernesis/enterprise";
 import { fetchMedia, parseMedia } from "./media.js";
+import { isAgentScreenshot, pictureMessage } from "./pictures.js";
 import { speakerCredentials } from "./credentials.js";
 import { surfaceWriter } from "./surface.js";
 import { SessionStore, type StoredAsker, type StoredPrompt } from "./sessions.js";
@@ -162,6 +163,27 @@ export function buzzBridge(options: BuzzBridgeOptions) {
   };
 
   /**
+   * A screenshot card as a picture everyone in the channel sees: fetched from
+   * the agent as the person who asked (it is theirs), stored in this
+   * community's media store. See pictures.ts. If that fails, the card goes out
+   * as it was.
+   */
+  const screenshotIn = async (relay: BuzzRelay, card: Card, speaker: string) => {
+    try {
+      const credentials = credentialsFor(speaker);
+      return await pictureMessage(card, {
+        agentUrl: options.agentUrl,
+        headers: async () => ({ ...(await credentials.headers()), authorization: `Bearer ${await credentials.bearer()}` }),
+        relay: relay.url,
+        key,
+      });
+    } catch (error) {
+      log(`could not post a screenshot as a picture (${(error as Error).message})`);
+      return null;
+    }
+  };
+
+  /**
    * A turn's cards, one message each, threaded where the reply went.
    *
    * The reply stays an ordinary message the client draws itself, links and
@@ -178,6 +200,11 @@ export function buzzBridge(options: BuzzBridgeOptions) {
     if (options.cards === false || cards.length === 0) return;
     let posted = 0;
     for (const card of await Promise.all(cards.map((c) => sharedInChannel(c, speaker)))) {
+      const picture = isAgentScreenshot(card) ? await screenshotIn(relay, card, speaker) : null;
+      if (picture) {
+        if (relay.reply(channel, picture.content, replyTo, { mention: false, tags: picture.tags })) posted += 1;
+        continue;
+      }
       const content = cardMessage(card);
       if (content && relay.reply(channel, content, replyTo, { mention: false })) posted += 1;
     }
