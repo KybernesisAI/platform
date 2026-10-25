@@ -1,15 +1,17 @@
 import { defineMcpClientConnection } from "eve/connections";
 
 import extension from "../extension";
+import { FORGET_HEADER, FORGET_HEADER_VALUE, forgetApproval } from "../lib/forget-gate";
 
 // Static-key auth by design: Vercel Connect's interactive OAuth is broken for
 // deployed agents, and subagent sessions carry no user principal to bind a
 // grant to. The `X-Kyberagent-Agent` header is required by Arcana in addition
-// to the Bearer token — it selects the workspace.
+// to the Bearer token — it selects the workspace. `X-Arcana-Forget` opts in to
+// Arcana's forget tools, which `forgetApproval` puts in front of a person.
 export default defineMcpClientConnection({
   url: "https://mcp.arcana.kybernesis.ai/mcp",
   description:
-    "Durable long-term memory (Kybernesis Arcana): remember facts, decisions, people, and preferences; recall and search what is already known; review the timeline; read and write brain notes.",
+    "Durable long-term memory (Kybernesis Arcana): remember facts, decisions, people, and preferences; recall and search what is already known; review the timeline; read and write brain notes; find and forget wrong memories when a person asks.",
   auth: {
     getToken: async () => ({ token: extension.config.apiKey }),
   },
@@ -17,5 +19,7 @@ export default defineMcpClientConnection({
     "X-Kyberagent-Agent": async (ctx) =>
       (await extension.config.resolveWorkspace?.(ctx)) ??
       extension.config.workspace,
+    [FORGET_HEADER]: FORGET_HEADER_VALUE,
   },
+  approval: forgetApproval,
 });

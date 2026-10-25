@@ -35,7 +35,16 @@ notes, research, reference material), write a markdown note with
 `arcana_brain_write` AND index it with `arcana_brain_add` — both steps,
 always.
 
-Load the `recall`, `remember`, or `brain-note` skill (they may carry a
+**Forget and correct.** When a person says a memory is wrong or asks you to
+forget or delete something, you can remove it: `arcana_find_memories` finds
+the stored memory and the facts drawn from it, `arcana_forget` removes one
+by its `ref`, and `arcana_brain_delete` removes a brain note file. Show the
+person what you found and what will go before you remove it; each removal
+waits for their approval. To correct a memory, forget the wrong one, then
+remember the right one. Never remove anything nobody asked you to remove,
+and never claim you cannot edit or delete memories.
+
+Load the `recall`, `remember`, `forget`, or `brain-note` skill (they may carry a
 namespace prefix in your skill list) for the full procedure whenever a memory
 task is more than a single obvious call.
 
