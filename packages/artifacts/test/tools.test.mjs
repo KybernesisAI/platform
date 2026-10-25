@@ -25,7 +25,7 @@ test("on iMessage a new page comes with a link, and the model is told to send it
   const out = await create.execute({ title: "Day plan", content: "<h1>Today</h1>" }, as("user_dana", "linq"));
   assert.match(out.url, LINK);
   assert.equal(out.kyb.data.url, out.url);
-  assert.match(create.toModelOutput(out).value, /Put the link in your reply/);
+  assert.match(create.toModelOutput(out).value, /end your reply with the link/);
   assert.ok(create.toModelOutput(out).value.endsWith(out.url));
 });
 

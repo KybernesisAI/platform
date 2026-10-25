@@ -11,7 +11,7 @@ import { readMeta, shareLink, viewerFromContext } from "../../src/index.js";
  */
 export default defineTool({
   description:
-    "Get a web link to one of the person's artifacts that opens in any browser. Use it when they ask for a link, or on a text-only chat such as iMessage when you point them to an artifact you made earlier (create and update already give a link there for a new version). Anyone holding the link can open that version, so only make one when they ask to see or share the page. Put the link in your reply exactly as written.",
+    "Get a web link to one of the person's artifacts that opens in any browser. Use it when they ask for a link, or on a text-only chat such as iMessage when you point them to an artifact you made earlier (create and update already give a link there for a new version). Anyone holding the link can open that version, so only make one when they ask to see or share the page. End your reply with the link exactly as written, on its own last line with nothing after it.",
   inputSchema: z.object({
     id: z.string().describe("The artifact's id, from create, update or list."),
     version: z.number().int().positive().optional().describe("A version number. Omit for the latest."),
