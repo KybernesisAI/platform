@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { pathToFileURL } from "node:url";
 import { EVE_VERSION, REGISTRY_URL, bold, capture, dim, green, parseEnv, red, yellow } from "./util.js";
-import { diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
+import { buzzBridgeUnitsFor, diagnoseManageRestart, findMatchingAgentServiceUnit } from "./systemd.js";
 import { inspectEveAgent, type AgentInputLimit } from "./agent-limits.js";
 import { classifyModelReach, type CompiledModelRouting } from "./model-reach.js";
 import { countAbandonedRuns } from "./run-store.js";
@@ -224,6 +224,15 @@ export async function doctor(): Promise<void> {
    * two changes signed off as deployed were live nowhere. Nothing looked
    * broken — the old code simply kept doing what it did.
    */
+  // One bridge per agent: two answer every Buzz message twice.
+  const bridges = buzzBridgeUnitsFor(cwd);
+  if (bridges.length > 1) {
+    add(
+      "fail",
+      `${bridges.length} Buzz bridges run for this agent (${bridges.join(", ")})`,
+      `Each answers every message, so people get every answer twice. Keep the one deploy.sh restarts and remove the rest: sudo systemctl disable --now <unit> && sudo rm /etc/systemd/system/<unit>.service && sudo systemctl daemon-reload`,
+    );
+  }
   const packageChange = newestPackageChange(cwd);
   const started = new Map<string, Date>();
   for (const unit of listAgentUnits()) {

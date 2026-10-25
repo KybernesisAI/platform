@@ -246,3 +246,46 @@ test("profile output: a picture that did not go is said, and the community still
   assert.equal(a.member, true);
   assert.match(a.detail, /picture did not go.*413/);
 });
+
+test("buzz.join finds the bridge by the folder it runs in, never installs a second, and switches off an extra", async () => {
+  const dir = agentDir();
+  const calls = [];
+  // The agent is called "Kyber"; its bridge was set up by hand as kyber-buzz-bridge, and a
+  // second one (Kyber-buzz-bridge) was later installed beside it. Both run in its folder.
+  const units = {
+    "kyber-buzz-bridge": { dir, active: true },
+    "Kyber-buzz-bridge": { dir, active: true },
+    "other-buzz-bridge": { dir: "/home/someone/other", active: true },
+  };
+  const exec = async (file, args, opts) => {
+    calls.push([file, ...args].join(" "));
+    const cmd = [file, ...args].join(" ");
+    if (cmd === "npx kybernesis-buzz init") {
+      writeFileSync(opts.env.BUZZ_KEYFILE, '{"secretKey":[1]}');
+      return { code: 0, stdout: `${NPUB}\n  hex: ${HEX}\n`, stderr: "" };
+    }
+    if (cmd.startsWith("npx kybernesis-buzz profile")) return { code: 0, stdout: "  ✓ wss://team.example", stderr: "" };
+    if (cmd.startsWith("systemctl list-unit-files")) {
+      return { code: 0, stdout: Object.keys(units).map((u) => `${u}.service enabled enabled`).join("\n"), stderr: "" };
+    }
+    const unit = args.at(-1);
+    if (cmd.startsWith("systemctl show -p WorkingDirectory")) return { code: 0, stdout: `${units[unit]?.dir ?? ""}\n`, stderr: "" };
+    if (cmd.startsWith("systemctl show")) return { code: 0, stdout: units[unit] ? "loaded\n" : "not-found\n", stderr: "" };
+    if (cmd.startsWith("systemctl is-active")) return { code: 0, stdout: units[unit]?.active ? "active\n" : "inactive\n", stderr: "" };
+    if (cmd.startsWith("sudo -n systemctl disable --now")) units[unit].active = false;
+    if (cmd.startsWith("sudo -n")) return { code: 0, stdout: "", stderr: "" };
+    return { code: 1, stdout: "", stderr: `unexpected: ${cmd}` };
+  };
+  const r = restarter();
+  const actions = createSetupActions({ appRoot: dir, agent: "Kyber", options: { exec }, restarter: r });
+  const joined = await actions.run({ action: "buzz.join", relay: "wss://team.example" });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  assert.equal(joined.body.bridge, "active");
+  assert.equal(calls.some((c) => c.startsWith("sudo -n install")), false, "no second unit is installed");
+  assert.ok(calls.includes("sudo -n systemctl disable --now Kyber-buzz-bridge"), "the extra is switched off");
+  assert.ok(calls.includes("sudo -n systemctl enable kyber-buzz-bridge"), "the running one is kept");
+  assert.equal(units["other-buzz-bridge"].active, true, "another agent's bridge is left alone");
+
+  const status = await setupStatus({ appRoot: dir, agent: "Kyber", options: { exec }, restarter: r });
+  assert.equal(status.buzz.bridge, "active", "the page reads the bridge that is really running");
+});

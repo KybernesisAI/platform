@@ -319,6 +319,39 @@ test("a reaction is signed, sent over HTTP, and binds the signature to the body"
   );
 });
 
+test("a reaction names its channel, as the Buzz app's own do, so a live view shows it", async () => {
+  const { relay, socket } = connected();
+  authenticate(socket);
+  const bodies = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return { ok: true, status: 200, text: async () => "{}" };
+  };
+  await relay.react("msg-1", "👀", "dm-1");
+  globalThis.fetch = async () => {
+    throw new Error("connect ECONNREFUSED");
+  };
+  const logs = [];
+  relay["log"] = (m) => logs.push(m);
+  await relay.react("msg-2", "👀", "dm-1");
+  globalThis.fetch = previousFetch;
+  assert.deepEqual(bodies[0].tags, [["h", "dm-1"], ["e", "msg-1"]]);
+  assert.match(logs.join("\n"), /reaction 👀 not sent: connect ECONNREFUSED/, "an unreachable relay is logged, never thrown at the bridge");
+});
+
+test("an event the community refuses after sign-in is logged once per reason, and a close says why", () => {
+  const logs = [];
+  const { socket } = connected(() => {}, { onLog: (m) => logs.push(m) });
+  authenticate(socket);
+  socket.deliver(["OK", "typing-1", false, "rate-limited: slow down"]);
+  socket.deliver(["OK", "typing-2", false, "rate-limited: slow down"]);
+  socket.deliver(["OK", "msg-1", true, ""]);
+  assert.equal(logs.filter((m) => m.includes("refused an event: rate-limited")).length, 1);
+  socket.emit("close", { code: 1008, reason: "too many subscriptions" });
+  assert.ok(logs.some((m) => m === "connection closed (1008 too many subscriptions)"));
+});
+
 test("opening a direct conversation answers with the channel it created", async () => {
   const { relay, socket } = connected();
   authenticate(socket);

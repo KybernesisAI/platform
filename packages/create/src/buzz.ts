@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { upsertEnv } from "./envfile.js";
+import { buzzBridgeUnitsFor } from "./systemd.js";
 import { bold, capture, dim, green, linePackage, red, run, yellow } from "./util.js";
 
 /**
@@ -38,7 +39,7 @@ export function buzzKeyPath(appDir: string): string {
 }
 
 export function buzzBridgeUnitName(agent: string): string {
-  return `${agent}-buzz-bridge`;
+  return `${agent.toLowerCase()}-buzz-bridge`;
 }
 
 /** The bridge's systemd unit. Pure, so the test pins what every host gets. */
@@ -131,6 +132,15 @@ export function addBuzz(cwd = resolve(process.cwd())): void {
     }
   }
 
+  // A bridge already serving this folder is this agent's bridge, whatever it is called.
+  // Installing another beside it would answer every message twice.
+  const existingUnits = buzzBridgeUnitsFor(cwd);
+  if (existingUnits.length > 0) {
+    console.log(dim(`  bridge: ${existingUnits.join(", ")} already serves this agent`));
+    console.log(bold("\n  Next:"));
+    console.log(`    · The owner connects it from the Channels page: their community's address, then an admin adds ${npub} as a member.`);
+    return;
+  }
   const unitName = buzzBridgeUnitName(agent);
   const dir = mkdtempSync(join(tmpdir(), "kyb-buzz-"));
   try {

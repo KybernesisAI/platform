@@ -18,6 +18,7 @@ import {
 import {
   bridgeState,
   bridgeUnitName,
+  findBridgeUnits,
   buzzFollowsOwner,
   buzzIdentity,
   buzzKeyFile,
@@ -657,7 +658,7 @@ export async function setupStatus(input: {
     const identity = await cachedBuzzIdentity(exec, appRoot, buzzKeyFile(get));
     const relays = (get("BUZZ_RELAY") ?? "").split(",").map((r) => r.trim()).filter(Boolean);
     const agent = agentName(appRoot, input.agent, get);
-    const bridge = agent ? await bridgeState(exec, appRoot, bridgeUnitName(agent)) : "unknown";
+    const bridge = agent ? await bridgeState(exec, appRoot, (await findBridgeUnits(exec, appRoot, agent)).unit) : "unknown";
     const members = (saved.buzz?.members ?? []).filter((m) => relays.includes(m));
     buzz = { npub: identity?.npub ?? null, hex: identity?.hex ?? null, relays, members, bridge };
     const hosts = (list: string[]) => list.map((r) => r.replace(/^wss:\/\//, "")).join(", ");
@@ -957,7 +958,7 @@ export function createSetupActions(input: {
     const before = installedVersions(appRoot);
     const fileEnv = readEnvFile(envPath);
     const name = agentName(appRoot, input.agent, (k) => fileEnv.get(k) || process.env[k]);
-    const bridge = dependencies(appRoot).has("@kybernesis/buzz") && name ? bridgeUnitName(name) : null;
+    const bridge = dependencies(appRoot).has("@kybernesis/buzz") && name ? (await findBridgeUnits(exec, appRoot, name)).unit : null;
     const bridgeWas = bridge ? await bridgeState(exec, appRoot, bridge) : null;
     const putBack = async () => {
       restoreSnapshot(appRoot, snap);
@@ -1622,9 +1623,15 @@ export function createSetupActions(input: {
       });
       const outcomes: RelayOutcome[] = parseProfileOutput(`${published.stdout}\n${published.stderr}`, relays);
 
-      const unit = bridgeUnitName(agent);
+      // The bridge already serving this folder, whatever it is called; a second one would answer
+      // every message again. Any extra serving the same folder is switched off.
+      const { unit, others } = await findBridgeUnits(exec, appRoot, agent);
+      for (const extra of others) {
+        const off = await exec("sudo", ["-n", "systemctl", "disable", "--now", extra], { cwd: appRoot, timeoutMs: 30_000 });
+        if (off.code !== 0) return fail(502, `Could not switch off ${extra}, a second bridge for this agent (it needs passwordless sudo).`);
+      }
       let bridge = await bridgeState(exec, appRoot, unit);
-      if (bridge === "missing" && !(await installBridgeUnit(exec, appRoot, agent))) {
+      if (bridge === "missing" && !(await installBridgeUnit(exec, appRoot, agent, unit))) {
         return fail(502, `Could not install ${unit} on this host (it needs passwordless sudo).`);
       }
       const enabled = await exec("sudo", ["-n", "systemctl", "enable", unit], { cwd: appRoot, timeoutMs: 30_000 });
@@ -1703,10 +1710,11 @@ export function createSetupActions(input: {
       const get = (key: string) => env.get(key) || process.env[key];
       const agent = agentName(appRoot, input.agent, get);
       if (!agent) return fail(500, "This agent's name cannot name a bridge.");
-      const unit = bridgeUnitName(agent);
-      if ((await bridgeState(exec, appRoot, unit)) !== "missing") {
-        const off = await exec("sudo", ["-n", "systemctl", "disable", "--now", unit], { cwd: appRoot, timeoutMs: 30_000 });
-        if (off.code !== 0) return fail(502, `Could not switch off ${unit} (it needs passwordless sudo).`);
+      const { unit, others } = await findBridgeUnits(exec, appRoot, agent);
+      for (const each of [unit, ...others]) {
+        if ((await bridgeState(exec, appRoot, each)) === "missing") continue;
+        const off = await exec("sudo", ["-n", "systemctl", "disable", "--now", each], { cwd: appRoot, timeoutMs: 30_000 });
+        if (off.code !== 0) return fail(502, `Could not switch off ${each} (it needs passwordless sudo).`);
       }
       const changed = writeEnvFile(envPath, { set: {}, unset: ["BUZZ_RELAY"] });
       writeSetupState(appRoot, (s) => {

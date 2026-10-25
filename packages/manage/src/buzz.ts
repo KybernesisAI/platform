@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Exec } from "./setup.js";
 
 /**
@@ -54,8 +54,65 @@ export function buzzKeyFile(get: (key: string) => string | undefined): string {
   return get("BUZZ_KEYFILE") || join(homedir(), ".kybernesis", "buzz-agent.json");
 }
 
+/** The name a new bridge unit gets. Lower case: an agent called "Kyber" still gets `kyber-buzz-bridge`. */
 export function bridgeUnitName(agent: string): string {
-  return `${agent}-buzz-bridge`;
+  return `${agent.toLowerCase()}-buzz-bridge`;
+}
+
+/**
+ * The bridge units that serve this agent, found by the folder they run in.
+ *
+ * @remarks
+ * A name built from the agent's name is a guess, and guessing wrong is not
+ * harmless. An agent whose display name is "Kyber" looked for
+ * `Kyber-buzz-bridge` beside a running `kyber-buzz-bridge`, reported Buzz as
+ * off, and switching it on installed a second bridge on the same key. Two
+ * bridges answer every message twice. The folder a unit runs in is what makes
+ * it this agent's bridge, whatever it is called.
+ *
+ * `unit` is the one to use: the one named after the folder (what each agent's
+ * deploy script restarts), then the one named after the agent, then any
+ * other, a running one before a stopped one. `others` serve the same folder
+ * and should not run beside it. With nothing serving the folder, `unit` is the
+ * name a new one gets and `found` is false.
+ */
+export async function findBridgeUnits(
+  exec: Exec,
+  appRoot: string,
+  agent: string,
+): Promise<{ unit: string; others: string[]; found: boolean }> {
+  const fresh = { unit: bridgeUnitName(agent), others: [], found: false };
+  const listed = await exec(
+    "systemctl",
+    ["list-unit-files", "--type=service", "--no-legend", "--plain", "*buzz-bridge*.service"],
+    { cwd: appRoot, timeoutMs: 10_000 },
+  );
+  if (listed.code !== 0) return fresh;
+  const names = [...new Set(listed.stdout.split("\n").map((line) => line.trim().split(/\s+/)[0] ?? ""))]
+    .filter((name) => /^[\w@.-]+\.service$/.test(name))
+    .map((name) => name.replace(/\.service$/, ""));
+  const here = realPath(appRoot);
+  const serving: { unit: string; active: boolean }[] = [];
+  for (const unit of names) {
+    const shown = await exec("systemctl", ["show", "-p", "WorkingDirectory", "--value", unit], { cwd: appRoot, timeoutMs: 10_000 });
+    if (shown.code !== 0 || realPath(shown.stdout.trim()) !== here) continue;
+    const active = (await exec("systemctl", ["is-active", unit], { cwd: appRoot, timeoutMs: 10_000 })).stdout.trim();
+    serving.push({ unit, active: active === "active" || active === "activating" });
+  }
+  if (serving.length === 0) return fresh;
+  const rank = (unit: string) =>
+    unit === `${basename(appRoot)}-buzz-bridge` ? 0 : unit.toLowerCase() === bridgeUnitName(agent) ? 1 : 2;
+  serving.sort((a, b) => Number(b.active) - Number(a.active) || rank(a.unit) - rank(b.unit) || a.unit.localeCompare(b.unit));
+  // A running bridge is never traded for a stopped one, whatever the names say.
+  return { unit: serving[0]!.unit, others: serving.slice(1).map((s) => s.unit), found: true };
+}
+
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path.replace(/\/+$/, "");
+  }
 }
 
 /** The same unit `kyb add buzz` installs, for an agent built before it did. */
@@ -139,8 +196,7 @@ export async function buzzIdentity(exec: Exec, cwd: string, keyFile: string): Pr
 }
 
 /** Write and load the unit with the host's passwordless sudo, the way the agent's own restart works. */
-export async function installBridgeUnit(exec: Exec, cwd: string, agent: string): Promise<boolean> {
-  const unit = bridgeUnitName(agent);
+export async function installBridgeUnit(exec: Exec, cwd: string, agent: string, unit = bridgeUnitName(agent)): Promise<boolean> {
   const dir = mkdtempSync(join(tmpdir(), "kyb-buzz-"));
   try {
     const file = join(dir, `${unit}.service`);

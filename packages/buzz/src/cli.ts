@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { buzzBridge } from "./bridge.js";
+import { acquireBridgeLock } from "./lock.js";
 import { asHexPubkey, loadKey, loadOrCreateKey, npubEncode } from "./keys.js";
 import * as profile from "./profile.js";
 import { nameFromDid, syncProfileFromName, type SyncOutcome } from "./agentid.js";
@@ -228,7 +229,34 @@ async function setProfile(): Promise<void> {
   );
 }
 
+/** How often a bridge that found another one answering as this agent looks again. */
+const LOCK_RETRY_MS = 30_000;
+
+const log = (message: string) => console.log(new Date().toISOString().slice(11, 19), message);
+
 function run(): void {
+  let waiting = false;
+  const tryStart = () => {
+    const lock = acquireBridgeLock(KEY_FILE);
+    if ("heldBy" in lock) {
+      if (!waiting) {
+        log(
+          `another bridge${lock.heldBy.pid > 0 ? ` (pid ${lock.heldBy.pid})` : ""} already answers as this agent; ` +
+            "this one waits rather than answer every message a second time",
+        );
+      }
+      waiting = true;
+      setTimeout(tryStart, LOCK_RETRY_MS);
+      return;
+    }
+    if (waiting) log("the other bridge stopped; this one takes over");
+    process.on("exit", lock.release);
+    runBridge();
+  };
+  tryStart();
+}
+
+function runBridge(): void {
   const bridge = buzzBridge({
     // Comma-separated: one agent can be a member of several communities, and
     // each is a connection rather than another process to supervise.
@@ -258,7 +286,6 @@ function run(): void {
   const timers: NodeJS.Timeout[] = [];
   const sources = faceSources(name);
   if ((name || sources.credential) && every > 0) {
-    const log = (message: string) => console.log(new Date().toISOString().slice(11, 19), message);
     const sync = () =>
       resolveFace(sources)
         .then((face) => syncProfile({ face, relays: relayList(), key: loadKey(KEY_FILE) }))
