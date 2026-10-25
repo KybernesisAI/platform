@@ -17,11 +17,17 @@ it: recall-first lookups, proactive fact storage, and two-step brain notes.
 | `skills/recall` | Entity/timeline/semantic retrieval playbook |
 | `skills/remember` | Proactive fact storage, tagging, correction detection |
 | `skills/brain-note` | Long-form notes: `brain_write` **and** `brain_add`, always both |
+| `skills/forget` | Find, show, then remove a wrong memory, fact or note; correct by forget + remember |
 | `instructions.md` | Always-on memory rules: recall-first, never claim ignorance without searching, proactive remember, no secrets in memory |
 
 Tools surfaced to the model (remote names): `arcana_recall`, `arcana_search`,
 `arcana_timeline`, `arcana_remember`, `arcana_brain_list/read/write/add/query`,
-and more. See [Tool naming](#tool-naming) for how names are qualified.
+`arcana_find_memories`, `arcana_forget`, `arcana_brain_delete`, and more. See
+[Tool naming](#tool-naming) for how names are qualified.
+
+The last three are Arcana's forget tools. Arcana offers them only to clients
+that send `X-Arcana-Forget: ask-first`; this connection sends it and gates
+them (see [Security](#security)).
 
 ## Prerequisites
 
@@ -290,6 +296,13 @@ What this extension does and does not touch:
   access tokens, payment data, private keys, and one-time codes. This is an
   instruction-level guard, not a filter — add an `approval` gate on write
   tools if your deployment needs a hard control.
+- **Removing memory.** `arcana_forget` (a memory with its facts, search
+  matches and mentions, or one fact) and `arcana_brain_delete` (a note file)
+  are permanent. The connection's approval policy (`extension/lib/forget-gate.ts`)
+  parks every call for approval on a person's turn (`principalType === "user"`),
+  denies it on any other turn (scheduled runs, subagents, other agents), and
+  leaves eve's default that only the person who asked can approve.
+  `arcana_find_memories` is read-only and ungated.
 - **Multi-user surfaces.** On shared surfaces (a public Slack channel),
   anything stored is recallable by anyone who can talk to that brain. Split
   workspaces per audience (see `resolveWorkspace`) when that matters.

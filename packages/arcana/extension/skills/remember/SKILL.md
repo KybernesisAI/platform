@@ -43,8 +43,9 @@ information already stored this session.
 ## Correction Detection
 
 On "that's wrong about X", "actually...", "X doesn't work at Y anymore":
-recall the entity, store the **correct** fact (contradiction detection
-supersedes the old, lower-confidence fact), confirm "Corrected." If no
+store the **correct** fact. When the old memory is plainly wrong (not just
+out of date) or the person asks for it to go, also remove it with the
+`forget` skill so it stops coming back. Confirm "Corrected." If no
 replacement is given, ask what the correct information is.
 
 ## Notes
