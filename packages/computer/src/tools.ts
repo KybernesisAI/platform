@@ -52,6 +52,24 @@ export function openBrowserTool(options: OpenBrowserOptions = {}) {
 }
 
 /**
+ * The shell command behind close_tabs. The Python sits inside a JS template
+ * literal, so it must hold no backslash escapes: a `\n` written there reached
+ * Python as a real line break and every call died on a SyntaxError. Ids are
+ * joined with spaces, which the shell's `for` splits just the same.
+ */
+export function closeTabsCommand(): string {
+  return [
+    `set -e`,
+    `list=$(curl -s --max-time 3 http://127.0.0.1:${CHROME_DEBUG_PORT}/json/list || true)`,
+    `[ -n "$list" ] || { echo "Chrome is not open"; exit 0; }`,
+    // Pages only (not workers/extensions). Chrome lists the most recent first; keep that one.
+    `ids=$(printf '%s' "$list" | python3 -c 'import json,sys; pages=[t for t in json.load(sys.stdin) if t.get("type")=="page"]; print(" ".join(t["id"] for t in pages[1:]))')`,
+    `n=0; for id in $ids; do curl -s --max-time 3 "http://127.0.0.1:${CHROME_DEBUG_PORT}/json/close/$id" >/dev/null && n=$((n+1)); done`,
+    `echo "closed $n tab(s); 1 left open"`,
+  ].join("\n");
+}
+
+/**
  * Close every Chrome tab but one. The computer shares memory with the agent
  * host and stale tabs are the spender. Through Chrome's DevTools port rather
  * than keystrokes: a keystroke loop once closed the LAST tab too, Chrome quit,
@@ -64,17 +82,7 @@ export function closeTabsTool() {
     inputSchema: z.object({}),
     async execute(_input, ctx) {
       const sandbox = await ctx.getSandbox();
-      const result = await sandbox.run({
-        command: [
-          `set -e`,
-          `list=$(curl -s --max-time 3 http://127.0.0.1:${CHROME_DEBUG_PORT}/json/list || true)`,
-          `[ -n "$list" ] || { echo "Chrome is not open"; exit 0; }`,
-          // Pages only (not workers/extensions), oldest first; keep the newest.
-          `ids=$(printf '%s' "$list" | python3 -c 'import json,sys; pages=[t for t in json.load(sys.stdin) if t.get("type")=="page"]; print("\n".join(t["id"] for t in pages[1:]))')`,
-          `n=0; for id in $ids; do curl -s --max-time 3 "http://127.0.0.1:${CHROME_DEBUG_PORT}/json/close/$id" >/dev/null && n=$((n+1)); done`,
-          `echo "closed $n tab(s); 1 left open"`,
-        ].join("\n"),
-      });
+      const result = await sandbox.run({ command: closeTabsCommand() });
       return { ok: result.exitCode === 0, detail: (result.stdout || result.stderr).trim() };
     },
   });
