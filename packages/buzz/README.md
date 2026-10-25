@@ -50,6 +50,11 @@ A member that only ever speaks looks offline between sentences, so the bridge al
 what a person's client publishes: presence on a heartbeat, a typing indicator while a turn is
 running, and 👀 on a message the moment it is picked up.
 
+When a request will take a while (a page, a report, research), the agent says so first with
+`working_on_it` (from `@kybernesis/notify`), and the bridge posts that line in the channel as a
+reply the moment the call starts: "On it. Building your daily calendar page now." The answer
+follows as its own reply. At most one such line per turn, and none for a quick answer.
+
 ## More than one community
 
 One agent, one identity, many communities. Membership is each workspace's to

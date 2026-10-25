@@ -8,7 +8,7 @@ import {
   type MessageStreamEvent,
   type SendTurnInput,
  type CreatedClientSession } from "eve/client";
-import { cardsOf, newStepState, readStep, type Card } from "@kybernesis/cards";
+import { cardsOf, newStepState, progressGate, progressNotes, readStep, type Card } from "@kybernesis/cards";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
 import { SessionStore } from "./sessions.js";
 
@@ -96,6 +96,14 @@ export type TurnMessage = SendTurnInput["message"];
 export type TurnFailure =
   | { kind: "tool"; toolName: string; message: string }
   | { kind: "model"; code: string; message: string };
+
+/**
+ * Called with a turn's "on it" note the moment the agent sends one: a short
+ * line saying it has started a long job, posted before the result so the room
+ * can tell work from a hang (the `working_on_it` tool, see @kybernesis/cards
+ * `progressNotes`). At most once per turn.
+ */
+export type ProgressListener = (text: string) => void;
 
 /** Everything the bridge needs to decide how one eve turn should be rendered. */
 export interface TurnOutcome {
@@ -289,7 +297,9 @@ async function collectResponse(
   streamIndex: () => number,
   continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
+  onProgress?: ProgressListener,
 ): Promise<TurnOutcome> {
+  const freshNote = progressGate();
   let message = "";
   let status: MessageResult["status"] = "completed";
   let inputRequests: InputRequest[] = [];
@@ -329,6 +339,17 @@ async function collectResponse(
       return false;
     }
     readStep(steps, event.type, event.data);
+    // Not before this turn has started when the stream opened on an earlier one's tail.
+    if (onProgress && (sawTurnStart || !staleBoundaryFirst)) {
+      for (const note of progressNotes(event.type, event.data)) {
+        if (!freshNote(note)) continue;
+        try {
+          onProgress(note.text);
+        } catch (error) {
+          log(`could not post the progress note: ${(error as Error).message}`);
+        }
+      }
+    }
     const failure = failureFromEvent(event as { type: string; data?: unknown });
     if (failure) failures.push(failure);
     if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
@@ -391,6 +412,7 @@ async function sendExisting(
   timeouts: AgentTimeouts,
   continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
+  onProgress?: ProgressListener,
 ): Promise<TurnOutcome> {
   const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
@@ -403,7 +425,7 @@ async function sendExisting(
       throw error;
     }
     watchdog.throwIfTimedOut();
-    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log);
+    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log, onProgress);
   } finally {
     watchdog.dispose();
   }
@@ -430,6 +452,7 @@ export async function answerTurn(
   agentSilenceTimeoutMs = DEFAULT_AGENT_SILENCE_TIMEOUT_MS,
   agentWorkTimeoutMs = DEFAULT_AGENT_WORK_TIMEOUT_MS,
   unreadDrainTimeoutMs = DEFAULT_UNREAD_DRAIN_TIMEOUT_MS,
+  onProgress?: ProgressListener,
 ): Promise<TurnOutcome> {
   const intervalMs: AgentTimeouts = {
     silenceMs: validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs),
@@ -481,6 +504,7 @@ export async function answerTurn(
         intervalMs,
         (signal) => session.stream({ follow: true, startIndex: session.state.streamIndex, signal }),
         log,
+        onProgress,
       );
       sessions.set(community, channel, {
         id: existing.id,
@@ -526,6 +550,7 @@ export async function answerTurn(
       () => created.session.state.streamIndex,
       (signal) => created.session.stream({ follow: true, startIndex: created.session.state.streamIndex, signal }),
       log,
+      onProgress,
     );
     sessions.set(community, channel, {
       id: created.session.state.sessionId,

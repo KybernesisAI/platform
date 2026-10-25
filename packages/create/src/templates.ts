@@ -358,7 +358,8 @@ export default multiplayerSlackChannel({
       return onExe
         ? {
             file: "linq.ts",
-            content: `import { channelIdentity } from "@kybernesis/enterprise";
+            content: `import { progressEvents } from "@kybernesis/cards";
+import { channelIdentity } from "@kybernesis/enterprise";
 import { linqEnvCredentials, linqSenderIdentity } from "@kybernesis/exe/linq";
 import { linqChannel } from "eve/channels/linq";
 
@@ -369,6 +370,10 @@ import { linqChannel } from "eve/channels/linq";
 //
 // A sender is a control-plane person, never a phone number: an unlinked number
 // gets one text with a claim link and nothing else.
+//
+// A text thread shows nothing between a request and its answer, so when the
+// agent starts a long job it sends one "on it" line first (\`working_on_it\`,
+// from @kybernesis/notify) and \`progressEvents\` posts it here as it happens.
 const issuer = process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
 const credential = process.env.KYBERNESIS_AGENT_CREDENTIAL;
 const agentName = process.env.KYBERNESIS_AGENT;
@@ -376,6 +381,7 @@ const agentName = process.env.KYBERNESIS_AGENT;
 export default linqChannel({
   credentials: linqEnvCredentials(),
   ...(agentName ? { userName: agentName } : {}),
+  events: progressEvents(),
   onMessage: linqSenderIdentity({
     issuer,
     agentName,
@@ -383,7 +389,7 @@ export default linqChannel({
   }),
 });
 `,
-            deps: ["@kybernesis/exe", "@kybernesis/enterprise"],
+            deps: ["@kybernesis/exe", "@kybernesis/enterprise", "@kybernesis/cards"],
             registryItems: [],
             env: [],
             steps: [

@@ -20,6 +20,13 @@ test("exe imessage: the identity-gated Linq channel the Channels page connects, 
   assert.deepEqual(plan.env, [], "LINQ keys are written by linq.verify, never by hand");
 });
 
+test("exe imessage: a long job's on-it note is posted in the text thread", () => {
+  const plan = channelPlan("imessage", "planner", "exe");
+  assert.match(plan.content, /events: progressEvents\(\)/);
+  assert.match(plan.content, /`working_on_it`/);
+  assert.ok(plan.deps.includes("@kybernesis/cards"));
+});
+
 test("vercel channels are unchanged", () => {
   assert.match(channelPlan("slack", "planner", "vercel").content, /connectSlackCredentials/);
   assert.equal(channelPlan("imessage", "planner", "vercel").file, "photon.ts");

@@ -705,6 +705,13 @@ export function buzzBridge(options: BuzzBridgeOptions) {
           log,
           agentSilenceTimeoutMs,
           agentWorkTimeoutMs,
+          undefined,
+          // A long job's "on it" line, posted as it happens. No mention: they just asked, and the
+          // answer that follows is the reply that should ring.
+          (note) => {
+            relay.reply(channel, note, event, { mention: false });
+            log(`posted a progress note in ${channel.slice(0, 8)}`);
+          },
         );
 
         if (result.status === "waiting" && result.inputRequests.length > 0) {
