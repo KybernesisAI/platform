@@ -601,7 +601,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
         (attachments.length ? ` [+${attachments.length} attachment(s)]` : ""),
     );
 
-    void relay.react(event.id, SEEN);
+    void relay.react(event.id, SEEN, channel);
     const stopTyping = relay.typingIn(channel);
     try {
       await serialize(from, channel, async () => {

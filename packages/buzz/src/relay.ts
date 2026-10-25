@@ -99,6 +99,10 @@ export class BuzzRelay {
   /** How long to wait before the next attempt, and what was last refused. */
   private backoff = 5_000;
   private refusal: string | null = null;
+  /** The last close code and reason, so a link that keeps dropping is explained once, not every time. */
+  private lastClose: string | null = null;
+  /** What the community last refused to take after sign-in, said once per reason. */
+  private lastRejection: string | null = null;
   /** Answered already, so a redelivery in two overlapping polls is not answered twice. */
   private readonly seen = new Set<string>();
   /**
@@ -177,7 +181,14 @@ export class BuzzRelay {
 
     socket.addEventListener("open", () => this.log(`connected to ${this.url}`));
     socket.addEventListener("message", (raw: MessageEvent) => this.receive(String(raw.data)));
-    socket.addEventListener("close", () => this.reconnect());
+    // Why the community hung up, said once per reason: a link that drops every few minutes
+    // loses typing and presence while it is down, and the reason is the only clue.
+    socket.addEventListener("close", (event?: CloseEvent) => {
+      const why = `${event?.code ?? "no code"}${event?.reason ? ` ${event.reason}` : ""}`;
+      if (why !== this.lastClose) this.log(`connection closed (${why})`);
+      this.lastClose = why;
+      this.reconnect();
+    });
     socket.addEventListener("error", () => {
       try {
         socket.close();
@@ -284,6 +295,16 @@ export class BuzzRelay {
       this.keepPresent();
       this.discoverDirect();
       this.poll();
+      return;
+    }
+
+    if (type === "OK") {
+      // Signed in, a refusal is about one event: a message, typing, presence. Silence here is
+      // how typing could stop showing with nothing anywhere saying so.
+      if (frame[2] === true) return;
+      const reason = String(frame[3] ?? "");
+      if (reason !== this.lastRejection) this.log(`the community refused an event: ${reason || "no reason given"}`);
+      this.lastRejection = reason;
       return;
     }
 
@@ -564,14 +585,30 @@ export class BuzzRelay {
     return { ok: response.ok, status: response.status, message };
   }
 
-  /** React to a message. Stored by the server, so it goes over HTTP rather than the socket. */
-  async react(eventId: string, emoji: string): Promise<void> {
+  /**
+   * React to a message. Stored by the server, so it goes over HTTP rather than the socket.
+   *
+   * Scoped to its channel with `h`, as the Buzz app writes its own: a client that
+   * follows a conversation live listens by channel, and a reaction that names
+   * only its message is left for the next time the conversation is read.
+   */
+  async react(eventId: string, emoji: string, channel?: string): Promise<void> {
     const event = finalizeEvent(
-      { kind: KIND_REACTION, created_at: now(), tags: [["e", eventId]], content: emoji },
+      {
+        kind: KIND_REACTION,
+        created_at: now(),
+        tags: [...(channel ? [["h", channel]] : []), ["e", eventId]],
+        content: emoji,
+      },
       this.key.secretKey,
     );
-    const result = await this.submit(event);
-    if (!result.ok) this.log(`reaction ${emoji} refused: ${result.status} ${result.message.slice(0, 120)}`);
+    try {
+      const result = await this.submit(event);
+      if (!result.ok) this.log(`reaction ${emoji} refused: ${result.status} ${result.message.slice(0, 120)}`);
+    } catch (error) {
+      // Unreachable for a moment: the answer still comes, only the sign that it was seen is lost.
+      this.log(`reaction ${emoji} not sent: ${(error as Error).message}`);
+    }
   }
 
   /**

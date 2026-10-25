@@ -117,6 +117,28 @@ function dropIns(dir: string): string[] {
   }
 }
 
+/**
+ * The Buzz bridge units that run in this agent's folder, whatever they are called.
+ *
+ * A bridge belongs to an agent by the folder it runs in, not by its name: a
+ * second unit with another name ("Kyber-buzz-bridge" beside "kyber-buzz-bridge")
+ * is a second bridge on the same key, and every message is answered twice.
+ */
+export function buzzBridgeUnitsFor(cwd: string, systemdDir = "/etc/systemd/system"): string[] {
+  try {
+    return readdirSync(systemdDir)
+      .filter((entry) => /buzz-bridge.*\.service$/.test(entry))
+      .filter((file) => {
+        const dir = readFileSync(join(systemdDir, file), "utf8").match(/^WorkingDirectory=(.+)$/m)?.[1]?.trim();
+        return dir !== undefined && resolve(dir) === resolve(cwd);
+      })
+      .map((file) => file.replace(/\.service$/, ""))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 export function findMatchingAgentServiceUnit(
   cwd: string,
   systemdDir = "/etc/systemd/system",

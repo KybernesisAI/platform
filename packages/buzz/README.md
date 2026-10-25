@@ -50,6 +50,18 @@ A member that only ever speaks looks offline between sentences, so the bridge al
 what a person's client publishes: presence on a heartbeat, a typing indicator while a turn is
 running, and 👀 on a message the moment it is picked up.
 
+The 👀 names its channel, as the Buzz app's own reactions do. When the community
+refuses an event (typing, presence) or hangs up, the log says why, once per reason.
+
+## One bridge per agent
+
+Two bridges on one key answer every message twice. A bridge holds a lock beside
+the key file (`<keyfile>.bridge.lock`, the pid that answers); a second one started
+on the same key logs that another already answers and waits, taking over only when
+the first stops. The Channels page finds the bridge by the folder it runs in, not
+by a name built from the agent's name, and `kyb doctor` fails when two units serve
+one agent.
+
 ## More than one community
 
 One agent, one identity, many communities. Membership is each workspace's to
