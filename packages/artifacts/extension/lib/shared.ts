@@ -1,4 +1,4 @@
-import { artifactCard, MAX_BYTES, type ArtifactMeta } from "../../src/index.js";
+import { artifactCard, MAX_BYTES, shareLink, wantsLink, type ArtifactMeta, type PrincipalContext } from "../../src/index.js";
 
 /** A serverless deployment has no disk that outlives the request, so an artifact written there would vanish. */
 export function requireDisk(): void {
@@ -26,26 +26,50 @@ export async function contentFrom(input: { content?: string; path?: string }, ct
 /**
  * What the model sees after a create or update: enough to talk about it and
  * change it later, never the card JSON. The reply still has to stand on its
- * own, because chat channels that draw no cards only ever see the words.
+ * own, because chat channels that draw no cards only ever see the words; on
+ * those the output carries a link and the model is told to send it.
  */
-export function forModel(output: { artifactId: string; version: number; title: string }, verb: string) {
+export function forModel(output: { artifactId: string; version: number; title: string; url?: string }, verb: string) {
+  const what = `${verb} artifact "${output.title}" (id ${output.artifactId}, version ${output.version}). `;
+  if (output.url) {
+    return {
+      type: "text" as const,
+      value:
+        what +
+        "This conversation shows only text, so the person can open it only through this link. Put the link in your reply exactly as written, on its own line, and say in a sentence or two what the page shows: " +
+        output.url,
+    };
+  }
   return {
     type: "text" as const,
     value:
-      `${verb} artifact "${output.title}" (id ${output.artifactId}, version ${output.version}). ` +
+      what +
       "The person sees it as a card in KYBER Studio, the phone app and Buzz, so do not paste its content into your reply. " +
       "Say in a sentence or two what it shows. On a channel without cards, tell them it is under this agent's Artifacts in KYBER Studio.",
   };
 }
 
-/** The full output of a create or update: the facts, and the card the apps draw. */
-export function result(meta: ArtifactMeta) {
+/**
+ * The full output of a create or update: the facts, and the card the apps
+ * draw. On a surface that shows only text (iMessage) it also carries a share
+ * link for the person who asked, and the card carries the same link.
+ */
+export function result(meta: ArtifactMeta, ctx: PrincipalContext) {
+  let url: string | undefined;
+  if (wantsLink(ctx)) {
+    try {
+      url = shareLink(meta);
+    } catch (error) {
+      console.warn(`[artifacts] could not make a link for ${meta.id.slice(0, 8)}: ${(error as Error).message}`);
+    }
+  }
   return {
     artifactId: meta.id,
     version: meta.version,
     title: meta.title,
     format: meta.format,
     display: meta.display,
-    kyb: artifactCard(meta),
+    ...(url ? { url } : {}),
+    kyb: artifactCard(meta, url),
   };
 }

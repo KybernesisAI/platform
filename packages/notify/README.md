@@ -14,8 +14,10 @@ if (user) await notify({ user, issuer, credential, kind, title, body: preview(te
 
 The extension also gives the model `working_on_it` (mounted as
 `notify__working_on_it`). On a text channel a person sees nothing between a
-request and its answer, so for work that takes more than a minute (an artifact,
-a report, research, code, the computer) the model sends one sentence first:
+request and its answer, so before making or changing an artifact (always, since
+0.4.1, because models judged a quick page not worth a note) and for other work
+that takes more than a minute (a report, research, code, the computer) the
+model sends one sentence first:
 "On it. Building your daily calendar page now, I'll send it here in a minute."
 Quick answers get no note. The tool does nothing itself; each surface posts
 the call's message as it happens:

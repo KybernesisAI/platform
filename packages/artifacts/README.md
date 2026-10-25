@@ -32,6 +32,21 @@ That writes `agent/extensions/artifacts.ts`, which mounts the extension. The age
 
   The apps read it from the tool's `action.result` event. The model sees one line (`toModelOutput`), never the card. The card's id is the artifact's, so a newer version replaces the older card in place.
 
+## On iMessage and SMS (0.2.0)
+
+A text-only conversation draws no cards, so an artifact made there would be out
+of reach. When the turn's verified `surface` attribute is `linq` (what
+`linqSenderIdentity` from `@kybernesis/exe` stamps), `create` and `update` make
+a share link for the person who asked, for that version, and put it in the
+output (`url`), on the card (`data.url`, and its text), and in what the model
+reads, which tells it to send the link. The link is written in the layout
+`@kybernesis/manage` serves (`<ARTIFACT_SHARES_DIR>/<token>.json`, served at
+`/eve/v1/kyb/artifact-shares/<token>`, withdrawable by the owner) and is built
+on `EVE_PUBLIC_URL`, else `https://<EXE_VM_NAME>.exe.xyz`. Without either, or
+for an artifact nobody owns, there is no link and the reply points to KYBER
+Studio as before. Other surfaces never get one here: the apps draw the card,
+and the Buzz bridge makes its own link when it posts a card into a channel.
+
 ## Routes (in `@kybernesis/manage`)
 
 All behind the caller's control-plane identity, like every other manage route. Anything the caller cannot see is a 404.
