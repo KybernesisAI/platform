@@ -95,6 +95,13 @@ share link as the person who asked (`POST /eve/v1/kyb/artifacts/:id/share`, `@ky
 app and opens it beside the conversation; everywhere else the link is in the text. The person
 can withdraw the link from the agent. `BUZZ_CARDS=off` stops card messages.
 
+A screenshot the agent shows (`show_screen` in `@kybernesis/computer`) goes out as an ordinary Buzz
+picture, not a card: the bridge fetches it from the agent as the person who asked
+(`GET /eve/v1/kyb/screens/:id`, served only to them) and stores it in the community's own media
+store, which serves members only. Every Buzz app draws it, with or without the plugin. Like an
+artifact, a screenshot asked for in a channel is shared with that channel. If it cannot be
+fetched or stored, the card goes out as before.
+
 ## Questions and approvals
 
 When the agent needs a yes or an answer, the bridge posts the question as a reply to the message
