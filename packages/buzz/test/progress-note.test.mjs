@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 import { SessionStore } from "../dist/sessions.js";
@@ -42,9 +43,9 @@ function clientStreaming(events) {
   };
 }
 
-const run = (events, notes) =>
-  answerTurn(clientStreaming(events), storeWith(), "channel", "make me a page", "relay", () => {}, 60_000, 60_000, 1_000, (text) =>
-    notes.push(text),
+const run = (events, notes, logs = [], notesPerTurn) =>
+  answerTurn(clientStreaming(events), storeWith(), "channel", "make me a page", "relay", (line) => logs.push(line), 60_000, 60_000, 1_000, (text) =>
+    notes.push(text), notesPerTurn,
   );
 
 test("a long job's note is posted while the turn runs, once, and the answer stays the reply", async () => {
@@ -71,6 +72,29 @@ test("a long job's note is posted while the turn runs, once, and the answer stay
   assert.deepEqual(notes, ["On it. Building your daily calendar page now."]);
   assert.equal(postedBeforeAnswer, true);
   assert.equal(result.message, "Here is your calendar page.");
+});
+
+test("default logs the dropped call; raised caps post in order and collapse requested/result", async () => {
+  const events = [
+    { type: "turn.started", data: { turnId: "t1" } },
+    note("c1", "First."),
+    { type: "action.result", data: { turnId: "t1", status: "completed", result: { callId: "c1", toolName: "notify__working_on_it", output: { message: "First." } } } },
+    note("c2", "Second."),
+    note("c3", "Third."),
+    { type: "message.completed", data: { finishReason: "stop", message: "Final reply." } },
+    { type: "session.waiting", data: {} },
+  ];
+  const notes = [], logs = [];
+  assert.equal((await run(events, notes, logs)).message, "Final reply.");
+  assert.deepEqual(notes, ["First."]);
+  assert.ok(logs.some((line) => line.includes("[debug]") && line.includes("callId=c2") && line.includes("turn-limit")));
+  const raised = [], raisedLogs = [];
+  assert.equal((await run(events, raised, raisedLogs, 3)).message, "Final reply.");
+  assert.deepEqual(raised, ["First.", "Second.", "Third."]);
+  assert.ok(raisedLogs.some((line) => line.includes("callId=c1") && line.includes("duplicate-call")));
+  const single = [];
+  await run([events[0], events[1], events[2], ...events.slice(-2)], single, [], "unlimited");
+  assert.deepEqual(single, ["First."]);
 });
 
 test("a quick answer posts no note", async () => {
@@ -123,4 +147,20 @@ test("a listener that throws never fails the turn", async () => {
     },
   );
   assert.equal(result.message, "Done.");
+});
+
+test("CLI rejects invalid turn caps before starting a bridge and advertises the setting", () => {
+  const cli = new URL("../dist/cli.js", import.meta.url);
+  const help = spawnSync(process.execPath, [cli.pathname], { encoding: "utf8" });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /BUZZ_PROGRESS_PER_TURN/);
+  for (const value of ["0", "2.5", "garbage", "9007199254740992"]) {
+    const run = spawnSync(process.execPath, [cli.pathname, "run"], {
+      encoding: "utf8",
+      env: { ...process.env, BUZZ_PROGRESS_PER_TURN: value },
+      timeout: 10_000,
+    });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /BUZZ_PROGRESS_PER_TURN must be a positive safe integer/);
+  }
 });

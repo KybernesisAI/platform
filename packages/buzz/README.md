@@ -159,6 +159,7 @@ silence. A declined call is the person's choice and is not reported as a failure
 | `BUZZ_AGENT_WORK_TIMEOUT_MS` | Ceiling on silence once the response stream is open (default `3600000`, sixty minutes). The stream is quiet while the agent works, a long tool call or a delegated subagent produces nothing until it returns, so this is a ceiling on work, not a stall detector. |
 | `BUZZ_CARDS` | `off` stops posting cards after replies and hidden questions in prompts (default on) |
 | `BUZZ_ANSWERS` | Who may answer a question in a shared channel: `asker` (default), only the person whose message raised it, or `anyone` the agent knows there |
+| `BUZZ_PROGRESS_PER_TURN` | Maximum progress notes per turn: positive integer or `unlimited` (default `1`). A requested/result pair for the same tool call still posts only once. |
 | `BUZZ_PROFILE_SYNC_MS` | How often the profile is re-checked against the name and picture its owner set and its `.agent` name (default `900000`, fifteen minutes; `0` turns it off) |
 | `AGENTID_MIRROR_SUFFIX` | Where names serve their public documents (default `.agentid.dev`); for staging only |
 | `KYBERNESIS_ISSUER` | The control plane |

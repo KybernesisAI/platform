@@ -8,7 +8,7 @@ import {
   type MessageStreamEvent,
   type SendTurnInput,
  type CreatedClientSession } from "eve/client";
-import { cardsOf, newStepState, progressGate, progressNotes, readStep, type Card } from "@kybernesis/cards";
+import { cardsOf, newStepState, progressGate, progressNotes, readStep, type Card, type ProgressGateOptions } from "@kybernesis/cards";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
 import { SessionStore } from "./sessions.js";
 
@@ -101,7 +101,7 @@ export type TurnFailure =
  * Called with a turn's "on it" note the moment the agent sends one: a short
  * line saying it has started a long job, posted before the result so the room
  * can tell work from a hang (the `working_on_it` tool, see @kybernesis/cards
- * `progressNotes`). At most once per turn.
+ * `progressNotes`). One per turn by default; configurable by the bridge.
  */
 export type ProgressListener = (text: string) => void;
 
@@ -298,8 +298,10 @@ async function collectResponse(
   continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
   onProgress?: ProgressListener,
+  notesPerTurn: ProgressGateOptions["notesPerTurn"] = 1,
 ): Promise<TurnOutcome> {
-  const freshNote = progressGate();
+  const freshNote = progressGate({ notesPerTurn, onRefused: (note, reason) =>
+    log(`[debug] refused progress note callId=${note.callId} reason=${reason}`) });
   let message = "";
   let status: MessageResult["status"] = "completed";
   let inputRequests: InputRequest[] = [];
@@ -413,6 +415,7 @@ async function sendExisting(
   continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
   onProgress?: ProgressListener,
+  notesPerTurn: ProgressGateOptions["notesPerTurn"] = 1,
 ): Promise<TurnOutcome> {
   const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
@@ -425,7 +428,7 @@ async function sendExisting(
       throw error;
     }
     watchdog.throwIfTimedOut();
-    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log, onProgress);
+    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log, onProgress, notesPerTurn);
   } finally {
     watchdog.dispose();
   }
@@ -453,6 +456,7 @@ export async function answerTurn(
   agentWorkTimeoutMs = DEFAULT_AGENT_WORK_TIMEOUT_MS,
   unreadDrainTimeoutMs = DEFAULT_UNREAD_DRAIN_TIMEOUT_MS,
   onProgress?: ProgressListener,
+  notesPerTurn: ProgressGateOptions["notesPerTurn"] = 1,
 ): Promise<TurnOutcome> {
   const intervalMs: AgentTimeouts = {
     silenceMs: validateAgentSilenceTimeoutMs(agentSilenceTimeoutMs),
@@ -505,6 +509,7 @@ export async function answerTurn(
         (signal) => session.stream({ follow: true, startIndex: session.state.streamIndex, signal }),
         log,
         onProgress,
+        notesPerTurn,
       );
       sessions.set(community, channel, {
         id: existing.id,
@@ -551,6 +556,7 @@ export async function answerTurn(
       (signal) => created.session.stream({ follow: true, startIndex: created.session.state.streamIndex, signal }),
       log,
       onProgress,
+      notesPerTurn,
     );
     sessions.set(community, channel, {
       id: created.session.state.sessionId,

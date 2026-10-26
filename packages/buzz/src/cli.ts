@@ -235,6 +235,7 @@ const LOCK_RETRY_MS = 30_000;
 const log = (message: string) => console.log(new Date().toISOString().slice(11, 19), message);
 
 function run(): void {
+  const progressPerTurn = progressPerTurnFromEnv(process.env.BUZZ_PROGRESS_PER_TURN);
   let waiting = false;
   const tryStart = () => {
     const lock = acquireBridgeLock(KEY_FILE);
@@ -251,12 +252,22 @@ function run(): void {
     }
     if (waiting) log("the other bridge stopped; this one takes over");
     process.on("exit", lock.release);
-    runBridge();
+    runBridge(progressPerTurn);
   };
   tryStart();
 }
 
-function runBridge(): void {
+/** Parse the optional turn cap strictly; do not silently fall back on typos. */
+export function progressPerTurnFromEnv(value: string | undefined): number | "unlimited" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "unlimited") return value;
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw new Error("BUZZ_PROGRESS_PER_TURN must be a positive safe integer or 'unlimited'");
+  }
+  return Number(value);
+}
+
+function runBridge(progressPerTurn: number | "unlimited" | undefined): void {
   const bridge = buzzBridge({
     // Comma-separated: one agent can be a member of several communities, and
     // each is a connection rather than another process to supervise.
@@ -269,6 +280,7 @@ function runBridge(): void {
     ...(process.env.BUZZ_AGENT_WORK_TIMEOUT_MS
       ? { agentWorkTimeoutMs: Number(process.env.BUZZ_AGENT_WORK_TIMEOUT_MS) }
       : {}),
+    progressPerTurn,
     ...(process.env.BUZZ_CARDS === "off" ? { cards: false } : {}),
     ...(process.env.BUZZ_ANSWERS === "anyone" ? { answers: "anyone" as const } : {}),
     ...(process.env.BUZZ_AGENT_SILENCE_TIMEOUT_MS
@@ -470,6 +482,7 @@ else if (command === "id") {
     BUZZ_AGENT_WORK_TIMEOUT_MS      ceiling on a turn once acknowledged (default 3600000ms)
     BUZZ_CARDS=off                  post replies without the cards tools handed back
     BUZZ_ANSWERS=anyone             let anyone in a channel answer a question (default: only who asked)
+    BUZZ_PROGRESS_PER_TURN          positive integer or unlimited (default: 1 note per turn)
     BUZZ_PROFILE_SYNC_MS           how often the profile is re-checked against the name and
                                    picture its owner set (default 900000ms, fifteen
                                    minutes; 0 turns it off)

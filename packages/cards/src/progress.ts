@@ -84,21 +84,56 @@ export function progressNotes(type: string, data: unknown): ProgressNote[] {
   return [];
 }
 
+/** Why a note was refused by the progress gate. */
+export type ProgressRefusalReason = "duplicate-call" | "turn-limit";
+
+export interface ProgressGateOptions {
+  /** Accepted notes per turn; defaults to one. Calls without a turnId are deduped by callId only. */
+  notesPerTurn?: number | "unlimited";
+  /** Maximum number of accepted call IDs retained for replay deduplication (not a per-turn cap). */
+  retentionLimit?: number;
+  /** Called whenever a note is refused. */
+  onRefused?: (note: ProgressNote, reason: ProgressRefusalReason) => void;
+}
+
 /**
- * Remembers which notes were already posted, so one turn posts at most one.
- *
- * The model is told to send a single note per task; this holds the line when
- * it sends a second, and when a durable step replays events a reader has
- * already handled. Keyed by turn when the event names one, else by call.
+ * Deduplicate requested/result events by call ID unconditionally, and optionally
+ * cap notes per turn. The numeric legacy argument is a dedupe retention bound,
+ * not a notes-per-turn cap. Evicting a call also releases its turn count so
+ * counts cannot outlive the calls they represent.
  */
-export function progressGate(limit = 500): (note: ProgressNote) => boolean {
-  const seen = new Set<string>();
+export function progressGate(options: ProgressGateOptions | number = {}): (note: ProgressNote) => boolean {
+  const { notesPerTurn = 1, retentionLimit = 500, onRefused } =
+    typeof options === "number" ? { retentionLimit: options } : options;
+  if (notesPerTurn !== "unlimited" && (!Number.isSafeInteger(notesPerTurn) || notesPerTurn < 1)) {
+    throw new Error("notesPerTurn must be a positive safe integer or 'unlimited'");
+  }
+  if (!Number.isSafeInteger(retentionLimit) || retentionLimit < 1) {
+    throw new Error("retentionLimit must be a positive safe integer");
+  }
+  const calls = new Map<string, string | undefined>();
+  const turns = new Map<string, number>();
   return (note) => {
-    const key = note.turnId ? `turn:${note.turnId}` : `call:${note.callId}`;
-    if (seen.has(key) || seen.has(`call:${note.callId}`)) return false;
-    seen.add(key);
-    seen.add(`call:${note.callId}`);
-    while (seen.size > limit) seen.delete(seen.values().next().value as string);
+    if (calls.has(note.callId)) {
+      onRefused?.(note, "duplicate-call");
+      return false;
+    }
+    if (note.turnId && notesPerTurn !== "unlimited" && (turns.get(note.turnId) ?? 0) >= notesPerTurn) {
+      onRefused?.(note, "turn-limit");
+      return false;
+    }
+    calls.set(note.callId, note.turnId);
+    if (note.turnId) turns.set(note.turnId, (turns.get(note.turnId) ?? 0) + 1);
+    while (calls.size > retentionLimit) {
+      const oldest = calls.keys().next().value as string;
+      const turnId = calls.get(oldest);
+      calls.delete(oldest);
+      if (turnId) {
+        const count = turns.get(turnId)! - 1;
+        if (count) turns.set(turnId, count);
+        else turns.delete(turnId);
+      }
+    }
     return true;
   };
 }
@@ -122,7 +157,8 @@ interface ChatThread {
 export function progressEvents(): {
   "action.result"(eventData: unknown, channel: { thread?: ChatThread | null }, ...rest: unknown[]): Promise<void>;
 } {
-  const fresh = progressGate();
+  const fresh = progressGate({ onRefused: (note, reason) =>
+    console.debug(`[progress] refused note callId=${note.callId} reason=${reason}`) });
   return {
     async "action.result"(eventData, channel, ...rest) {
       for (const note of progressNotes("action.result", eventData)) {

@@ -32,6 +32,8 @@ export {
   progressGate,
   progressEvents,
   type ProgressNote,
+  type ProgressGateOptions,
+  type ProgressRefusalReason,
 } from "./progress.js";
 export { derivedCards, outputObject, formPrompt, formAnswer, readFormAnswer } from "./derive.js";
 export { approvalCard } from "./approval.js";

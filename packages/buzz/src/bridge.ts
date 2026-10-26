@@ -95,6 +95,8 @@ export type BuzzBridgeOptions = {
    * Default true; false posts the reply and questions as words alone.
    */
   cards?: boolean;
+  /** Progress notes per turn: positive integer or "unlimited"; defaults to one. */
+  progressPerTurn?: number | "unlimited";
   /**
    * Who may answer a question the agent asks in a shared channel. `asker`
    * (the default): only the person whose message raised it; anyone else is
@@ -712,6 +714,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
             relay.reply(channel, note, event, { mention: false });
             log(`posted a progress note in ${channel.slice(0, 8)}`);
           },
+          options.progressPerTurn,
         );
 
         if (result.status === "waiting" && result.inputRequests.length > 0) {

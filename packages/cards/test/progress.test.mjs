@@ -61,6 +61,57 @@ test("one note per turn, and a replayed call is not posted twice", () => {
   assert.equal(fresh({ callId: "d", text: "No turn id." }), false);
 });
 
+test("raised caps preserve call dedupe and report every refusal with its reason", () => {
+  const refused = [];
+  const fresh = progressGate({ notesPerTurn: 2, onRefused: (note, reason) => refused.push([note.callId, reason]) });
+  const note = (callId) => ({ callId, turnId: "t", text: callId });
+  assert.equal(fresh(note("a")), true);
+  assert.equal(fresh(note("a")), false);
+  assert.equal(fresh(note("b")), true);
+  assert.equal(fresh(note("c")), false);
+  assert.deepEqual(refused, [["a", "duplicate-call"], ["c", "turn-limit"]]);
+  assert.equal(progressGate({ notesPerTurn: "unlimited" })(note("a")), true);
+  const unlimited = progressGate({ notesPerTurn: "unlimited" });
+  assert.equal(unlimited(note("a")), true);
+  assert.equal(unlimited(note("b")), true);
+  assert.equal(unlimited(note("a")), false);
+});
+
+test("eviction removes the call and its turn count together", () => {
+  const fresh = progressGate({ retentionLimit: 1 });
+  assert.equal(fresh({ callId: "a", turnId: "t", text: "a" }), true);
+  assert.equal(fresh({ callId: "b", turnId: "other", text: "b" }), true);
+  assert.equal(fresh({ callId: "c", turnId: "t", text: "c" }), true);
+  assert.equal(progressGate(1)({ callId: "a", text: "a" }), true);
+});
+
+test("invalid caps and retention bounds fail fast", () => {
+  for (const value of [0, -1, 1.5, NaN, Infinity, "2", Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => progressGate({ notesPerTurn: value }), /notesPerTurn/);
+  }
+  assert.throws(() => progressGate(0), /retentionLimit/);
+});
+
+test("chat channel refusals are visible at debug level", async () => {
+  const lines = [];
+  const original = console.debug;
+  console.debug = (message) => lines.push(message);
+  try {
+    const events = progressEvents();
+    const thread = { post: async () => {} };
+    const data = result("notify__working_on_it", { message: "On it." });
+    await events["action.result"](data, { thread });
+    await events["action.result"](data, { thread });
+    await events["action.result"]({ ...data, result: { ...data.result, callId: "call-2" } }, { thread });
+    assert.deepEqual(lines, [
+      "[progress] refused note callId=call-1 reason=duplicate-call",
+      "[progress] refused note callId=call-2 reason=turn-limit",
+    ]);
+  } finally {
+    console.debug = original;
+  }
+});
+
 test("the chat channel handler posts the note once and passes a renderer chain on", async () => {
   const posted = [];
   const thread = { post: async (m) => posted.push(m) };
