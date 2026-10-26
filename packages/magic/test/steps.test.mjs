@@ -51,11 +51,6 @@ test("the hook records where a person talks, and ignores magic's own turns and n
   await recordTurn({ auth: person, channelKind: "chat-sdk", continuationToken: "linq:chat-1", text: "hi", at: at("09:00") }, o);
   await recordTurn({ auth: person, channelKind: "kyb", continuationToken: "studio", text: `${MAGIC_MARKER} check`, at: at("09:05") }, o);
   await recordTurn({ auth: { principalId: "eve:app", principalType: "runtime" }, text: "cron" }, o);
-  // A routine running as the person is not the person talking.
-  await recordTurn(
-    { auth: { ...person, attributes: { ...person.attributes, trigger: "routine" } }, channelKind: "kyb", continuationToken: "studio", text: "daily digest", at: at("09:06") },
-    o,
-  );
   assert.deepEqual(people(o), ["usr_1"]);
   const surface = readSurface("usr_1", o);
   assert.equal(surface.token, "linq:chat-1");

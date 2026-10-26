@@ -204,9 +204,6 @@ export interface TurnSeen {
  */
 export async function recordTurn(turn: TurnSeen, options: MagicOptions = {}): Promise<void> {
   if (isMagicMessage(turn.text)) return;
-  // A routine runs as its person but they are not there: it must not move their
-  // heads-ups to the routines conversation, or hold them as if they were chatting.
-  if ((turn.auth as { attributes?: { trigger?: unknown } } | null | undefined)?.attributes?.trigger === "routine") return;
   const auth = personAuth(turn.auth);
   if (!auth) return;
   const path = file(options, auth.principalId, "surface");
