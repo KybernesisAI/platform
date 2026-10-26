@@ -95,6 +95,9 @@ function tiles(v: unknown): StatTile[] {
   return out;
 }
 
+/** A routine's file name: what manage's slugify makes, and nothing that could reach outside agent/schedules. */
+const ROUTINE_NAME = /^[a-z0-9][a-z0-9-]{0,79}$/;
+
 function actions(v: unknown): CardAction[] | undefined {
   const out: CardAction[] = [];
   let primary = false;
@@ -105,8 +108,13 @@ function actions(v: unknown): CardAction[] | undefined {
     const url = safeUrl(a.url);
     const artifact = str(a.artifact, 120);
     const say = str(a.say, 500);
-    const action: CardAction = url ? { label, url } : artifact ? { label, artifact } : say ? { label, say } : { label };
-    if (!action.url && !action.artifact && !action.say) continue;
+    const routine = typeof a.routine === "string" && ROUTINE_NAME.test(a.routine) ? a.routine : undefined;
+    const action: CardAction = url
+      ? { label, url }
+      : artifact
+        ? { label, artifact }
+        : { label, ...(routine ? { routine } : {}), ...(say ? { say } : {}) };
+    if (!action.url && !action.artifact && !action.routine && !action.say) continue;
     if (a.primary === true && !primary) {
       action.primary = true;
       primary = true;

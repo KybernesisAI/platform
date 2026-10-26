@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,8 +10,11 @@ import {
   newRunCapture,
   noteSession,
   pendingContext,
+  readRoutine,
   readThread,
   recapContext,
+  routineOwner,
+  routineSource,
   runAddress,
   threadAddress,
   threadOwnerOf,
@@ -123,10 +126,11 @@ test("a run's report is its final answer, not a step on the way", () => {
 
 // The routes, driven with eve's route context faked: what matters is who the
 // owner is (always the verified caller) and what reaches eve.
-function routes(d, userId = "user_dana", earlier = {}, level = "use") {
+function routes(d, userId = "user_dana", earlier = {}, level = "use", schedulesDir) {
   const list = threadRoutes({
     prefix: "/eve/v1/kyb",
     dir: d,
+    ...(schedulesDir ? { schedulesDir } : {}),
     issuer: "https://cp.example",
     identify: async () => ({ userId, level, org: "org_1" }),
     readExchanges: async (id) => earlier[id] ?? [],
@@ -280,4 +284,70 @@ test("reports from routines with no owner reach the people who manage the agent,
   assert.equal((await routes(d, "user_sam", {}, "use").find("POST", "/thread/respond").handler(answer.clone(), fakeEve().ctx)).status, 404);
   assert.equal((await routes(d, "user_sam", {}, "manage").find("POST", "/thread/respond").handler(answer, fakeEve().ctx)).status, 200);
   assert.equal(readThread(d, "_agent").reports.find((r) => r.runSessionId === "run_q").settled, true);
+});
+
+const dana = { authenticator: "kybernesis", issuer: "https://cp.example", principalId: "user_dana", principalType: "user", attributes: { org: "org_1" } };
+
+function schedules(files) {
+  const d = mkdtempSync(join(tmpdir(), "kyb-schedules-"));
+  mkdirSync(d, { recursive: true });
+  for (const [name, source] of Object.entries(files)) writeFileSync(join(d, `${name}.ts`), source);
+  return d;
+}
+
+test("a routine file says what it sends and as whom, whether written by manage or by hand", () => {
+  const owned = readRoutine(
+    routineSource({ name: "daily-calendar", cron: "0 0 * * *", instruction: 'Say "hi"\nthen stop.', manageChannelModule: "kyb", owner: routineOwner(dana, "daily-calendar") }),
+  );
+  assert.equal(owned.routine, "daily-calendar");
+  assert.equal(owned.instruction, 'Say "hi"\nthen stop.');
+  assert.equal(owned.owner.principalId, "user_dana");
+  assert.equal(owned.owner.attributes.trigger, "routine");
+
+  const app = readRoutine(routineSource({ name: "water", cron: "0 2 * * *", instruction: "Remind them to drink water.", manageChannelModule: "kyb" }));
+  assert.deepEqual(app, { routine: "water", instruction: "Remind them to drink water." });
+
+  const elsewhere = readRoutine(
+    routineSource({ name: "digest", cron: "0 9 * * *", instruction: "Post the digest.", manageChannelModule: "kyb", destination: { channel: "buzz", target: { room: "r1" } } }),
+  );
+  assert.equal(elsewhere, undefined, "a routine that sends somewhere else runs only on its schedule");
+  assert.equal(readRoutine("export default {}"), undefined);
+});
+
+test("run now starts the routine's own background run, as its owner, and only for its owner", async () => {
+  const d = dir();
+  const s = schedules({
+    "daily-calendar": routineSource({ name: "daily-calendar", cron: "0 0 * * *", instruction: "Refresh the calendar page.", manageChannelModule: "kyb", owner: routineOwner(dana, "daily-calendar") }),
+  });
+  const eve = fakeEve();
+  const res = await routes(d, "user_dana", {}, "use", s).find("POST", "/thread/run").handler(post({ routine: "daily-calendar" }), eve.ctx);
+  assert.equal(res.status, 200);
+  const [send] = eve.sent;
+  assert.match(send.address, /^run:daily-calendar:user_dana:/);
+  assert.equal(send.message, "Refresh the calendar page.");
+  assert.equal(send.options.auth.principalId, "user_dana");
+  assert.equal(send.options.auth.attributes.trigger, "routine");
+  assert.deepEqual(send.options.state, { kind: "run", owner: "user_dana", routine: "daily-calendar" });
+
+  const other = await routes(d, "user_sam", {}, "manage", s).find("POST", "/thread/run").handler(post({ routine: "daily-calendar" }), eve.ctx);
+  assert.equal(other.status, 404, "someone else's routine is not theirs to run, even for a manager");
+  for (const routine of ["../channels/eve", "missing", 42]) {
+    const r = await routes(d, "user_dana", {}, "use", s).find("POST", "/thread/run").handler(post({ routine }), eve.ctx);
+    assert.equal(r.status, 404);
+  }
+  assert.equal(eve.sent.length, 1);
+  assert.equal(routes(d).find("POST", "/thread/run"), undefined, "not served without the schedules folder");
+});
+
+test("a routine with no owner is run by a manager, as them, and reports to the agent's record", async () => {
+  const s = schedules({ water: routineSource({ name: "water", cron: "0 2 * * *", instruction: "Remind them to drink water.", manageChannelModule: "kyb" }) });
+  const eve = fakeEve();
+  const user = await routes(dir(), "user_sam", {}, "use", s).find("POST", "/thread/run").handler(post({ routine: "water" }), eve.ctx);
+  assert.equal(user.status, 404);
+  const res = await routes(dir(), "user_dana", {}, "manage", s).find("POST", "/thread/run").handler(post({ routine: "water" }), eve.ctx);
+  assert.equal(res.status, 200);
+  const [send] = eve.sent;
+  assert.match(send.address, /^run:water:_agent:/);
+  assert.equal(send.options.auth.principalId, "user_dana");
+  assert.deepEqual(send.options.state, { kind: "run", owner: "_agent", routine: "water" });
 });

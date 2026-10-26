@@ -1,6 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { GET, POST } from "eve/channels";
 import { parseInputResponses } from "eve/client";
 import { sessions } from "eve/server";
+import { readRoutine, routineOwner } from "./routine-source.js";
 import {
   AGENT_OWNER,
   type Exchange,
@@ -9,6 +12,7 @@ import {
   pendingContext,
   readThread,
   recapContext,
+  runAddress,
   threadAddress,
   updateThread,
   writeThread,
@@ -29,7 +33,12 @@ export interface ThreadRouteInput {
   identify: (req: Request) => Promise<ThreadCaller | Response>;
   /** How the end of an earlier session is read; eve's own store unless a test passes one. */
   readExchanges?: (sessionId: string) => Promise<Exchange[]>;
+  /** The agent's agent/schedules folder, for running a routine now. Without it, /thread/run is not served. */
+  schedulesDir?: string;
 }
+
+/** A routine's file name: what create_routine's slugify makes, and nothing that could leave the folder. */
+const ROUTINE_FILE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 
 /** Where the person is, as the client declares it (same set as @kybernesis/enterprise). */
 const SURFACES = new Set(["voice", "studio", "phone", "watch", "terminal"]);
@@ -166,6 +175,49 @@ export function threadRoutes(input: ThreadRouteInput) {
       writeThread(dir, record);
       return Response.json({ ok: true, sessionId: session.id });
     }),
+
+    /**
+     * Run a routine now, as its schedule would: in its own background session,
+     * with its own instruction and as its own person, so what it has to say
+     * arrives as a report in the owner's thread, never as a message in the
+     * conversation. Only the routine's owner may run it; a routine with no
+     * owner (it runs as the agent) may be run by those who manage the agent,
+     * and runs as them. Anyone else gets 404.
+     */
+    ...(input.schedulesDir
+      ? [
+          POST(prefix + "/thread/run", async (req, { from }) => {
+            const caller = await identify(req);
+            if (caller instanceof Response) return caller;
+            const body = (await req.json().catch(() => ({}))) as { routine?: unknown };
+            const name = typeof body.routine === "string" ? body.routine : "";
+            const notFound = () => Response.json({ ok: false, error: "No such routine." }, { status: 404 });
+            if (!ROUTINE_FILE.test(name)) return notFound();
+            const file = join(input.schedulesDir!, `${name}.ts`);
+            if (!existsSync(file)) return notFound();
+            const run = readRoutine(readFileSync(file, "utf8"));
+            if (!run) {
+              return Response.json({ ok: false, error: "This routine sends somewhere else, so it runs only on its schedule." }, { status: 409 });
+            }
+            let owner: string;
+            let auth: unknown;
+            if (run.owner) {
+              if (run.owner.principalId !== caller.userId) return notFound();
+              owner = caller.userId;
+              auth = run.owner;
+            } else {
+              if (!seesAgentReports(caller)) return notFound();
+              owner = AGENT_OWNER;
+              auth = routineOwner(personPrincipal(caller, issuer, req), run.routine);
+            }
+            const session = await from(runAddress(run.routine, owner)).send(run.instruction, {
+              auth,
+              state: { kind: "run", owner, routine: run.routine },
+            } as never);
+            return Response.json({ ok: true, sessionId: session.id, routine: run.routine });
+          }),
+        ]
+      : []),
 
     /**
      * Answer a question or approval. Without `sessionId` it is the thread's

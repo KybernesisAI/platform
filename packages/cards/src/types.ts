@@ -14,13 +14,23 @@
 /** The envelope version this package reads and writes. */
 export const CARD_VERSION = 1;
 
-/** Something a person can do from a card. Exactly one of `url`, `artifact` or `say` is set. */
+/**
+ * Something a person can do from a card. Exactly one of `url`, `artifact`,
+ * `routine` or `say` is acted on; `say` may ride along with `routine` as the
+ * fallback for a client that does not run routines.
+ */
 export interface CardAction {
   label: string;
   /** Open this address in the browser. */
   url?: string;
   /** Open one of the agent's artifacts by id. */
   artifact?: string;
+  /**
+   * Run this routine (its file name under agent/schedules, without `.ts`) now,
+   * in the background, as its schedule would. Its answer arrives as a report,
+   * never as a message in the conversation.
+   */
+  routine?: string;
   /** Send this sentence as the person's next message. Never sent without the person pressing it. */
   say?: string;
   /** Draw it as the main button. One per card at most. */

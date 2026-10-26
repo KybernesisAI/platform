@@ -109,9 +109,8 @@ ${importLine}
  *
  * Created from KYBER Studio.${dest ? "" : `
  *
- * Delivered into the conversation this agent is already having, so the answer
- * arrives where the person is looking. When there is no open conversation it
- * starts one.`}${input.owner ? `
+ * Each firing runs in the background, in its own session. What it has to say
+ * is reported in its owner's thread, never posted as a message there.`}${input.owner ? `
  *
  * Runs as the person who asked for it, so it can use what they can (their
  * calendar, their pages) and their phone hears when it is done.` : ""}
@@ -128,4 +127,67 @@ export default defineSchedule({
   },
 });
 `;
+}
+
+/** What a routine file sends when it fires, as `readRoutine` finds it. */
+export interface RoutineRun {
+  /** The routine's name, as its schedule names it to the manage channel. */
+  routine: string;
+  instruction: string;
+  /** The person it runs as; undefined for a routine that runs as the agent (`appAuth`). */
+  owner?: RoutineOwner;
+}
+
+/**
+ * Read what a routine file sends: the shape `routineSource` writes, and the
+ * same shape edited by hand (the instruction and the owner are JSON either
+ * way). A routine that sends somewhere else (a destination channel) or has
+ * any other shape is undefined: it runs only on its schedule.
+ */
+export function readRoutine(source: string): RoutineRun | undefined {
+  const head = /to\(manage, \{ routine: ("(?:[^"\\]|\\.)*") \}\)\.send\(\s*("(?:[^"\\]|\\.)*")\s*,\s*\{\s*auth:\s*/.exec(source);
+  if (!head) return undefined;
+  let routine: unknown;
+  let instruction: unknown;
+  try {
+    routine = JSON.parse(head[1]!);
+    instruction = JSON.parse(head[2]!);
+  } catch {
+    return undefined;
+  }
+  if (typeof routine !== "string" || typeof instruction !== "string" || !instruction.trim()) return undefined;
+  const rest = source.slice(head.index + head[0].length);
+  if (/^appAuth\b/.test(rest)) return { routine, instruction };
+  const json = balancedObject(rest);
+  if (!json) return undefined;
+  let auth: unknown;
+  try {
+    auth = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  const owner = routineOwner(auth, routine);
+  return owner ? { routine, instruction, owner } : undefined;
+}
+
+/** The `{ ... }` at the start of `text`, braces balanced and strings respected. */
+function balancedObject(text: string): string | undefined {
+  if (!text.startsWith("{")) return undefined;
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(0, i + 1);
+    }
+  }
+  return undefined;
 }

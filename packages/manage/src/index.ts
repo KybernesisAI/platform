@@ -62,6 +62,8 @@ const PREFIX = "/eve/v1/kyb";
  * change is live before they act on it.
  */
 const RESTART_DELAY_MS = 20_000;
+/** From saving a routine to its schedule being live: the wait, a build, the restart delay, and the restart's own build. */
+const LIVE_AFTER_MS = 150_000;
 
 /**
  * The address of the agent's one conversation with its person.
@@ -532,6 +534,7 @@ export function manageChannel(options: ManageOptions = {}) {
             dir: threads,
             issuer: options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
             identify: (req) => identify(req, options),
+            schedulesDir: join(appRoot, "agent/schedules"),
           })
         : []),
       ...(options.computer === false
@@ -909,9 +912,16 @@ export function routineTools(options: ManageOptions = {}) {
    */
   const applyInBackground = (): void => {
     const restart = options.restartCommand;
-    const script = restart
+    const steps = restart
       ? `sleep 8 && npx eve build && sleep ${Math.round(RESTART_DELAY_MS / 1000)} && ${restart}`
       : "sleep 8 && npx eve build";
+    // One at a time. A routine made and deleted a few seconds apart started two
+    // builds over the same output, and the agent was never restarted, so the
+    // change never went live. flock queues the second behind the first (each still
+    // rebuilds from the files as they are when it starts); without flock
+    // (macOS) the steps run as before.
+    const lock = join(appRoot, ".eve", "kyb-apply.lock");
+    const script = `mkdir -p ${JSON.stringify(dirname(lock))}; if command -v flock >/dev/null 2>&1; then flock -w 900 ${JSON.stringify(lock)} -c ${JSON.stringify(steps)}; else ${steps}; fi`;
     spawn(process.env.SHELL ?? "/bin/bash", ["-lc", script], {
       cwd: appRoot,
       detached: true,
@@ -966,16 +976,26 @@ export function routineTools(options: ManageOptions = {}) {
         // wrong cron at a glance, and the next run. Clients read it from the
         // result; a tool passing `forModel` to `toModelOutput` keeps it out of
         // the model's context.
-        const nextRun = nextCronRun(input.cron);
+        //
+        // A routine is live only after the rebuild and restart (two builds, about
+        // two minutes), and a time that passes before then is never caught up. So
+        // the next run is counted from when it goes live, and a first time that
+        // comes sooner is said plainly rather than promised.
+        const soonest = nextCronRun(input.cron);
+        const nextRun = options.restartCommand ? nextCronRun(input.cron, new Date(Date.now() + LIVE_AFTER_MS)) : soonest;
+        const missesFirst = Boolean(soonest && soonest !== nextRun);
         return withCards(
           {
             created: true,
             name: slug,
             cron: input.cron,
             file: `agent/schedules/${slug}.ts`,
-            note: options.restartCommand
-              ? "Written. It goes live in about a minute, when I reload — tell the user it is set and finish your reply now."
-              : "Written. It needs a rebuild and restart to take effect.",
+            ...(nextRun ? { firstRun: nextRun } : {}),
+            note: !options.restartCommand
+              ? "Written. It needs a rebuild and restart to take effect."
+              : missesFirst
+                ? `Written, but it goes live in about two minutes, after its first time (${soonest}) has passed, so it will not run then.${nextRun ? ` Its first run is ${nextRun}.` : " It will not run at all."} Tell the user plainly, and that Run it now on the card runs it straight away in the background.`
+                : "Written. It goes live in about two minutes, when I reload. Tell the user it is set and finish your reply now.",
           },
           card(
             "routine",
@@ -991,7 +1011,15 @@ export function routineTools(options: ManageOptions = {}) {
               id: `routine-${slug}`,
               source: "Routine",
               actions: [
-                { label: "Run it now", say: `Run the "${slug}" routine now, as if it were its scheduled time.`, primary: true },
+                // Runs it in the background (POST /thread/run), so its answer is a
+                // report, not a reply. The words are for clients that cannot, and
+                // for an agent that does not serve that route (they fall back).
+                {
+                  label: "Run it now",
+                  routine: slug,
+                  say: `Run the "${slug}" routine now, as if it were its scheduled time.`,
+                  primary: true,
+                },
                 { label: "Change it", say: `I'd like to change the "${slug}" routine. Ask me what to change.` },
               ],
             },
@@ -1055,7 +1083,7 @@ export function routineTools(options: ManageOptions = {}) {
   };
 }
 
-export { routineOwner, routineSource, type RoutineOwner, type RoutineSourceInput } from "./routine-source.js";
+export { readRoutine, routineOwner, routineSource, type RoutineOwner, type RoutineRun, type RoutineSourceInput } from "./routine-source.js";
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export {
