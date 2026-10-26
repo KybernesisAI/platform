@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { card, describeCron, forModel, nextCronRun, withCards } from "@kybernesis/cards";
 import { defineChannel, GET, POST } from "eve/channels";
-import { routineSource } from "./routine-source.js";
+import { routineOwner, routineSource } from "./routine-source.js";
 import { listSessions } from "./sessions.js";
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
@@ -177,7 +177,7 @@ async function authorize(req: Request, options: ManageOptions, level: "use" | "m
  * The same check as `authorize`, for routes that answer differently per person:
  * the verified caller, or the Response that refuses them.
  */
-async function identify(req: Request, options: ManageOptions): Promise<ArtifactViewer | Response> {
+async function identify(req: Request, options: ManageOptions): Promise<(ArtifactViewer & { org?: string; email?: string }) | Response> {
   const issuer = options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai";
   const agent = options.agent ?? process.env.KYBERNESIS_AGENT;
   if (!agent) {
@@ -188,7 +188,7 @@ async function identify(req: Request, options: ManageOptions): Promise<ArtifactV
   }
   const result = await verifyKybernesisRequest(req, { issuer, agent });
   if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.status });
-  return { userId: result.principal.userId, level: result.principal.level };
+  return { userId: result.principal.userId, level: result.principal.level, org: result.principal.org, email: result.principal.email };
 }
 
 export interface ManageOptions {
@@ -664,8 +664,8 @@ export function manageChannel(options: ManageOptions = {}) {
 
       // Write a schedule into the repo. eve discovers agent/schedules/*.ts.
       POST(PREFIX + "/schedule", async (req) => {
-        const denied = await authorize(req, options);
-        if (denied) return denied;
+        const caller = await identify(req, options);
+        if (caller instanceof Response) return caller;
         const body = (await req.json().catch(() => ({}))) as {
           name?: string;
           cron?: string;
@@ -697,6 +697,22 @@ export function manageChannel(options: ManageOptions = {}) {
           cron: body.cron,
           instruction: body.instruction,
           manageChannelModule: manageModule,
+          // It runs as whoever made it in Studio: their calendar, their pages, their phone.
+          owner: routineOwner(
+            {
+              authenticator: "kybernesis",
+              issuer: options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
+              principalId: caller.userId,
+              principalType: "user",
+              subject: caller.userId,
+              attributes: {
+                ...(caller.org ? { org: caller.org } : {}),
+                ...(caller.email ? { email: caller.email } : {}),
+                agentGrantLevel: caller.level,
+              },
+            },
+            slug,
+          ),
         });
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, source, "utf8");
@@ -821,7 +837,11 @@ export function routineTools(options: ManageOptions = {}) {
         },
         required: ["name", "cron", "instruction"],
       },
-      execute: async (input: { name: string; cron: string; instruction: string }) => {
+      /**
+       * `ctx` is the tool's context. Pass it: the routine then runs as the person
+       * whose turn this is. Without it (an older tool file) it runs as the agent.
+       */
+      execute: async (input: { name: string; cron: string; instruction: string }, ctx?: unknown) => {
         const writable = writableRoot(appRoot);
         if (!writable.ok) throw new Error(writable.reason);
 
@@ -838,6 +858,7 @@ export function routineTools(options: ManageOptions = {}) {
             cron: input.cron,
             instruction: input.instruction,
             manageChannelModule: manageModule,
+            owner: routineOwner((ctx as { session?: { auth?: { current?: unknown } } } | undefined)?.session?.auth?.current, slug),
           }),
           "utf8",
         );
@@ -936,6 +957,7 @@ export function routineTools(options: ManageOptions = {}) {
   };
 }
 
+export { routineOwner, routineSource, type RoutineOwner, type RoutineSourceInput } from "./routine-source.js";
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export {

@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/magic",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Proactive agents: a code-only watch over the person's calendar, inbox and reminders that wakes the model only when something is worth saying, and delivers it into the conversation they already have.",
   "license": "Apache-2.0",
   "type": "module",
