@@ -2,6 +2,7 @@ import { GET, POST } from "eve/channels";
 import { parseInputResponses } from "eve/client";
 import { sessions } from "eve/server";
 import {
+  AGENT_OWNER,
   type Exchange,
   exchangesFrom,
   noteSession,
@@ -65,6 +66,13 @@ function validMessage(value: unknown): value is Message {
   return Array.isArray(value) && value.length > 0 && value.every((p) => p && typeof p === "object" && typeof (p as { type?: unknown }).type === "string");
 }
 
+/**
+ * Reports from routines with nobody behind them (made before routines had
+ * owners, so they run as the agent) are kept under the agent. The people who
+ * manage it see them in their own thread; nobody else does.
+ */
+const seesAgentReports = (caller: ThreadCaller): boolean => caller.level === "manage";
+
 async function readExchanges(sessionId: string) {
   const events: { type?: unknown; data?: unknown }[] = [];
   try {
@@ -99,10 +107,13 @@ export function threadRoutes(input: ThreadRouteInput) {
       if (current && noteSession(record, current.id)) writeThread(dir, record);
       const url = new URL(req.url);
       const limit = Math.min(Math.max(Number(url.searchParams.get("reports") ?? "200") || 200, 1), 1_000);
+      const reports = seesAgentReports(caller)
+        ? [...record.reports, ...readThread(dir, AGENT_OWNER).reports].sort((a, b) => a.at.localeCompare(b.at))
+        : record.reports;
       return Response.json({
         current: current?.id ?? null,
         sessions: record.sessions,
-        reports: record.reports.slice(-limit),
+        reports: reports.slice(-limit),
         fresh: record.fresh ?? [],
       });
     }),
@@ -132,6 +143,14 @@ export function threadRoutes(input: ThreadRouteInput) {
       }
       const reports = pendingContext(record);
       if (reports) context.push(reports);
+      if (seesAgentReports(caller)) {
+        const agentRecord = readThread(dir, AGENT_OWNER);
+        const agentReports = pendingContext(agentRecord);
+        if (agentReports) {
+          context.push(agentReports);
+          writeThread(dir, agentRecord);
+        }
+      }
       // What the client knows that the agent cannot: the person's working
       // folder, or the end of a conversation this device had before threads.
       if (typeof body.clientContext === "string" && body.clientContext.trim()) {
@@ -167,11 +186,16 @@ export function threadRoutes(input: ThreadRouteInput) {
       const record = readThread(dir, caller.userId);
       const runId = typeof body.sessionId === "string" ? body.sessionId : undefined;
       if (runId && !record.sessions.some((s) => s.id === runId)) {
-        if (!record.reports.some((r) => r.runSessionId === runId)) {
+        const owner = record.reports.some((r) => r.runSessionId === runId)
+          ? caller.userId
+          : seesAgentReports(caller) && readThread(dir, AGENT_OWNER).reports.some((r) => r.runSessionId === runId)
+            ? AGENT_OWNER
+            : undefined;
+        if (!owner) {
           return Response.json({ ok: false, error: "No such conversation in your thread." }, { status: 404 });
         }
         const session = await attachSession(runId).respond(responses as never, { auth } as never);
-        updateThread(dir, caller.userId, (r) => {
+        updateThread(dir, owner, (r) => {
           for (const q of r.reports) if (q.runSessionId === runId && q.kind === "question") q.settled = true;
         });
         return Response.json({ ok: true, sessionId: (session as { sessionId?: string }).sessionId ?? runId });

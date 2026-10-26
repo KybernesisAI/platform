@@ -123,12 +123,12 @@ test("a run's report is its final answer, not a step on the way", () => {
 
 // The routes, driven with eve's route context faked: what matters is who the
 // owner is (always the verified caller) and what reaches eve.
-function routes(d, userId = "user_dana", earlier = {}) {
+function routes(d, userId = "user_dana", earlier = {}, level = "use") {
   const list = threadRoutes({
     prefix: "/eve/v1/kyb",
     dir: d,
     issuer: "https://cp.example",
-    identify: async () => ({ userId, level: "use", org: "org_1" }),
+    identify: async () => ({ userId, level, org: "org_1" }),
     readExchanges: async (id) => earlier[id] ?? [],
   });
   const find = (method, path) => list.find((r) => r.method === method && r.path === `/eve/v1/kyb${path}`);
@@ -260,4 +260,24 @@ test("start fresh clears the agent's context and marks reports told", async () =
   const record = readThread(d, "user_dana");
   assert.equal(record.fresh.length, 1);
   assert.equal(record.reports[0].told, true);
+});
+
+test("reports from routines with no owner reach the people who manage the agent, and only them", async () => {
+  const d = dir();
+  updateThread(d, "_agent", (r) => r.reports.push(report({ text: "Old routine ran.", runSessionId: "run_a" }), report({ kind: "question", runSessionId: "run_q", requests: [{ requestId: "r1", prompt: "Ok?" }] })));
+  const get = async (level) => (await (await routes(d, "user_dana", {}, level).find("GET", "/thread").handler(new Request("http://x/eve/v1/kyb/thread"), fakeEve().ctx)).json()).reports.map((r) => r.text);
+  assert.deepEqual(await get("use"), []);
+  assert.deepEqual(await get("manage"), ["Old routine ran.", "Two meetings today."]);
+
+  const user = fakeEve();
+  await routes(d, "user_dana", {}, "use").find("POST", "/thread/messages").handler(post({ message: "hi" }), user.ctx);
+  assert.equal(user.sent[0].options.context, undefined);
+  const manager = fakeEve();
+  await routes(d, "user_dana", {}, "manage").find("POST", "/thread/messages").handler(post({ message: "hi" }), manager.ctx);
+  assert.match(manager.sent[0].options.context.join("\n"), /Old routine ran/);
+
+  const answer = post({ sessionId: "run_q", inputResponses: [{ requestId: "r1", optionId: "approve" }] });
+  assert.equal((await routes(d, "user_sam", {}, "use").find("POST", "/thread/respond").handler(answer.clone(), fakeEve().ctx)).status, 404);
+  assert.equal((await routes(d, "user_sam", {}, "manage").find("POST", "/thread/respond").handler(answer, fakeEve().ctx)).status, 200);
+  assert.equal(readThread(d, "_agent").reports.find((r) => r.runSessionId === "run_q").settled, true);
 });
