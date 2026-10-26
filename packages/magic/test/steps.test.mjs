@@ -129,6 +129,47 @@ test("a missing connection is recorded plainly and does not stop the tick", asyn
   assert.match(state.health.mail.error, /Gmail is not connected/);
 });
 
+test("a person with two Gmail accounts gets both inboxes read, not a refusal", async () => {
+  const o = options();
+  const tools = [{ slug: "GMAIL_FETCH_EMAILS", toolkit: "gmail", inputSchema: { properties: { query: {}, max_results: {}, include_payload: {} } } }];
+  const byAccount = {
+    acc_work: [{ messageId: "w1", threadId: "tw", messageTimestamp: "2026-10-22T20:00:00Z", sender: "Lead <lead@company.com>", subject: "Work", labelIds: ["INBOX"] }],
+    acc_home: [{ messageId: "h1", threadId: "th", messageTimestamp: "2026-10-22T21:00:00Z", sender: "Pal <pal@friends.org>", subject: "Home", labelIds: ["INBOX"] }],
+  };
+  const calls = [];
+  const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, body });
+    if (url.endsWith("/api/connectors/tools")) {
+      return json({ tools, accounts: { GMAIL: [{ id: "acc_work", label: "work" }, { id: "acc_home", label: "home" }] } });
+    }
+    // The control plane refuses to choose between two accounts of one service.
+    if (!body.account) return json({ error: "There are 2 accounts connected for that service (work, home). Say which one to use." }, 409);
+    return json({ result: { data: { messages: body.arguments.query.startsWith("in:sent") ? [] : byAccount[body.account] } } });
+  };
+  await recordTurn({ auth: person, continuationToken: "studio", channelKind: "kyb", text: "hi", at: at("06:00") }, o);
+  await updateSettings("usr_1", { enabled: true, timeZone: TZ }, o);
+  await tick({ ...o, fetch }, at("07:31"));
+
+  const state = readState("usr_1", o);
+  assert.equal(state.health.mail, undefined, "no mail error recorded");
+  assert.deepEqual(state.inbox.inbound.map((m) => m.id).sort(), ["h1", "w1"]);
+  const reads = calls.filter((c) => c.url.endsWith("/execute"));
+  assert.deepEqual([...new Set(reads.map((c) => c.body.account))].sort(), ["acc_home", "acc_work"]);
+  assert.ok(reads.every((c) => c.body.user === "usr_1"));
+});
+
+test("one account is read without naming it, as before", async () => {
+  const o = options();
+  const cp = fakeControlPlane();
+  await recordTurn({ auth: person, continuationToken: "studio", channelKind: "kyb", text: "hi", at: at("06:00") }, o);
+  await updateSettings("usr_1", { enabled: true, timeZone: TZ }, o);
+  await tick({ ...o, fetch: cp.fetch }, at("07:31"));
+  const reads = cp.calls.filter((c) => c.url.endsWith("/execute"));
+  assert.ok(reads.length > 0 && reads.every((c) => c.body.account === undefined));
+});
+
 test("feedback is stored per person", async () => {
   const o = options();
   const note = await recordFeedback("usr_1", "conflict", "off", o);

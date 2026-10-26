@@ -39,3 +39,4 @@ export {
 export { buildPacket, recentHeadsUps, isMagicMessage, MAGIC_MARKER } from "./packet.js";
 export { applyFeedback, kindLabel, type FeedbackVerdict, type FeedbackResult } from "./feedback.js";
 export { MAGIC_INSTRUCTIONS } from "./instructions.js";
+export { threadIdFor } from "./surface.js";

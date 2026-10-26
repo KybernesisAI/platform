@@ -298,3 +298,13 @@ test("mail results are read from the broker's shape and from Gmail's own", () =>
   assert.deepEqual(parsed.map((m) => m.id), ["m2"], "a message with no sender or time is skipped, not fatal");
   assert.equal(parsed[0].subject, "Re: Lunch");
 });
+
+test("a recorded address gives back the channel's thread id", async () => {
+  const { threadIdFor } = await import("../dist/index.js");
+  assert.equal(threadIdFor("linq:linq:2b1e6a1c-0000", "linq"), "linq:2b1e6a1c-0000");
+  assert.equal(threadIdFor("linq:linq:abc:dm", "linq"), "linq:abc:dm");
+  assert.equal(threadIdFor("studio", "linq"), undefined);
+  assert.equal(threadIdFor("kyb:studio", "linq"), undefined);
+  assert.equal(threadIdFor(undefined, "linq"), undefined);
+  assert.equal(threadIdFor("linq:abc", "linq"), undefined, "a bare id has no adapter prefix to send to");
+});
