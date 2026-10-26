@@ -10,10 +10,15 @@ import kyb from "../channels/kyb.js";
  * into another channel's conversation, import that channel and add a branch
  * on the recorded address. For iMessage through Linq:
  *
+ *   import { threadIdFor } from "@kybernesis/magic";
  *   import linq from "../channels/linq.js";
- *   if (dispatch.surface.token?.startsWith("linq:")) {
- *     return to(linq, { threadId: dispatch.surface.token }).send(dispatch.packet, { auth: dispatch.surface.auth });
+ *   const threadId = threadIdFor(dispatch.surface.token, "linq");
+ *   if (threadId) {
+ *     return to(linq, { threadId }).send(dispatch.packet, { auth: dispatch.surface.auth });
  *   }
+ *
+ * The recorded address is `<channel name>:<thread id>`; pass the thread id,
+ * never the whole address, or the adapter refuses it without the send failing.
  */
 export function deliver(to: ScheduleToFn, dispatch: MagicDispatch) {
   return to(kyb, { routine: "magic" }).send(dispatch.packet, { auth: dispatch.surface.auth });

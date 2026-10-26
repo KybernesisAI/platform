@@ -204,6 +204,9 @@ export interface TurnSeen {
  */
 export async function recordTurn(turn: TurnSeen, options: MagicOptions = {}): Promise<void> {
   if (isMagicMessage(turn.text)) return;
+  // A routine runs as its person but they are not there: it must not move their
+  // heads-ups to the routines conversation, or hold them as if they were chatting.
+  if ((turn.auth as { attributes?: { trigger?: unknown } } | null | undefined)?.attributes?.trigger === "routine") return;
   const auth = personAuth(turn.auth);
   if (!auth) return;
   const path = file(options, auth.principalId, "surface");
@@ -271,12 +274,20 @@ function credentialOf(options: MagicOptions): string | undefined {
   return options.credential ?? process.env.KYBERNESIS_AGENT_CREDENTIAL;
 }
 
-const toolCache = new Map<string, { at: number; tools: RemoteTool[] }>();
+/** Connected accounts per service slug, as the control plane reports them. */
+type Accounts = Record<string, { id: string; label: string | null }[]>;
 
-async function connectorTools(user: string, options: MagicOptions): Promise<RemoteTool[]> {
+interface Connected {
+  tools: RemoteTool[];
+  accounts: Accounts;
+}
+
+const toolCache = new Map<string, { at: number } & Connected>();
+
+async function connectorTools(user: string, options: MagicOptions): Promise<Connected> {
   // A substituted network (tests) gets no cache, so one fake never answers for another.
   const cached = options.fetch ? undefined : toolCache.get(user);
-  if (cached && Date.now() - cached.at < 10 * MINUTE) return cached.tools;
+  if (cached && Date.now() - cached.at < 10 * MINUTE) return cached;
   const credential = credentialOf(options);
   if (!credential) throw new Error("This agent has no control-plane credential, so it cannot read connected services.");
   const res = await (options.fetch ?? fetch)(`${issuerOf(options)}/api/connectors/tools`, {
@@ -286,19 +297,29 @@ async function connectorTools(user: string, options: MagicOptions): Promise<Remo
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`The control plane would not list connected services (${res.status}).`);
-  const body = (await res.json()) as { tools?: RemoteTool[] };
-  const tools = body.tools ?? [];
-  if (!options.fetch) toolCache.set(user, { at: Date.now(), tools });
-  return tools;
+  const body = (await res.json()) as { tools?: RemoteTool[]; accounts?: Accounts };
+  const connected: Connected = {
+    tools: body.tools ?? [],
+    // Lower-cased: the toolkit on a tool and the slug on an account do not agree on case.
+    accounts: Object.fromEntries(Object.entries(body.accounts ?? {}).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v : []])),
+  };
+  if (!options.fetch) toolCache.set(user, { at: Date.now(), ...connected });
+  return connected;
 }
 
-async function runConnector(user: string, tool: string, args: Record<string, unknown>, options: MagicOptions): Promise<unknown> {
+async function runConnector(
+  user: string,
+  tool: string,
+  args: Record<string, unknown>,
+  options: MagicOptions,
+  account?: string,
+): Promise<unknown> {
   const credential = credentialOf(options);
   if (!credential) throw new Error("This agent has no control-plane credential.");
   const res = await (options.fetch ?? fetch)(`${issuerOf(options)}/api/connectors/execute`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
-    body: JSON.stringify({ tool, arguments: args, user }),
+    body: JSON.stringify({ tool, arguments: args, user, ...(account ? { account } : {}) }),
     signal: AbortSignal.timeout(60_000),
   });
   const body = (await res.json().catch(() => ({}))) as { result?: unknown; error?: string };
@@ -313,6 +334,32 @@ function pick(tools: RemoteTool[], patterns: RegExp[]): RemoteTool | undefined {
     if (hit) return hit;
   }
   return undefined;
+}
+
+/**
+ * Run one read against every account the person connected for a tool's
+ * service, and put the results together.
+ *
+ * With one account the control plane picks it; with two or more it refuses
+ * to guess ("There are 2 accounts connected… Say which one to use"), which
+ * failed every inbox read for anyone with a work and a personal Gmail. A read
+ * is safe to make as each of their own accounts, so magic reads them all.
+ * One account failing does not hide the others.
+ */
+async function readEach<T>(
+  user: string,
+  tool: RemoteTool,
+  connected: Connected,
+  args: Record<string, unknown>,
+  parse: (result: unknown) => T[],
+  options: MagicOptions,
+): Promise<T[]> {
+  const accounts = connected.accounts[(tool.toolkit ?? "").toLowerCase()] ?? [];
+  const ids: (string | undefined)[] = accounts.length > 1 ? accounts.map((a) => a.id) : [undefined];
+  const settled = await Promise.allSettled(ids.map((id) => runConnector(user, tool.slug, args, options, id)));
+  const read = settled.filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled");
+  if (!read.length) throw (settled[0] as PromiseRejectedResult).reason;
+  return read.flatMap((r) => parse(r.value));
 }
 
 /**
@@ -334,42 +381,47 @@ export function argsFor(tool: RemoteTool, wanted: [string[], unknown][]): Record
 const CALENDAR_TOOLS = [/^GOOGLECALENDAR_EVENTS_LIST$/, /^GOOGLECALENDAR_FIND_EVENT$/, /^GOOGLECALENDAR_.*LIST.*EVENTS?$/];
 const MAIL_TOOLS = [/^GMAIL_FETCH_EMAILS$/, /^GMAIL_.*FETCH.*(EMAILS|MESSAGES)$/, /^GMAIL_LIST_MESSAGES$/];
 
+/** Once each: the same meeting shows up on both calendars when both are invited. */
+function unique<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 export async function fetchCalendar(user: string, now: Date, options: MagicOptions = {}): Promise<CalendarEvent[]> {
-  const tool = pick(await connectorTools(user, options), CALENDAR_TOOLS);
+  const connected = await connectorTools(user, options);
+  const tool = pick(connected.tools, CALENDAR_TOOLS);
   if (!tool) throw new Error("Google Calendar is not connected.");
-  const result = await runConnector(
-    user,
-    tool.slug,
-    argsFor(tool, [
-      [["calendarId", "calendar_id"], "primary"],
-      [["timeMin", "time_min"], new Date(now.getTime() - 14 * HOUR).toISOString()],
-      [["timeMax", "time_max"], new Date(now.getTime() + 36 * HOUR).toISOString()],
-      [["singleEvents", "single_events"], true],
-      [["orderBy", "order_by"], "startTime"],
-      [["maxResults", "max_results"], 100],
-    ]),
-    options,
-  );
-  return parseCalendarEvents(result);
+  const args = argsFor(tool, [
+    [["calendarId", "calendar_id"], "primary"],
+    [["timeMin", "time_min"], new Date(now.getTime() - 14 * HOUR).toISOString()],
+    [["timeMax", "time_max"], new Date(now.getTime() + 36 * HOUR).toISOString()],
+    [["singleEvents", "single_events"], true],
+    [["orderBy", "order_by"], "startTime"],
+    [["maxResults", "max_results"], 100],
+  ]);
+  const events = await readEach(user, tool, connected, args, parseCalendarEvents, options);
+  return unique(events, eventKey);
 }
 
 export async function fetchMail(user: string, query: string, options: MagicOptions = {}) {
-  const tool = pick(await connectorTools(user, options), MAIL_TOOLS);
+  const connected = await connectorTools(user, options);
+  const tool = pick(connected.tools, MAIL_TOOLS);
   if (!tool) throw new Error("Gmail is not connected.");
-  const result = await runConnector(
-    user,
-    tool.slug,
-    argsFor(tool, [
-      [["query", "q"], query],
-      [["max_results", "maxResults"], 50],
-      // Message bodies are what made one email answer cost two million tokens;
-      // headers and the preview are all magic needs.
-      [["include_payload", "includePayload"], false],
-      [["verbose"], false],
-    ]),
-    options,
-  );
-  return parseEmails(result);
+  const args = argsFor(tool, [
+    [["query", "q"], query],
+    [["max_results", "maxResults"], 50],
+    // Message bodies are what made one email answer cost two million tokens;
+    // headers and the preview are all magic needs.
+    [["include_payload", "includePayload"], false],
+    [["verbose"], false],
+  ]);
+  const mail = await readEach(user, tool, connected, args, parseEmails, options);
+  return unique(mail, (m) => `${m.threadId}/${m.id}`);
 }
 
 // ── Travel ────────────────────────────────────────────────────────────────
