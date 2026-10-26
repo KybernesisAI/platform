@@ -23,6 +23,7 @@ import {
   migrateManifest,
   migrateSources,
   restoreWorkflowStore,
+  snapshotWorkflowStore,
   workflowStoreBackup,
   type ManifestMigration,
 } from "./line-hop.js";
@@ -785,9 +786,24 @@ function upgradeEnvironment(cwd: string): Record<string, string | undefined> {
   return env;
 }
 
+/** The local gate must never boot against a store with running durable work. */
+function guardLocalEvalStore(cwd: string): boolean {
+  const inspection = inspectDurableRuns(cwd);
+  if (inspection.issues.length || inspection.runningRunIds.length) {
+    console.log(red("Eval gate refused: it shares the production store and open conversations cannot be isolated."));
+    for (const id of inspection.runningRunIds) console.log(`  running run: ${id}`);
+    for (const issue of inspection.issues) console.log(`  store inspection failed: ${issue}`);
+    console.log("Use --skip-eval to upgrade without running the gate against this store; run eval later when no conversations are open.");
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
+}
+
 async function approveEveChange(cwd: string, yes: boolean, hasBuzz: boolean): Promise<boolean> {
   const durable = inspectDurableRuns(cwd);
   console.log(bold(`\nThis will reset ${durable.runningRunIds.length} open conversations`));
+  for (const id of durable.runningRunIds) console.log(`    ${id}`);
   if (durable.issues.length > 0) {
     console.log(
       `  ${yellow("!")} Durable-store inspection was incomplete; the count includes only readable records ` +
@@ -1053,31 +1069,8 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
 
   const selfVersion = checkSelfVersion();
   if (selfVersion.kind === "stale" && !options.allowStale && !options.check) {
-    /**
-     * A stale kyb that is the PROJECT's own dependency renews itself.
-     *
-     * On every self-hosted agent, kyb is in package.json and `npx kyb` runs
-     * that copy; a global install — the printed fix until now — changes
-     * nothing there, and the person who followed it was back at the same
-     * message. So when the project owns kyb, install the latest into the
-     * project and run the upgrade again from that copy. The re-run is marked
-     * so that a registry that has not caught up cannot make this loop.
-     */
-    if (deps["@kybernesis/create"] && process.env.KYB_UPGRADE_RENEWED !== "1") {
-      console.log(`  ${yellow("↑")} kyb ${selfVersion.installed} → ${selfVersion.latest} ${dim("(this project's own copy; renewing it first)")}`);
-      const renewed = run("npm", ["install", `@kybernesis/create@${selfVersion.latest}`, "--no-audit", "--no-fund"], { cwd, allowFail: true, quiet: true });
-      const cli = join(cwd, "node_modules/@kybernesis/create/dist/cli.js");
-      if (renewed && existsSync(cli)) {
-        const again = spawnSync(process.execPath, [cli, "upgrade", ...process.argv.slice(3)], {
-          cwd, stdio: "inherit", env: { ...process.env, KYB_UPGRADE_RENEWED: "1" },
-        });
-        process.exitCode = again.status ?? 1;
-        return;
-      }
-    }
-    console.log(`  ${yellow("!")} ${selfVersion.message}`);
-    console.log(`    ${dim(deps["@kybernesis/create"] ? `npm install @kybernesis/create@latest && npx kyb upgrade` : selfVersion.fix)}\n`);
-    process.exitCode = 1;
+    // Never mutate a live project as a side effect of refreshing this CLI.
+    fail(`${selfVersion.message}\n${selfVersion.fix}. Install the latest CLI separately, then rerun kyb upgrade. Nothing was installed.`);
     return;
   }
   if (selfVersion.kind === "stale") {
@@ -1232,14 +1225,46 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
         // upgrade adds them, so the Update button has to show them.
         ...planStudioCore(deps, (name) => newestBuildForEve(name, EVE_VERSION)),
       ],
-      resetsConversations: eveChanged,
+      resetsConversations: cleanInstall,
     });
     return;
   }
 
-  if (eveChanged && !(await approveEveChange(cwd, options.yes === true, Boolean(deps["@kybernesis/buzz"])))) {
+  // A remote eval uses the host's store, not the local snapshot. Refuse before
+  // installing rather than treating local inspection or backup as remote protection.
+  if (options.host !== undefined && !options.skipEval) {
+    fail("Remote eval is not store-safe: --host runs on a different store. Upgrade on the host directly, or use --skip-eval and run a separately isolated gate there. Nothing was installed.");
+    return;
+  }
+  if (!options.skipEval) {
+    const script = reconcileEvalScript((pkg.scripts as Record<string, unknown> | undefined)?.eval);
+    if (script.kind === "custom" || script.kind === "missing") {
+      fail("Cannot prove the eval script runs locally against the inspected store. Use --skip-eval and arrange a separately isolated gate. Nothing was installed.");
+      return;
+    }
+  }
+  if (!options.skipEval && !guardLocalEvalStore(cwd)) return;
+
+  if (cleanInstall && inspectDurableRuns(cwd).issues.length > 0) {
+    fail("Cannot identify every running conversation before a line hop. Nothing was installed.");
+    return;
+  }
+  if (cleanInstall && !(await approveEveChange(cwd, options.yes === true, Boolean(deps["@kybernesis/buzz"])))) {
     process.exitCode = 1;
     return;
+  }
+
+  // Snapshot before any install or repair (including studio's tool installs).
+  // This is a fresh per-attempt recovery copy, not a rollback source: the live
+  // store may continue changing while the upgrade runs.
+  if (!cleanInstall && (!options.skipEval || changed.length > 0 || manifestMoved(manifest) || loosePin)) {
+    try {
+      const snapshot = snapshotWorkflowStore(cwd);
+      if (snapshot) console.log(`  ${green("+")} conversation snapshot: ${snapshot} (not restored over live writes)`);
+    } catch (error) {
+      fail(`Could not snapshot the conversation store before installation: ${(error as Error).message}`);
+      return;
+    }
   }
 
   repairLocalQueueTimeouts(cwd, deps);
@@ -1283,6 +1308,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
       console.log(yellow("\nEval gate SKIPPED (--skip-eval). Run `npm run eval` before deploying.\n"));
       return;
     }
+    if (!guardLocalEvalStore(cwd)) return;
     await runUpgradeEvalGate(cwd, options.host);
     return;
   }
@@ -1392,6 +1418,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     return;
   }
 
+  if (!guardLocalEvalStore(cwd)) return;
   const outcome = await runUpgradeEvalGate(cwd, options.host);
   // Going back means the old line, and the old line needs its conversations.
   if (outcome === "failed" && storeLine && restoreWorkflowStore(cwd, storeLine)) {

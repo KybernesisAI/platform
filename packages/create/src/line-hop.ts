@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /**
@@ -233,4 +233,21 @@ export function clearStaleEveCaches(cwd: string): string[] {
     rmSync(path, { recursive: true, force: true });
     return true;
   });
+}
+
+/** A new, non-rollback snapshot for an in-place upgrade. Never replace the live store with it. */
+export function snapshotWorkflowStore(cwd: string): string | null {
+  const store = join(cwd, WORKFLOW_STORE);
+  if (!existsSync(store)) return null;
+  // Stage beside the store, so the final rename publishes only a complete copy.
+  const staging = mkdtempSync(join(cwd, ".eve", ".workflow-data.upgrade-staging-"));
+  const backup = staging.replace(".upgrade-staging-", ".upgrade-");
+  try {
+    cpSync(store, staging, { recursive: true, preserveTimestamps: true });
+    renameSync(staging, backup);
+    return backup;
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
 }

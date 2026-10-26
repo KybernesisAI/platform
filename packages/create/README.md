@@ -100,7 +100,7 @@ behind, typechecks, then **runs the eval suite as the gate** — prints
 "deploy" only on green. This is the maintenance-retainer loop as a command:
 package improvement → `kyb upgrade` per client → green → `npx eve deploy`.
 
-Before an eve version change, upgrade reads `.eve/.workflow-data/runs`, prints
+Before an eve version change (with `--skip-eval` when runs are open), upgrade reads `.eve/.workflow-data/runs`, prints
 `This will reset N open conversations`, lists matching persisted Buzz channel
 sessions when available, and requires explicit confirmation. Noninteractive
 runs fail closed unless `--yes` (or `-y`) is supplied. The warning is still printed with
@@ -110,6 +110,21 @@ The wrapper counts corruption diagnostics beside the eval result and turns a
 nominally green eve exit into a failure when condemned durable state was seen.
 It also identifies failures from `judge.autoevals.*` assertions as judge
 reachability or HTTP failures rather than implying that the agent model failed.
+
+An in-place upgrade snapshots the production conversation store to a fresh
+`.eve/.workflow-data.upgrade-*` directory before installing or running eval.
+It never restores this snapshot over a live store; line hops retain their
+original `.eve/.workflow-data.eve-<line>` backup and failure rollback. The
+local eval gate uses the production store: upgrade **refuses** to run it if any
+running run ID or unreadable run record is present (even with `--yes`), and
+prints every running ID before installing. It checks again just before eval. Custom or missing eval scripts are refused
+before installation because their store target cannot be verified.
+`--skip-eval` upgrades without the gate touching the store; run the gate later
+only when no conversations are open. `--host` eval is refused before installation
+because a local backup cannot protect the remote host's store; run upgrade on
+the host itself or use `--skip-eval` and arrange a separately isolated gate.
+A snapshot of a concurrently changing store is not a transactional backup:
+quiesce writers if a consistent recovery copy is required.
 
 Immediately before a local gate, upgrade classifies the authored and compiled
 model route the same way as `kyb doctor`, then checks host-only dependencies. A
@@ -126,11 +141,9 @@ line and installs, repairs and renews nothing. `@kybernesis/manage` reads it for
 the owner's Update card, and runs the real upgrade (with its eval gate, then a
 rebuild and a safe restart, or everything put back) from that card.
 
-Use `kyb upgrade --host` to run the gate over ssh after the upgrade. The target
-uses the same defaults as `kyb deploy`: `EVE_SSH_HOST`, then
-`$EXE_VM_NAME.exe.xyz`; `--host=<ssh-target>` overrides them. The remote project
-path is `~/<package-name>`, and the remote eval output streams directly to the
-terminal. `--skip-eval` remains an explicit bypass and performs no preflight.
+`--host` gate execution is disabled until remote-store protection is implemented.
+`--skip-eval` performs no eval preflight and is the supported bypass when
+conversations remain open; it does not mark an untested upgrade as green.
 
 On self-hosted agents, upgrade also reconciles package-owned host artifacts. It
 refreshes a stale `/etc/cron.daily/kyb-docker-prune` and an existing generated

@@ -10,8 +10,8 @@
  *   kyb register          register this agent with the control plane (device flow)
  *   kyb deploy            put this repo on its host and restart it, with proof
  *   kyb upgrade           bump @kybernesis/* to latest, gated on the eval suite
- *     --skip-eval           skip the eval gate (not for production changes)
- *     --host[=<target>]     run the eval gate over ssh on the agent host
+ *     --skip-eval           skip the eval gate; prevents gate access to the conversation store
+ *     --host[=<target>]     remote eval gate refused until store-safe
  *     --allow-stale         proceed even when this kyb is behind npm
  *     --yes, -y             confirm an eve upgrade noninteractively
  */
@@ -116,8 +116,8 @@ function usage(command?: string): void {
   ${dim("Claude subscription reach uses the loopback OAuth proxy; it does not read EXE_MODEL.")}\n`);
     } else if (command === "upgrade") {
       console.log(`  ${bold("kyb upgrade")} [options]
-      --host[=<target>]     ${dim("run the eval gate over ssh; defaults like kyb deploy")}
-      --skip-eval           ${dim("skip the eval gate")}
+      --host[=<target>]     ${dim("remote eval refused (use --skip-eval)")}
+      --skip-eval           ${dim("skip gate access to the conversation store")}
       --allow-stale         ${dim("continue even when this kyb is behind the published version")}
       --check               ${dim("print what would change (one KYB_UPGRADE_PLAN json line) and change nothing")}
       --yes, -y             ${dim("confirm an eve version change noninteractively")}
@@ -258,8 +258,8 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --host=<target>   ${dim("ssh target; defaults to $EXE_VM_NAME.exe.xyz")}
       --no-env          ${dim("do not send .env.local (host manages its own secrets)")}
   ${bold("kyb upgrade")}         bump @kybernesis/* packages, gated on evals
-      --host[=<target>] ${dim("run the eval gate over ssh; defaults to EVE_SSH_HOST or EXE_VM_NAME")}
-      --skip-eval       ${dim("skip the eval gate")}
+      --host[=<target>] ${dim("remote eval refused (use --skip-eval)")}
+      --skip-eval       ${dim("skip gate access to the conversation store")}
       --allow-stale     ${dim("continue even when this kyb is behind the published version")}
       --yes, -y          ${dim("confirm an eve version change noninteractively")}
 

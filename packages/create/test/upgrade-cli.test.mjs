@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +47,7 @@ function fixture(options = {}) {
   }
   mkdirSync(bin);
   mkdirSync(systemd);
-  writeFileSync(join(dir, ".eve/.workflow-data/runs/open.json"), JSON.stringify({ runId: "run-open", status: "running" }));
+  writeFileSync(join(dir, ".eve/.workflow-data/runs/open.json"), JSON.stringify({ runId: "run-open", status: options.openRun === false ? "completed" : "running" }));
   writeFileSync(join(dir, "package-lock.json"), "original lock\n");
   writeFileSync(join(dir, "node_modules/sentinel"), "installed\n");
   const compiledManifest = join(dir, ".eve/compiled-manifest.json");
@@ -265,8 +265,8 @@ test("a known-stale kyb refuses before project reads, mutation, or downstream co
     const lock = readFileSync(join(fix.dir, "package-lock.json"), "utf8");
     const result = runUpgrade(fix);
     assert.equal(result.status, 1);
-    assert.match(result.stdout, new RegExp(`kyb ${escapeRe(installedCreateVersion)} is behind ${escapeRe(newerCreateVersion)}`));
-    assert.match(result.stdout, /npm install -g @kybernesis\/create@latest/);
+    assert.match(result.stderr, new RegExp(`kyb ${escapeRe(installedCreateVersion)} is behind ${escapeRe(newerCreateVersion)}`));
+    assert.match(result.stderr, /npm install -g @kybernesis\/create@latest/);
     assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
     assert.equal(readFileSync(join(fix.dir, "package-lock.json"), "utf8"), lock);
     assert.equal(readFileSync(join(fix.dir, "node_modules/sentinel"), "utf8"), "installed\n");
@@ -371,7 +371,7 @@ const studioAgent = {
 };
 
 test("--check lists cards, artifacts and magic for a current agent that predates them, so the Update button shows", () => {
-  const fix = fixture(studioAgent);
+  const fix = fixture({ ...studioAgent, openRun: false });
   try {
     const result = spawnSync(process.execPath, [cli, "upgrade", "--check"], { cwd: fix.dir, env: fix.env, encoding: "utf8" });
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -389,7 +389,7 @@ test("--check lists cards, artifacts and magic for a current agent that predates
 });
 
 test("upgrade adds cards, artifacts and magic to a current agent, then holds it to the eval gate", () => {
-  const fix = fixture(studioAgent);
+  const fix = fixture({ ...studioAgent, openRun: false });
   try {
     const result = runUpgradeWithEval(fix);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -411,6 +411,7 @@ test("upgrade adds cards, artifacts and magic to a current agent, then holds it 
 test("upgrade on a current agent that already has them adds nothing and runs no eval", () => {
   const fix = fixture({
     ...studioAgent,
+    openRun: false,
     allCurrent: true,
     extraDeps: { "@kybernesis/manage": "^0.25.0", "@kybernesis/cards": "^0.1.0", "@kybernesis/artifacts": "^0.1.0", "@kybernesis/magic": "^0.1.0" },
     nodeCases: `${studioAgent.nodeCases}
@@ -576,6 +577,7 @@ export default defineEvalConfig({ judge: { model: exe("judge") } });
 
 test("an unreachable host-only model and judge stop before eval with distinct guidance", () => {
   const fix = fixture({
+    openRun: false,
     eveInstalled: EVE_VERSION,
     eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
@@ -598,6 +600,7 @@ test("an unreachable host-only model and judge stop before eval with distinct gu
 
 test("reachable subscription proxy and exe judge preserve the local eval gate", () => {
   const fix = fixture({
+    openRun: false,
     eveInstalled: EVE_VERSION,
     eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
@@ -618,6 +621,7 @@ test("reachable subscription proxy and exe judge preserve the local eval gate", 
 
 test("a judge provider made inline in the eval config resolves to the exe route", () => {
   const fix = fixture({
+    openRun: false,
     eveInstalled: EVE_VERSION,
     eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
@@ -646,25 +650,15 @@ export default defineEvalConfig({
   }
 });
 
-test("bare --host uses deploy defaults and the remote gate exit decides the verdict", () => {
-  const green = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, envLocal: "EXE_VM_NAME=fixture-vm\n" });
+test("--host refuses before installation because a local backup cannot protect remote store", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, envLocal: "EXE_VM_NAME=fixture-vm\n" });
   try {
-    const result = runUpgradeWithEval(green, ["--yes", "--host"]);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(commandLog(green), /^ssh fixture-vm\.exe\.xyz cd ~\/fixture && npm run eval$/m);
-    assert.doesNotMatch(commandLog(green), /^npm run eval$/m);
-  } finally {
-    green.cleanup();
-  }
-
-  const red = fixture({ eveInstalled: EVE_VERSION, eveRange: `^${EVE_VERSION}`, sshStatus: 9 });
-  try {
-    const result = runUpgradeWithEval(red, ["--yes", "--host=ops@example"]);
+    const result = runUpgradeWithEval(fix, ["--yes", "--host"]);
     assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(commandLog(red), /^ssh ops@example cd ~\/fixture && npm run eval$/m);
-    assert.match(result.stdout, /Evals failed after upgrade/);
+    assert.match(result.stderr, /Remote eval is not store-safe/);
+    assert.doesNotMatch(commandLog(fix), /^(ssh|npm install) /m);
   } finally {
-    red.cleanup();
+    fix.cleanup();
   }
 });
 
@@ -983,14 +977,9 @@ test("a stale kyb that is the project's own dependency renews itself before anyt
     manifest.dependencies["@kybernesis/create"] = installedCreateVersion;
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     const result = runUpgrade(fix);
-    // The fixture's npm installs nothing real, so the renewed copy never appears
-    // and the upgrade stops with the fix that is right for a project-owned kyb.
     assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stdout, /renewing it first/);
-    assert.match(result.stdout, /npm install @kybernesis\/create@latest && npx kyb upgrade/);
-    assert.doesNotMatch(result.stdout, /npm install -g/);
-    assert.match(commandLog(fix), new RegExp(`^npm install @kybernesis/create@${escapeRe(newerCreateVersion)}`, "m"));
-    assert.doesNotMatch(commandLog(fix), /^npm ls eve$/m);
+    assert.match(result.stderr, /Install the latest CLI separately/);
+    assert.doesNotMatch(commandLog(fix), /^npm install/m);
   } finally {
     fix.cleanup();
   }
@@ -1038,7 +1027,7 @@ test("--check lists the third-party moves with the package changes", () => {
 });
 
 test("a failed eval gate after a line hop puts the old line's conversations back", () => {
-  const fix = fixture({ evalStatus: 1, evalWipesStore: true });
+  const fix = fixture({ openRun: false, evalStatus: 1, evalWipesStore: true });
   try {
     const result = runUpgradeWithEval(fix);
     assert.equal(result.status, 1, result.stdout + result.stderr);
@@ -1077,4 +1066,90 @@ test("the project's own kyb moves to the kyb running the upgrade, not the newest
   } finally {
     fix.cleanup();
   }
+});
+
+
+test("package-only gate refuses a running run before installation, including with --yes", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: EVE_VERSION });
+  try {
+    writeFileSync(join(fix.dir, ".eve/.workflow-data/chunk"), "conversation bytes");
+    writeFileSync(join(fix.dir, ".eve/.workflow-data/current-session.json"), '{"principal":"production"}');
+    const result = runUpgradeWithEval(fix, ["--yes"]);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /running run: run-open/);
+    assert.doesNotMatch(commandLog(fix), /^npm (install|run eval)$/m);
+    assert.equal(readFileSync(join(fix.dir, ".eve/.workflow-data/chunk"), "utf8"), "conversation bytes");
+    assert.equal(JSON.parse(readFileSync(join(fix.dir, ".eve/.workflow-data/runs/open.json"), "utf8")).status, "running");
+    assert.match(readFileSync(join(fix.dir, ".eve/.workflow-data/current-session.json"), "utf8"), /production/);
+  } finally { fix.cleanup(); }
+});
+
+test("package-only gate creates a fresh backup before install, and never restores over live writes", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: EVE_VERSION, openRun: false, evalStatus: 1 });
+  try {
+    const store = join(fix.dir, ".eve/.workflow-data");
+    writeFileSync(join(store, "chunk"), "before");
+    const first = runUpgradeWithEval(fix);
+    assert.equal(first.status, 1, first.stdout + first.stderr);
+    writeFileSync(join(store, "chunk"), "after");
+    const second = runUpgradeWithEval(fix);
+    assert.equal(second.status, 1, second.stdout + second.stderr);
+    const backups = readdirSync(join(fix.dir, ".eve")).filter((name) => name.startsWith(".workflow-data.upgrade-"));
+    assert.equal(backups.length, 2);
+    assert.deepEqual(backups.map((name) => readFileSync(join(fix.dir, ".eve", name, "chunk"), "utf8")).sort(), ["after", "before"]);
+    assert.equal(readFileSync(join(store, "chunk"), "utf8"), "after");
+    assert.match(commandLog(fix), /^npm run eval$/m);
+  } finally { fix.cleanup(); }
+});
+
+test("--skip-eval upgrades package-only with running work without invoking the gate", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: EVE_VERSION });
+  try {
+    const result = runUpgrade(fix, ["--skip-eval"]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(commandLog(fix), /^npm run eval$/m);
+    const backup = readdirSync(join(fix.dir, ".eve")).find((name) => name.startsWith(".workflow-data.upgrade-"));
+    assert.ok(backup, "package upgrade with --skip-eval still creates a fresh backup");
+    assert.equal(JSON.parse(readFileSync(join(fix.dir, ".eve", backup, "runs/open.json"), "utf8")).status, "running");
+    assert.equal(JSON.parse(readFileSync(join(fix.dir, ".eve/.workflow-data/runs/open.json"), "utf8")).status, "running");
+  } finally { fix.cleanup(); }
+});
+
+test("line hop with --skip-eval names all running ids before install and retains the original backup", () => {
+  const fix = fixture();
+  try {
+    writeFileSync(join(fix.dir, ".eve/.workflow-data/runs/other.json"), JSON.stringify({ runId: "run-other", status: "running" }));
+    const result = runUpgrade(fix, ["--yes", "--skip-eval"]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /This will reset 2 open conversations/);
+    assert.match(result.stdout, /run-open/);
+    assert.match(result.stdout, /run-other/);
+    assert.equal(readFileSync(join(fix.dir, ".eve/.workflow-data.eve-0.38/runs/other.json"), "utf8"), JSON.stringify({ runId: "run-other", status: "running" }));
+    assert.doesNotMatch(commandLog(fix), /^npm run eval$/m);
+  } finally { fix.cleanup(); }
+});
+
+test("incomplete durable record prevents package-only gate before install", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: EVE_VERSION, openRun: false });
+  try {
+    writeFileSync(join(fix.dir, ".eve/.workflow-data/runs/broken.json"), "{");
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /store inspection failed/);
+    assert.doesNotMatch(commandLog(fix), /^npm (install|run eval)$/m);
+  } finally { fix.cleanup(); }
+});
+
+test("custom eval script is refused before installation, even without running runs", () => {
+  const fix = fixture({ eveInstalled: EVE_VERSION, eveRange: EVE_VERSION, openRun: false });
+  try {
+    const path = join(fix.dir, "package.json");
+    const pkg = JSON.parse(readFileSync(path, "utf8"));
+    pkg.scripts.eval = "ssh remote npm run eval";
+    writeFileSync(path, JSON.stringify(pkg));
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /Cannot prove the eval script runs locally/);
+    assert.doesNotMatch(commandLog(fix), /^npm (install|run eval)$/m);
+  } finally { fix.cleanup(); }
 });
