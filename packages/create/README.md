@@ -148,3 +148,11 @@ created implicitly, and refreshing an existing unit does not restart the agent.
 - Human steps stay human: Slack's browser flow, key creation, and admin grants
   can't be automated away — the CLI sequences everything around them and hands
   you the checklist. Don't promise zero-touch.
+
+For an exe Claude subscription use `--model-reach=claude-sub --model=claude-opus-5`
+(the certified default). Other bare `claude-*` ids scaffold with a warning:
+the pinned proxy may list them but refuse completions. Set `CLAUDE_MODEL` to
+switch at runtime, configure the proxy version/revision as described in
+`@kybernesis/exe`'s README, then run `kyb doctor` to probe a real completion.
+Without `--model-reach=claude-sub`, `--model` selects the gateway, not the
+subscription proxy.

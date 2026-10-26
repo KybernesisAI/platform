@@ -241,3 +241,9 @@ test("codex sign-in is read from CODEX_HOME and only a ChatGPT token counts", as
   assert.equal(codexSignedIn({ CODEX_HOME: dir }), true);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("CLAUDE_MODEL overrides only the subscription route, not EXE_MODEL", () => {
+  const env = { CLAUDE_MODEL: "claude-opus-5-5", EXE_MODEL: "anthropic/claude-sonnet-5" };
+  assert.equal(resolveExeReach({ reach: "claude-sub", model: "anthropic/claude-sonnet-5" }, env).model, "claude-opus-5-5");
+  assert.equal(resolveExeReach({ reach: "gateway", model: "anthropic/claude-opus-5" }, env).model, "anthropic/claude-sonnet-5");
+});

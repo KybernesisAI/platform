@@ -504,7 +504,7 @@ function agentModelTemplate(host: HostKind, config: ModelScaffoldConfig): AgentM
      */
     const defaults =
       config.reach === "claude-sub"
-        ? `reach: "claude-sub", model: ${JSON.stringify(`anthropic/${config.model}`)}`
+        ? `reach: "claude-sub", model: ${JSON.stringify(`anthropic/${config.model}`)}, claudeModel: ${JSON.stringify(config.model)}`
         : `reach: "gateway", model: ${JSON.stringify(config.model)}`;
     return {
       imports:

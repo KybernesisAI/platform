@@ -201,3 +201,16 @@ test("a stopped proxy retains its nonzero status", () => {
     f.cleanup();
   }
 });
+
+test("revision and advertised version overrides reject malformed input before Docker", () => {
+  const badRevision = spawnSync("bash", [script, "build-patched"], {
+    encoding: "utf8", env: { ...process.env, CLAUDE_PROXY_REVISION: "main" },
+  });
+  assert.notEqual(badRevision.status, 0);
+  assert.match(badRevision.stderr, /full 40-character commit SHA/);
+  const badVersion = spawnSync("bash", [script, "build-patched", "--cli-version", "not-a-version"], {
+    encoding: "utf8", env: { ...process.env, CLAUDE_PROXY_CLI_VERSION: "" },
+  });
+  assert.notEqual(badVersion.status, 0);
+  assert.match(badVersion.stderr, /numeric version/);
+});

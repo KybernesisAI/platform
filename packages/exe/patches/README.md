@@ -85,3 +85,9 @@ whether it is exposed.
 Re-apply this patch, or confirm upstream has taken it. A run of the proxy's own
 test suite is not enough to catch its absence — the failure only appears when a
 request actually carries a provider-defined tool.
+
+Changing `CLAUDE_PROXY_REVISION` requires a full upstream commit SHA and a fresh
+patched build; the image tag is revision-specific and build failure is fatal for
+nondefault revisions. `CLAUDE_PROXY_CLI_VERSION` changes the version advertised
+at container creation, not the source code or protocol; recreate and test actual
+completions before promoting a newer model. See ../README.md for rollback.

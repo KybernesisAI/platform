@@ -50,8 +50,18 @@ PORT="${CLAUDE_PROXY_PORT:-3333}"
 # Pinned to the revision our patch targets, never a floating tag. Upstream
 # publishes `main` and per-commit `sha-*` tags; `main` moving under a fleet of
 # client hosts is a fleet that changes behaviour on a restart nobody ordered.
-PATCHED_TAG="${CLAUDE_PROXY_PATCHED_TAG:-claude-auth-proxy:a62318f-provider-tools}"
+DEFAULT_REV="a62318f9"
+REV="${CLAUDE_PROXY_REVISION:-$DEFAULT_REV}"
+if [ "$REV" != "$DEFAULT_REV" ] && ! [[ "$REV" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "  ✗ CLAUDE_PROXY_REVISION must be a full 40-character commit SHA" >&2; exit 1
+fi
+if [ -n "${CLAUDE_PROXY_CLI_VERSION:-}" ] && ! [[ "$CLAUDE_PROXY_CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "  ✗ CLAUDE_PROXY_CLI_VERSION must be a numeric version (e.g. 2.1.280)" >&2; exit 1
+fi
+# A different revision must have its own image tag; only the shipped pin has a published stock tag.
+PATCHED_TAG="${CLAUDE_PROXY_PATCHED_TAG:-claude-auth-proxy:$( [ "$REV" = "$DEFAULT_REV" ] && echo a62318f || echo "${REV:0:12}" )-provider-tools${CLAUDE_PROXY_CLI_VERSION:+-cli-${CLAUDE_PROXY_CLI_VERSION}}}"
 STOCK_IMAGE="ghcr.io/ansg191/claude-auth-proxy:sha-a62318f"
+[ "$REV" = "$DEFAULT_REV" ] || [ -z "${CLAUDE_PROXY_PATCHED_TAG:-}" ] || echo "  ! custom image tag: verify it matches revision $REV" >&2
 
 # Prefer a patched image that has already been built on this host. Whether an
 # agent needs one is NOT something you can tell by reading its source: the
@@ -61,6 +71,7 @@ STOCK_IMAGE="ghcr.io/ansg191/claude-auth-proxy:sha-a62318f"
 pick_image() {
   if [ -n "${CLAUDE_PROXY_IMAGE:-}" ]; then echo "$CLAUDE_PROXY_IMAGE"; return; fi
   if docker image inspect "$PATCHED_TAG" >/dev/null 2>&1; then echo "$PATCHED_TAG"; return; fi
+  [ "$REV" = "$DEFAULT_REV" ] || die "No patched image for $REV; run build-patched first (no stock image is known for this revision)."
   echo "$STOCK_IMAGE"
 }
 
@@ -78,7 +89,10 @@ ensure_patched() {
   [ -n "${CLAUDE_PROXY_NO_BUILD:-}" ] && return 0
   docker image inspect "$PATCHED_TAG" >/dev/null 2>&1 && return 0
   echo "  … building the patched proxy image (once per host, a few minutes)"
-  "$0" build-patched || echo "  ! could not build the patched image; falling back to the stock one"
+  "$0" build-patched || {
+    [ "$REV" = "$DEFAULT_REV" ] || die "patched build failed for $REV; refusing a different revision"
+    echo "  ! could not build the patched image; falling back to the stock one"
+  }
 }
 
 require_docker() {
@@ -140,6 +154,13 @@ print(int((exp / 1000 - time.time()) // 86400))
 ' "${mount}/.claude/.credentials.json" 2>/dev/null || return 1
 }
 
+# build-patched accepts the version at invocation; the image remains revision-specific,
+# while the advertised version is injected at container creation (not compiled).
+if [ "${1:-}" = "build-patched" ] && [ "${2:-}" = "--cli-version" ]; then
+  export CLAUDE_PROXY_CLI_VERSION="${3:-}"
+  [[ "$CLAUDE_PROXY_CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--cli-version requires a numeric version"
+  echo "  ! recreate with CLAUDE_PROXY_CLI_VERSION=$CLAUDE_PROXY_CLI_VERSION to switch the running container"
+fi
 case "${1:-}" in
   up)
     require_docker
@@ -154,6 +175,9 @@ case "${1:-}" in
       echo "  ✓ removed ${NAME}, which ran the stock image (credentials kept in ${VOLUME})"
     fi
     if [ -n "$(docker ps -aq -f "name=^${NAME}$")" ]; then
+      if [ "$REV" != "$DEFAULT_REV" ] && [ "$(docker inspect -f '{{.Config.Image}}' "$NAME")" != "$(pick_image)" ]; then
+        die "existing container uses a different revision; run recreate with CLAUDE_PROXY_REVISION=$REV"
+      fi
       docker start "$NAME" >/dev/null
       echo "  ✓ ${NAME} started (existing container, credentials preserved)"
     else
@@ -293,8 +317,7 @@ case "${1:-}" in
     # lost in a rebuild the way it was when it lived only inside an image tag.
     require_docker
     command -v git >/dev/null 2>&1 || die "git is not installed on this host."
-    REV="a62318f9"
-    TAG="${CLAUDE_PROXY_PATCHED_TAG:-claude-auth-proxy:${REV:0:7}-provider-tools}"
+    TAG="$PATCHED_TAG"
     # Looked for in both places this script legitimately runs from: inside the
     # installed package, and copied into an agent's own scripts/ — which is
     # where `kyb init` puts it, so resolving only relative to the script found
@@ -313,10 +336,23 @@ case "${1:-}" in
     mkdir -p "$(dirname "$SRC")"
     [ -d "$SRC/.git" ] || git clone -q https://github.com/ansg191/claude-auth-proxy.git "$SRC"
     git -C "$SRC" fetch -q --all
+    git -C "$SRC" cat-file -e "${REV}^{commit}" || die "revision $REV not found upstream"
     git -C "$SRC" checkout -q "$REV"
+    [ "$(git -C "$SRC" rev-parse HEAD)" = "$(git -C "$SRC" rev-parse "${REV}^{commit}")" ] || die "revision mismatch"
     git -C "$SRC" checkout -q -- .
     git -C "$SRC" apply "$PATCH" || die "patch did not apply at ${REV} — do not ship an unpatched image for an agent that searches the web."
-    docker build -q -t "$TAG" "$SRC" >/dev/null
+    if [ -n "${CLAUDE_PROXY_CLI_VERSION:-}" ]; then
+      # The override becomes the image default as well as the run env. A
+      # version-specific tag prevents an older cached image being reused.
+      BUILD_FILE="$(mktemp "${SRC}/Dockerfile.kyb.XXXXXX")"
+      cat "${SRC}/Dockerfile" > "$BUILD_FILE"
+      printf '\nENV ANTHROPIC_CLI_VERSION=%s\n' "$CLAUDE_PROXY_CLI_VERSION" >> "$BUILD_FILE"
+      docker build -q -f "$BUILD_FILE" -t "$TAG" "$SRC" >/dev/null || { rm -f "$BUILD_FILE"; die "Docker build failed for $REV"; }
+      rm -f "$BUILD_FILE"
+    else
+      docker build -q -t "$TAG" "$SRC" >/dev/null || die "Docker build failed for $REV"
+    fi
+    docker image inspect "$TAG" >/dev/null || die "built image $TAG missing"
     git -C "$SRC" checkout -q -- .
     echo "  ✓ built ${TAG} (patched: provider-defined tool names preserved)"
     echo "    Use it:  CLAUDE_PROXY_IMAGE=${TAG} bash scripts/claude-subscription.sh up"
@@ -332,8 +368,8 @@ case "${1:-}" in
     [ -n "${CLAUDE_PROXY_IMAGE:-}" ] && exit 0
     docker image inspect "$PATCHED_TAG" >/dev/null 2>&1 && exit 0
     command -v git >/dev/null 2>&1 || exit 1
-    LOG="${HOME}/.cache/kybernesis/claude-proxy-build.log"
-    LOCK="${HOME}/.cache/kybernesis/claude-proxy-build.pid"
+    LOG="${HOME}/.cache/kybernesis/claude-proxy-build-${REV:0:12}.log"
+    LOCK="${HOME}/.cache/kybernesis/claude-proxy-build-${REV:0:12}.pid"
     mkdir -p "$(dirname "$LOG")"
     if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null; then exit 3; fi
     # A finished build that left no image failed: report that for an hour
@@ -346,15 +382,21 @@ case "${1:-}" in
     ;;
 
   recreate)
-    # Same image, same credential volume, fresh container — for a changed
+    # Same credential volume, selected image, fresh container — for a changed
     # CLAUDE_PROXY_CLI_VERSION (or port). The sign-in lives in the volume, so
     # no browser is needed afterwards.
     require_docker
     if [ -n "$(docker ps -aq -f "name=^${NAME}$")" ]; then
       IMAGE="$(docker inspect -f '{{.Config.Image}}' "$NAME")"
+      # Resolve/build before removal so a failed revision change leaves the old proxy alive.
+      [ -z "${CLAUDE_PROXY_REVISION:-}" ] || { ensure_patched; pick_image >/dev/null; }
       docker rm -f "$NAME" >/dev/null
       echo "  ✓ removed ${NAME} (credentials kept in ${VOLUME})"
-      CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE:-$IMAGE}" "$0" up
+      if [ -n "${CLAUDE_PROXY_REVISION:-}" ]; then
+        "$0" up
+      else
+        CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE:-$IMAGE}" "$0" up
+      fi
     else
       "$0" up
     fi

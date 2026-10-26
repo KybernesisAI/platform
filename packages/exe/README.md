@@ -209,3 +209,34 @@ Moved to its own package: `@kybernesis/computer` (the `DockerComputer` provider,
 Chrome, the launcher bar, the `open_browser` guard and the connector-first rule).
 Install it with `eve add @kybernesis/computer`.
 
+
+### Claude subscription proxy model compatibility
+
+The shipped script pins upstream `ansg191/claude-auth-proxy` revision `a62318f9`
+(stock image `sha-a62318f`, patched locally for provider-defined tools). Its
+compiled advertised Claude Code version is `2.1.112`. Newer Claude models can
+appear in `/v1/models` yet refuse every completion with
+`claude_code_version_too_old`; listing and `/health` do not prove support.
+`kyb doctor` probes a one-token completion on the configured subscription route
+(`CLAUDE_MODEL` overrides the authored `claudeModel`), and reports the proxy's
+advertised version. For an untested new model, first try:
+
+```sh
+CLAUDE_PROXY_CLI_VERSION=2.1.280 bash scripts/claude-subscription.sh recreate
+CLAUDE_MODEL=claude-opus-5-5 npx kyb doctor
+```
+
+Keep `CLAUDE_PROXY_CLI_VERSION` in the deployment environment for later
+recreates. `build-patched --cli-version 2.1.280` accepts a one-off version but
+the build also sets the image default, but you must pass the same variable to `recreate` to select its version-specific tag. Claiming a newer
+version does **not** prove that this old revision has the necessary protocol or
+beta headers: only successful completions of both the old and new models do. The runtime
+currently declares the certified Opus 5 context window for other ids too; verify
+the selected model's actual limits before use.
+If a newer proxy is needed, set `CLAUDE_PROXY_REVISION` to a full 40-character
+upstream commit SHA, run `build-patched` (the patch must apply cleanly), then
+`recreate` with the same revision and version environment. The script will not
+fall back to the old stock image on a custom revision. Roll back by clearing
+both overrides and recreating; the credential volume is retained. Never expose
+port 3333 off loopback. If the script was customized locally, `kyb upgrade`
+leaves it untouched and asks for a manual merge.

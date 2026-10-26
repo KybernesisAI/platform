@@ -154,7 +154,7 @@ export function resolveExeReach(
   env: Env = process.env,
   probes: SubscriptionProbes = {},
 ): ExeReachDecision {
-  const claudeModel = defaults.claudeModel ?? CLAUDE_SUBSCRIPTION_DEFAULT_MODEL;
+  const claudeModel = env.CLAUDE_MODEL?.trim() || defaults.claudeModel || CLAUDE_SUBSCRIPTION_DEFAULT_MODEL;
   const requested = env[MODEL_REACH_ENV]?.trim() ?? "";
 
   const decide = (reach: ExeModelReach): ExeReachDecision | string => {

@@ -133,6 +133,65 @@ function modelReachCheck(reach: ReturnType<typeof classifyModelReach>): Check {
   }
 }
 
+/** A model-list response is not a completion. Probe the local subscription route only. */
+export async function claudeProxyModelCheck(
+  model: string,
+  port: string,
+  advertisedVersion = "unknown",
+  request: typeof fetch = fetch,
+): Promise<Check> {
+  const label = `Claude subscription model ${model} (proxy advertises ${advertisedVersion})`;
+  if (!/^claude-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(model) || !/^[0-9]{1,5}$/.test(port)) {
+    return { verdict: "fail", label, detail: "invalid bare model id or CLAUDE_PROXY_PORT" };
+  }
+  try {
+    const response = await request(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "kyb-doctor" },
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "Hi" }] }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    const payload = body && typeof body === "object" ? body as Record<string, unknown> : {};
+    const error = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : {};
+    const details = error.details && typeof error.details === "object" ? error.details as Record<string, unknown> : {};
+    const message = typeof error.message === "string" ? error.message : "";
+    const version = /(?:Claude Code|version)\s+(\d+\.\d+\.\d+)/i.exec(message)?.[1];
+    const required = /(?:requires?|minimum|at least)\s+(?:Claude Code\s+)?(\d+\.\d+\.\d+)/i.exec(message)?.[1];
+    const named = `Claude subscription model ${model} (proxy advertises ${version ?? advertisedVersion})`;
+    if (details.error_code === "claude_code_version_too_old" || error.error_code === "claude_code_version_too_old" || /claude_code_version_too_old/.test(message)) {
+      return { verdict: "fail", label: `${named}: proxy client version too old${required ? ` (requires ${required})` : ""}`, detail: "Set CLAUDE_PROXY_CLI_VERSION to a supported client version, run bash scripts/claude-subscription.sh recreate, then re-run kyb doctor. An advertised version alone is not proof of protocol compatibility." };
+    }
+    if (response.ok && payload.type === "message" && Array.isArray(payload.content)) return { verdict: "pass", label: `${named}: completion succeeded` };
+    const reason = response.status === 401 || response.status === 403 ? "authentication rejected" : response.status === 429 ? "rate limited" : `HTTP ${response.status} (inconclusive)`;
+    return { verdict: "fail", label: `${named}: ${reason}`, detail: "Cannot establish model support; check proxy credentials/network and retry. /v1/models is not a compatibility test." };
+  } catch {
+    return { verdict: "fail", label: `${label}: completion probe unavailable`, detail: "Proxy unreachable, timed out, or returned invalid JSON; check scripts/claude-subscription.sh status and retry." };
+  }
+}
+
+/** Only assert the compiled default for a verified shipped image. */
+export function proxyAdvertisedVersion(cwd: string, env: Record<string, string | undefined>): string {
+  const name = env.CLAUDE_PROXY_NAME || `${env.AGENT_NAME || cwd.split("/").pop()}-claude-subscription`;
+  const image = capture("docker", ["inspect", "-f", "{{.Config.Image}}", name])?.trim();
+  const vars = capture("docker", ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", name]);
+  const override = /^ANTHROPIC_CLI_VERSION=(\d+\.\d+\.\d+)$/m.exec(vars ?? "")?.[1];
+  if (override) return override;
+  return image === "ghcr.io/ansg191/claude-auth-proxy:sha-a62318f" || image === "claude-auth-proxy:a62318f9-provider-tools" || image === "claude-auth-proxy:a62318f-provider-tools"
+    ? "2.1.112" : "unknown";
+}
+
+export function subscriptionDoctorModel(source: string | null, env: Record<string, string | undefined>): string | null {
+  if (!source) return null;
+  if (/\bexeModelReach\s*\(/.test(source)) {
+    return env.CLAUDE_MODEL?.trim() || /\bclaudeModel\s*:\s*["']([^"']+)["']/.exec(source)?.[1] || "claude-opus-5";
+  }
+  const argument = /\bclaudeSubscription\s*\(\s*\{[^}]*?\bmodel\s*:\s*(["'])([^"']+)\1/s.exec(source);
+  if (argument) return argument[2];
+  if (/\bclaudeSubscription\s*\(/.test(source) && /\bmodel\s*:\s*process\.env\.CLAUDE_MODEL/.test(source)) return env.CLAUDE_MODEL?.trim() || null;
+  return null;
+}
+
 export function agentInputLimitDoctorCheck(limit: AgentInputLimit): Check {
   switch (limit.kind) {
     case "explicit-numeric":
@@ -820,6 +879,16 @@ export async function doctor(): Promise<void> {
     add(reachCheck.verdict, reachCheck.label, reachCheck.detail);
     const limitCheck = agentInputLimitDoctorCheck(info.limit);
     add(limitCheck.verdict, limitCheck.label, limitCheck.detail);
+  }
+  const effectiveReach = classifyModelReach(rootAgentSource, info?.modelRouting ?? {
+    kind: "unresolved", reason: "eve info failed",
+  }, env);
+  if (effectiveReach.kind === "claude-sub") {
+    const model = subscriptionDoctorModel(rootAgentSource, env);
+    const check = model
+      ? await claudeProxyModelCheck(model, env.CLAUDE_PROXY_PORT?.trim() || "3333", proxyAdvertisedVersion(cwd, env))
+      : { verdict: "fail" as const, label: "Claude subscription model unresolved", detail: "Use a literal model or CLAUDE_MODEL so doctor can probe the effective subscription model." };
+    add(check.verdict, check.label, check.detail);
   }
   const portBusy = capture("lsof", ["-ti", ":2000"]);
   if (portBusy && portBusy.trim()) add("warn", "port 2000 in use", "eve eval exits early while a dev server runs — kill it first");

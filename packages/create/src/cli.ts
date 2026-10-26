@@ -105,7 +105,7 @@ function usage(command?: string): void {
       console.log(`  ${bold("kyb init [name]")} [options]
       --channel=<kind>      ${dim("none|slack|imessage|telegram|discord|web")}
       --host=<kind>         ${dim("vercel|exe (default: vercel)")}
-      --model=<id>          ${dim("gateway id; claude-sub requires bare claude-opus-5")}
+      --model=<id>          ${dim("gateway id; claude-sub accepts bare claude-* (uncertified ids warned)")}
       --model-reach=<reach> ${dim("claude-sub (exe only; default: host route)")}
       --subagents=a,b       ${dim("department subagents")}
       --engineer            ${dim("add the engineer layer")}
@@ -234,7 +234,7 @@ ${dim("  npm i -g @kybernesis/create@latest")}
       --channel=<kind>  ${dim("none|slack|imessage|telegram|discord|web  (default: none)")}
       --host=<kind>     ${dim("vercel|exe                                (default: vercel)")}
       --subagents=a,b   ${dim("department subagents                      (default: none)")}
-      --model=<id>      ${dim("provider/model-id; bare claude-opus-5 for claude-sub")}
+      --model=<id>      ${dim("provider/model-id; bare claude-* for claude-sub (uncertified ids warned)")}
       --model-reach=<r> ${dim("claude-sub (exe only); env: KYB_MODEL_REACH")}
       --engineer        ${dim("add the engineer layer: workshop sandbox + vision dev loop")}
       --studio          ${dim("wire for KYBER Studio: local execution + management routes")}

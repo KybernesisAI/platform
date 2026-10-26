@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { parseEveInfoInspection } from "../dist/agent-limits.js";
-import { modelReachDoctorCheck } from "../dist/doctor.js";
+import { claudeProxyModelCheck, modelReachDoctorCheck, subscriptionDoctorModel } from "../dist/doctor.js";
 import {
   CLAUDE_SUBSCRIPTION_MODEL,
   classifyModelReach,
@@ -45,7 +45,7 @@ test("model reach resolves CLI over Factory env and preserves the existing defau
   assert.throws(() => resolveModelReach("", "claude-sub"), /Unsupported model reach/);
 });
 
-test("claude-sub is exe-only, normalizes the known gateway prefix, and rejects uncertified models", () => {
+test("claude-sub is exe-only, accepts bare ids and rejects gateway ids", () => {
   assert.deepEqual(resolveModelScaffold({ host: "exe", cliReach: "claude-sub" }), claudeSub);
   assert.deepEqual(
     resolveModelScaffold({ host: "exe", envReach: "claude-sub", model: "anthropic/claude-opus-5" }),
@@ -55,10 +55,8 @@ test("claude-sub is exe-only, normalizes the known gateway prefix, and rejects u
     () => resolveModelScaffold({ host: "vercel", cliReach: "claude-sub" }),
     /requires --host=exe/,
   );
-  assert.throws(
-    () => resolveModelScaffold({ host: "exe", cliReach: "claude-sub", model: "claude-sonnet-5" }),
-    /certified context-window constant/,
-  );
+  assert.deepEqual(resolveModelScaffold({ host: "exe", cliReach: "claude-sub", model: "claude-opus-5-5" }), { reach: "claude-sub", model: "claude-opus-5-5" });
+  assert.throws(() => resolveModelScaffold({ host: "exe", cliReach: "claude-sub", model: "openai/gpt-5" }), /bare Anthropic/);
 });
 
 test("subscription templates route root, departments, and builder through the switch, defaulting to the subscription", () => {
@@ -73,7 +71,7 @@ test("subscription templates route root, departments, and builder through the sw
     assert.match(source, /import \{ chatgpt \} from "eve\/models\/openai"/);
     assert.match(
       source,
-      /\.\.\.exeModelReach\(\{ reach: "claude-sub", model: "anthropic\/claude-opus-5", createOpenAI, createAnthropic, chatgpt \}\)/,
+      /\.\.\.exeModelReach\(\{ reach: "claude-sub", model: "anthropic\/claude-opus-5", claudeModel: "claude-opus-5", createOpenAI, createAnthropic, chatgpt \}\)/,
     );
     assert.doesNotMatch(source, /modelContextWindowTokens/, "the switch declares the window that matches its route");
     assert.doesNotMatch(source, /process\.env/, "the switch reads its own env");
@@ -167,6 +165,28 @@ test("init help documents the flag, Factory env, bare model rule, and proxy rout
   assert.equal(result.status, 0);
   assert.match(result.stdout, /--model-reach=<reach>/);
   assert.match(result.stdout, /KYB_MODEL_REACH=claude-sub/);
-  assert.match(result.stdout, /bare claude-opus-5/);
+  assert.match(result.stdout, /bare claude-/);
   assert.match(result.stdout, /loopback OAuth proxy/);
+});
+
+test("doctor probes a completion instead of trusting listed models and removes upstream update advice", async () => {
+  const request = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, "claude-opus-5-5");
+    assert.equal(body.max_tokens, 1);
+    return new Response(JSON.stringify({ error: { message: "Claude Code 2.1.112 does not support this model; run claude update", details: { error_code: "claude_code_version_too_old" } } }), { status: 400 });
+  };
+  const check = await claudeProxyModelCheck("claude-opus-5-5", "3333", "unknown", request);
+  assert.equal(check.verdict, "fail");
+  assert.match(check.label, /claude-opus-5-5.*2\.1\.112/);
+  assert.doesNotMatch(JSON.stringify(check), /claude update/);
+  assert.equal((await claudeProxyModelCheck("claude-opus-5", "3333", "2.1.112", async () => new Response(JSON.stringify({ type: "message", content: [] }), { status: 200 }))).verdict, "pass");
+  assert.equal((await claudeProxyModelCheck("claude-opus-5", "3333", "2.1.112", async () => new Response("", { status: 429 }))).verdict, "fail");
+  assert.equal((await claudeProxyModelCheck("claude-opus-5", "3333", "2.1.112", async () => { throw Error("offline"); })).verdict, "fail");
+});
+
+test("doctor resolves the subscription model without conflating the gateway", () => {
+  const source = hostAgentTs("exe", claudeSub);
+  assert.equal(subscriptionDoctorModel(source, {}), "claude-opus-5");
+  assert.equal(subscriptionDoctorModel(source, { CLAUDE_MODEL: "claude-opus-5-5", EXE_MODEL: "openai/gpt-5" }), "claude-opus-5-5");
 });

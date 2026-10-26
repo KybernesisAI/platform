@@ -57,11 +57,8 @@ export function resolveModelScaffold(options: {
   }
 
   const model = (options.model ?? CLAUDE_SUBSCRIPTION_MODEL).replace(/^anthropic\//, "");
-  if (model !== CLAUDE_SUBSCRIPTION_MODEL) {
-    throw new Error(
-      `Model reach claude-sub currently supports only ${CLAUDE_SUBSCRIPTION_MODEL}. ` +
-        "That is the model covered by @kybernesis/exe's certified context-window constant; use a bare Anthropic id.",
-    );
+  if (!/^claude-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(model)) {
+    throw new Error("Claude subscription requires a bare Anthropic model id (claude-...), not a gateway id.");
   }
   return { reach, model };
 }

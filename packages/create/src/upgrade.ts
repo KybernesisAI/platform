@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -483,6 +484,33 @@ function repairHostArtifacts(cwd: string, deps: Record<string, string>): void {
       },
       manualCommand: `cp ${shellQuote(serverSource)} scripts/eve-server.sh && chmod +x scripts/eve-server.sh`,
     });
+  }
+
+  // Only replace the exact package copy previously installed by init. Local
+  // modifications may encode site policy; never overwrite them on upgrade.
+  const proxySource = join(scripts, "claude-subscription.sh");
+  const proxyTarget = join(cwd, "scripts/claude-subscription.sh");
+  if (existsSync(proxySource) && existsSync(proxyTarget)) {
+    try {
+      const installed = readFileSync(proxyTarget);
+      const desired = readFileSync(proxySource);
+      const hash = createHash("sha256").update(installed).digest("hex");
+      if (hash === "5ff7a406406ebf14f7885ee9c184b7729d5a8dd4b8fcff4813508ce17bb1e437" || installed.equals(desired)) {
+        reconcileHostArtifact({
+          targetPath: proxyTarget, desiredContent: desired, expectedMode: 0o755,
+          installIfMissing: false, owner: "@kybernesis/exe/scripts/claude-subscription.sh",
+          update: () => {
+            try { copyFileSync(proxySource, proxyTarget); chmodSync(proxyTarget, 0o755); return true; }
+            catch { return false; }
+          },
+          manualCommand: `cp ${shellQuote(proxySource)} scripts/claude-subscription.sh && chmod +x scripts/claude-subscription.sh`,
+        });
+      } else {
+        console.log(`  ${yellow("!")} scripts/claude-subscription.sh has local edits; kept unchanged. Review the package copy at ${proxySource} and merge it manually to receive model diagnostics and revision overrides.`);
+      }
+    } catch {
+      console.log(`  ${yellow("!")} cannot read scripts/claude-subscription.sh; kept unchanged. Review ${proxySource} manually.`);
+    }
   }
 
   if (existsSync(pruneSource)) {

@@ -175,6 +175,10 @@ export async function init(rawName: string | undefined, options: InitOptions = {
     process.exit(1);
   }
 
+  if (model.reach === "claude-sub" && model.model !== "claude-opus-5") {
+    console.warn(yellow(`  ! ${model.model} is NOT certified on the pinned Claude proxy (a62318f9, advertised 2.1.112). /v1/models is not proof. Set CLAUDE_PROXY_CLI_VERSION, recreate the proxy, and run kyb doctor before serving turns; the version override does not prove protocol compatibility; the runtime still assumes the certified model's context window.`));
+  }
+
   const plan = channelPlan(channel, name, host);
 
   console.log(bold(`\n1/6  Scaffolding eve agent (eve@${EVE_VERSION}) …`));
