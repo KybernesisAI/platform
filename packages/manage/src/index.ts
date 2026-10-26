@@ -62,6 +62,8 @@ const PREFIX = "/eve/v1/kyb";
  * change is live before they act on it.
  */
 const RESTART_DELAY_MS = 20_000;
+/** From saving a routine to its schedule being live: the wait, a build, the restart delay, and the restart's own build. */
+const LIVE_AFTER_MS = 150_000;
 
 /**
  * The address of the agent's one conversation with its person.
@@ -974,16 +976,26 @@ export function routineTools(options: ManageOptions = {}) {
         // wrong cron at a glance, and the next run. Clients read it from the
         // result; a tool passing `forModel` to `toModelOutput` keeps it out of
         // the model's context.
-        const nextRun = nextCronRun(input.cron);
+        //
+        // A routine is live only after the rebuild and restart (two builds, about
+        // two minutes), and a time that passes before then is never caught up. So
+        // the next run is counted from when it goes live, and a first time that
+        // comes sooner is said plainly rather than promised.
+        const soonest = nextCronRun(input.cron);
+        const nextRun = options.restartCommand ? nextCronRun(input.cron, new Date(Date.now() + LIVE_AFTER_MS)) : soonest;
+        const missesFirst = Boolean(soonest && soonest !== nextRun);
         return withCards(
           {
             created: true,
             name: slug,
             cron: input.cron,
             file: `agent/schedules/${slug}.ts`,
-            note: options.restartCommand
-              ? "Written. It goes live in about a minute, when I reload — tell the user it is set and finish your reply now."
-              : "Written. It needs a rebuild and restart to take effect.",
+            ...(nextRun ? { firstRun: nextRun } : {}),
+            note: !options.restartCommand
+              ? "Written. It needs a rebuild and restart to take effect."
+              : missesFirst
+                ? `Written, but it goes live in about two minutes, after its first time (${soonest}) has passed, so it will not run then.${nextRun ? ` Its first run is ${nextRun}.` : " It will not run at all."} Tell the user plainly, and that Run it now on the card runs it straight away in the background.`
+                : "Written. It goes live in about two minutes, when I reload. Tell the user it is set and finish your reply now.",
           },
           card(
             "routine",
