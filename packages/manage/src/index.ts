@@ -532,6 +532,7 @@ export function manageChannel(options: ManageOptions = {}) {
             dir: threads,
             issuer: options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
             identify: (req) => identify(req, options),
+            schedulesDir: join(appRoot, "agent/schedules"),
           })
         : []),
       ...(options.computer === false
@@ -909,9 +910,16 @@ export function routineTools(options: ManageOptions = {}) {
    */
   const applyInBackground = (): void => {
     const restart = options.restartCommand;
-    const script = restart
+    const steps = restart
       ? `sleep 8 && npx eve build && sleep ${Math.round(RESTART_DELAY_MS / 1000)} && ${restart}`
       : "sleep 8 && npx eve build";
+    // One at a time. A routine made and deleted a few seconds apart started two
+    // builds over the same output, and the agent was never restarted, so the
+    // change never went live. flock queues the second behind the first (each still
+    // rebuilds from the files as they are when it starts); without flock
+    // (macOS) the steps run as before.
+    const lock = join(appRoot, ".eve", "kyb-apply.lock");
+    const script = `mkdir -p ${JSON.stringify(dirname(lock))}; if command -v flock >/dev/null 2>&1; then flock -w 900 ${JSON.stringify(lock)} -c ${JSON.stringify(steps)}; else ${steps}; fi`;
     spawn(process.env.SHELL ?? "/bin/bash", ["-lc", script], {
       cwd: appRoot,
       detached: true,
@@ -991,7 +999,15 @@ export function routineTools(options: ManageOptions = {}) {
               id: `routine-${slug}`,
               source: "Routine",
               actions: [
-                { label: "Run it now", say: `Run the "${slug}" routine now, as if it were its scheduled time.`, primary: true },
+                // Runs it in the background (POST /thread/run), so its answer is a
+                // report, not a reply. The words are for clients that cannot, and
+                // for an agent that does not serve that route (they fall back).
+                {
+                  label: "Run it now",
+                  routine: slug,
+                  say: `Run the "${slug}" routine now, as if it were its scheduled time.`,
+                  primary: true,
+                },
                 { label: "Change it", say: `I'd like to change the "${slug}" routine. Ask me what to change.` },
               ],
             },
@@ -1055,7 +1071,7 @@ export function routineTools(options: ManageOptions = {}) {
   };
 }
 
-export { routineOwner, routineSource, type RoutineOwner, type RoutineSourceInput } from "./routine-source.js";
+export { readRoutine, routineOwner, routineSource, type RoutineOwner, type RoutineRun, type RoutineSourceInput } from "./routine-source.js";
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export {

@@ -391,3 +391,14 @@ test("a routine card says its time in the reader's own zone", () => {
   const parsed = parseCard(card("routine", data));
   assert.deepEqual([parsed.data.cron, parsed.data.offset], ["40 1 * * 1-5", 0]);
 });
+
+test("a routine action keeps its say as the fallback, and refuses a name that is not a file name", () => {
+  const parsed = parseCard({
+    ...stats,
+    actions: [
+      { label: "Run it now", routine: "daily-calendar", say: 'Run the "daily-calendar" routine now.' },
+      { label: "Sneaky", routine: "../channels/eve" },
+    ],
+  });
+  assert.deepEqual(parsed.actions, [{ label: "Run it now", routine: "daily-calendar", say: 'Run the "daily-calendar" routine now.' }]);
+});
