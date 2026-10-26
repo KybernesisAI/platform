@@ -431,7 +431,11 @@ export function manageChannel(options: ManageOptions = {}) {
       // the /session route below). Then a routine's answer and what the person
       // types are the same thread, which is what they expected in the first
       // place, and nothing has to reach across into a session it does not own.
-      const session = await from(CANONICAL_ADDRESS).send(message, { auth });
+      // Queued, never steering: two routines firing the same minute (Sid's
+      // calendar refresh and its email watch, both at 00:00) merged into one
+      // turn, and a routine landing mid-reply would cut into what the person
+      // is reading. Each waits for the turn before it to finish.
+      const session = await from(CANONICAL_ADDRESS).send(message, { auth, turnPolicy: "queue" });
       rememberCanonicalSession(appRoot, session.id, routine);
       return session;
     },
