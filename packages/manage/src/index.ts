@@ -7,6 +7,21 @@ import { card, describeCron, forModel, nextCronRun, withCards } from "@kybernesi
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineOwner, routineSource } from "./routine-source.js";
 import { listSessions } from "./sessions.js";
+import { threadRoutes } from "./thread-routes.js";
+import {
+  AGENT_OWNER,
+  captureRunEvent,
+  newRunCapture,
+  runAddress,
+  runCards,
+  threadOwnerOf,
+  threadsDir,
+  updateThread,
+  type RunCapture,
+} from "./thread.js";
+
+/** What a session on this channel is: a person's thread, a background run, or something older. */
+type KybState = { kind: "thread" | "run" | "other"; owner?: string; routine?: string };
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
 import { memoryRoutes, type MemoryOptions } from "./memory.js";
@@ -258,6 +273,13 @@ export interface ManageOptions {
    * default; an agent without a computer simply has none.
    */
   screens?: ScreensOptions | false;
+  /**
+   * One continuous conversation per person (see ./thread.ts): routes under
+   * /eve/v1/kyb/thread, and routines run in the background and report into
+   * their owner's thread. `dir` defaults to KYB_THREADS_DIR, then
+   * ~/.kybernesis/threads. `false` keeps the old single routines conversation.
+   */
+  threads?: { dir?: string } | false;
 }
 
 /**
@@ -399,47 +421,119 @@ export function manageChannel(options: ManageOptions = {}) {
   // routine that fails to compile.
   const manageModule = options.channelModule ?? "kyb";
 
-  return defineChannel({
+  const threads = options.threads === false ? null : threadsDir(options.threads?.dir);
+  /** What each background run has produced so far, by session id. */
+  const runs = new Map<string, RunCapture>();
+  const captureFor = (id: string): RunCapture => {
+    let c = runs.get(id);
+    if (!c) runs.set(id, (c = newRunCapture()));
+    return c;
+  };
+  const capture = (type: string) => (data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) => {
+    if (channel.state.kind === "run") captureRunEvent(captureFor(ctx.session.id), type, data);
+  };
+
+  return defineChannel<KybState>({
+    state: { kind: "other" },
+
     /**
-     * Where a routine's answer lands.
+     * Where a routine runs.
      *
-     * A schedule can only reach a channel through `to(channel, target)`, and it
-     * cannot name a session — so without this, a routine has nowhere to deliver
-     * and eve discards its output. That was the whole bug.
+     * A schedule reaches a channel through `to(channel, target)`. Each firing
+     * gets its own background session at its own address, as eve intends a
+     * scheduled job to work, and the instruction stays there. Nobody's
+     * conversation takes a turn for it. When the run has an answer, the events
+     * below add it to its owner's thread as a report (see ./thread.ts), and
+     * notify rings their phone because the run is theirs.
      *
-     * `from(address)` continues the session that address already owns, and
-     * creates one the first time. The address is the conversation the person is
-     * currently in, recorded by the eve channel on every inbound turn, so a
-     * routine answers into the chat they are actually looking at. With no
-     * recorded conversation — a fresh agent, or nobody has spoken yet — it
-     * falls back to a stable per-routine address, which starts a new one.
+     * The earlier shape delivered every routine into one shared conversation,
+     * so its instruction appeared there as if someone had typed it, and on a
+     * company agent everyone's routines would have shared one thread.
      */
     receive: async ({ message, target, auth }, { from }) => {
       const routine = String((target as { routine?: unknown }).routine ?? "routine");
-
-      // One conversation per agent, shared by the person and every routine.
-      //
-      // A schedule cannot post into a session the way a person's client can.
-      // eve reserves the session namespace: addressing `eve:session:<id>:inbox`
-      // from a channel is refused outright ("uses eve's reserved session
-      // namespace"), and `attachSession` — the only thing that binds an exact
-      // session id — is handed to HTTP route handlers and nothing else. There
-      // is no supported path from a cron to an existing conversation.
-      //
-      // So do not chase one. The agent owns a canonical conversation at a fixed
-      // address, every routine delivers into it, and the client adopts it (see
-      // the /session route below). Then a routine's answer and what the person
-      // types are the same thread, which is what they expected in the first
-      // place, and nothing has to reach across into a session it does not own.
-      // Queued, never steering: two routines firing the same minute (Sid's
-      // calendar refresh and its email watch, both at 00:00) merged into one
-      // turn, and a routine landing mid-reply would cut into what the person
-      // is reading. Each waits for the turn before it to finish.
-      const session = await from(CANONICAL_ADDRESS).send(message, { auth, turnPolicy: "queue" });
-      rememberCanonicalSession(appRoot, session.id, routine);
-      return session;
+      if (!threads) {
+        // Threads switched off: the old single conversation every client could adopt.
+        const session = await from(CANONICAL_ADDRESS).send(message, { auth, turnPolicy: "queue", state: { kind: "other" } });
+        rememberCanonicalSession(appRoot, session.id, routine);
+        return session;
+      }
+      const owner = threadOwnerOf(auth) ?? AGENT_OWNER;
+      return from(runAddress(routine, owner)).send(message, { auth, state: { kind: "run", owner, routine } });
     },
-    routes: [
+
+    events: {
+      "actions.requested": capture("actions.requested"),
+      "action.result": capture("action.result"),
+      "task.started": capture("task.started"),
+      "task.settled": capture("task.settled"),
+      "message.completed": capture("message.completed"),
+
+      // A run that stops to ask: the question goes into its owner's thread,
+      // where they answer it (POST /thread/respond with the run's session id).
+      "input.requested"(data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
+        const { state } = channel;
+        if (!threads || state.kind !== "run" || !state.owner) return;
+        const requests = (data as { requests?: unknown }).requests;
+        if (!Array.isArray(requests) || requests.length === 0) return;
+        const prompt = (requests[0] as { prompt?: unknown }).prompt;
+        updateThread(threads, state.owner, (r) => {
+          r.reports.push({
+            id: `${ctx.session.id}:${r.reports.length}`,
+            kind: "question",
+            routine: state.routine ?? "routine",
+            text: typeof prompt === "string" ? prompt : "",
+            at: new Date().toISOString(),
+            runSessionId: ctx.session.id,
+            requests,
+          });
+        });
+      },
+
+      // The run's turn ended: its last answer and its cards become the report.
+      // A run that said nothing (no_reply) adds nothing.
+      "session.waiting"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
+        const { state } = channel;
+        if (!threads || state.kind !== "run" || !state.owner) return;
+        const run = runs.get(ctx.session.id);
+        runs.delete(ctx.session.id);
+        const text = run?.text ?? "";
+        const cards = run ? runCards(run) : [];
+        updateThread(threads, state.owner, (r) => {
+          for (const q of r.reports) if (q.runSessionId === ctx.session.id && q.kind === "question") q.settled = true;
+          if (!text && cards.length === 0) return;
+          r.reports.push({
+            id: `${ctx.session.id}:${r.reports.length}`,
+            kind: "report",
+            routine: state.routine ?? "routine",
+            text,
+            ...(cards.length ? { cards } : {}),
+            at: new Date().toISOString(),
+            runSessionId: ctx.session.id,
+          });
+        });
+      },
+
+      // A run that failed for good reports nothing; its open questions close.
+      "session.failed"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
+        runs.delete(ctx.session.id);
+        const { state } = channel;
+        if (!threads || state.kind !== "run" || !state.owner) return;
+        updateThread(threads, state.owner, (r) => {
+          for (const q of r.reports) if (q.runSessionId === ctx.session.id && q.kind === "question") q.settled = true;
+        });
+      },
+    } as never,
+    // Routes take no channel state; the generic only types the sessions this channel starts.
+    routes: ([
+      ...(threads
+        ? threadRoutes({
+            prefix: PREFIX,
+            dir: threads,
+            issuer: options.issuer ?? process.env.KYBERNESIS_ISSUER ?? "https://agent.kybernesis.ai",
+            identify: (req) => identify(req, options),
+          })
+        : []),
       ...(options.computer === false
         ? []
         : computerRoutes({ prefix: PREFIX, options: options.computer ?? {}, authorize: (req) => authorize(req, options) })),
@@ -781,7 +875,7 @@ export function manageChannel(options: ManageOptions = {}) {
         }
         return Response.json({ ok: build.ok, kept: `.kyb-trash/schedules/${slug}.ts` });
       }),
-    ],
+    ] as never),
   });
 }
 
@@ -1011,3 +1105,24 @@ export {
 } from "./setup-env.js";
 
 export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";
+export {
+  threadAddress,
+  runAddress,
+  readThread,
+  threadsDir,
+  pendingContext,
+  recapContext,
+  exchangesFrom,
+  writeThread,
+  updateThread,
+  noteSession,
+  threadOwnerOf,
+  newRunCapture,
+  captureRunEvent,
+  runCards,
+  AGENT_OWNER,
+  type ThreadRecord,
+  type ThreadReport,
+  type ThreadSession,
+} from "./thread.js";
+export { threadRoutes, personPrincipal } from "./thread-routes.js";
