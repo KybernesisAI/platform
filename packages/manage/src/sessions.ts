@@ -1,29 +1,22 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-/**
- * Every conversation this agent has had, from eve's own run store.
- *
- * A conversation is a durable run of eve's session workflow; its id is the
- * session id clients send into. eve stamps each with the first message as a
- * title, what triggered it (HTTP, a schedule, a channel) and a status. That is
- * enough to list them, say which surface each came from and whether it can
- * still take a turn — which is the whole thing a person could not see before:
- * Studio knew one session, the phone knew the one a notification named, and
- * the rest sat on disk unlisted.
- */
-export type SessionSurface = "chat" | "routines" | "imessage" | "buzz" | "api";
+/** A historical run without a trusted creation-time provenance record is unattributed. */
+export type SessionSurface = "chat" | "routines" | "imessage" | "buzz" | "api" | "unknown";
+export type SessionOrigin = "owner" | "eval" | "unknown";
 
 export interface SessionSummary {
   readonly id: string;
   /** The first message, as eve recorded it. */
   readonly title: string;
   readonly surface: SessionSurface;
+  /** Unknown until Eve records trusted provenance when the session is created. */
+  readonly origin: SessionOrigin;
   /** eve's own trigger label, for anything the surface mapping does not know. */
   readonly trigger: string;
   /** The last routine that delivered here, when this is the routines conversation. */
   readonly routine?: string;
-  /** Where a Buzz conversation lives, when it is one. */
+  /** Reserved for a future trusted creation-time Buzz channel record. */
   readonly channel?: string;
   /** alive = can take a turn; ended = finished cleanly; failed = eve declared it dead. */
   readonly status: "alive" | "ended" | "failed";
@@ -50,7 +43,7 @@ interface Parsed {
   readonly updatedAt: string;
 }
 
-/** One parsed run, remembered by file mtime so a listing does not re-read 2,000 files. The surface is decided per listing, not cached: it depends on the canonical pointer and the Buzz store. */
+/** One parsed run, remembered by file mtime so a listing does not re-read 2,000 files. */
 const cache = new Map<string, { mtimeMs: number; parsed: Parsed | null }>();
 
 function statusOf(run: RunRecord): SessionSummary["status"] {
@@ -59,41 +52,8 @@ function statusOf(run: RunRecord): SessionSummary["status"] {
   return "alive";
 }
 
-/**
- * Buzz conversations are HTTP turns like Studio's; the bridge keeps the
- * channel → session map, so that file is the only way to tell them apart.
- */
-function buzzSessions(appRoot: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const candidates = [join(appRoot, ".buzz-sessions.json"), join(appRoot, ".buzz", "buzz-sessions.json")];
-  const file = candidates.find((f) => existsSync(f));
-  if (!file) return out;
-  try {
-    const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    const entries: [string, unknown][] = Array.isArray(raw)
-      ? raw.map((e, i) => [String((e as { channel?: unknown }).channel ?? i), e])
-      : Object.entries((raw as Record<string, unknown>) ?? {});
-    for (const [channel, value] of entries) {
-      const v = value as { sessionId?: unknown; id?: unknown } | null;
-      const id = typeof value === "string" ? value : (v?.sessionId ?? v?.id);
-      if (typeof id === "string") out.set(id, channel);
-    }
-  } catch {
-    /* an unreadable bridge store only costs the label */
-  }
-  return out;
-}
-
-function surfaceOf(trigger: string, routine: string | undefined, id: string, canonicalId: string | undefined, buzz: Map<string, string>): SessionSurface {
-  if (routine !== undefined || (canonicalId !== undefined && id === canonicalId)) return "routines";
-  if (trigger === "channel:linq" || trigger === "channel:photon") return "imessage";
-  if (buzz.has(id)) return "buzz";
-  if (trigger === "http") return "chat";
-  return "api";
-}
-
 export interface ListSessionsOptions {
-  /** The routines conversation, so it is labelled even before a schedule attribute lands. */
+  /** Kept for existing callers; mutable pointers cannot establish historical provenance. */
   readonly canonicalId?: string;
   /** Most recent first; default 50, at most 500. */
   readonly limit?: number;
@@ -105,7 +65,6 @@ export function listSessions(appRoot: string, options: ListSessionsOptions = {})
   const runsDir = join(appRoot, ".eve", ".workflow-data", "runs");
   if (!existsSync(runsDir)) return [];
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
-  const buzz = buzzSessions(appRoot);
   const out: SessionSummary[] = [];
   for (const name of readdirSync(runsDir)) {
     if (!name.endsWith(".json")) continue;
@@ -126,14 +85,13 @@ export function listSessions(appRoot: string, options: ListSessionsOptions = {})
     }
     if (!parsed) continue;
     if (options.includeEnded === false && parsed.status !== "alive") continue;
-    const channel = buzz.get(parsed.id);
     out.push({
       id: parsed.id,
       title: parsed.title,
-      surface: surfaceOf(parsed.trigger, parsed.routine, parsed.id, options.canonicalId, buzz),
+      surface: "unknown",
+      origin: "unknown",
       trigger: parsed.trigger,
       ...(parsed.routine ? { routine: parsed.routine } : {}),
-      ...(channel ? { channel } : {}),
       status: parsed.status,
       createdAt: parsed.createdAt,
       updatedAt: parsed.updatedAt,

@@ -145,7 +145,7 @@ export async function runEval(args: string[] = process.argv.slice(2)): Promise<n
   return await new Promise<number>((resolveExit) => {
     const child = spawn(process.execPath, [cli, "eval", ...args], {
       cwd,
-      env: process.env,
+      env: { ...process.env, KYB_CANONICAL_SESSION: "off" },
       stdio: ["inherit", "pipe", "pipe"],
     });
     let spawnFailed = false;

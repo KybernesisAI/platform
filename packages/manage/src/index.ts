@@ -93,7 +93,7 @@ export function rememberCanonicalSession(appRoot: string, sessionId: string, rou
   // of those as THE conversation pointed every Studio at an eval probe's
   // thread (Kyber, 2026-10-06: "PROBE OK." from a September eval). kyb-eval
   // sets this; nothing in production does.
-  if (process.env.KYB_CANONICAL_SESSION === "off") return;
+  if (process.env.KYB_CANONICAL_SESSION === "off" || !runIsAlive(appRoot, sessionId)) return;
   try {
     const file = canonicalSessionFile(appRoot);
     mkdirSync(dirname(file), { recursive: true });
@@ -584,11 +584,9 @@ export function manageChannel(options: ManageOptions = {}) {
       }),
 
       /**
-       * Every conversation this agent has had, most recent first, with the
-       * surface it came from and whether it can still take a turn. The list a
-       * person never had: Studio adopted one session, the phone knew the one a
-       * notification named, and iMessage threads, Buzz rooms and old chats sat
-       * on disk unlisted. `?limit=` (default 50), `?alive=1` for live ones only.
+       * Every local session, most recent first. Until Eve supplies trusted
+       * creation-time provenance, surface and origin are explicitly unknown.
+       * `?limit=` (default 50), `?alive=1` for live ones only.
        */
       GET(PREFIX + "/sessions", async (req) => {
         const denied = await authorize(req, options);
@@ -597,7 +595,7 @@ export function manageChannel(options: ManageOptions = {}) {
         const limit = Number(url.searchParams.get("limit") ?? "50") || 50;
         const aliveOnly = url.searchParams.get("alive") === "1";
         const canonical = readCanonicalSession(appRoot);
-        const sessions = listSessions(appRoot, { canonicalId: canonical?.sessionId, limit, includeEnded: !aliveOnly });
+        const sessions = listSessions(appRoot, { limit, includeEnded: !aliveOnly });
         return Response.json({ sessions, routines: canonical?.sessionId ?? null });
       }),
 
@@ -1132,7 +1130,7 @@ export {
   type ModelReachState,
 } from "./setup-env.js";
 
-export { listSessions, type SessionSummary, type SessionSurface, type ListSessionsOptions } from "./sessions.js";
+export { listSessions, type SessionSummary, type SessionSurface, type SessionOrigin, type ListSessionsOptions } from "./sessions.js";
 export {
   threadAddress,
   runAddress,

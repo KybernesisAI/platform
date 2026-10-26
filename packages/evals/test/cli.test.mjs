@@ -26,7 +26,7 @@ function fixture() {
 import { writeFileSync } from "node:fs";
 const mode = process.env.FAKE_EVE_MODE;
 if (process.env.FAKE_RECORD) {
-  writeFileSync(process.env.FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), probe: process.env.FAKE_PROBE }));
+  writeFileSync(process.env.FAKE_RECORD, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), probe: process.env.FAKE_PROBE, canonical: process.env.KYB_CANONICAL_SESSION }));
 }
 if (mode === "normal-corrupt") {
   process.stdout.write("starting\\nResults:\\n  Passed: 3\\n");
@@ -121,6 +121,7 @@ test("clean evals exit zero, report zero, and forward args, environment, and cwd
     // macOS keeps its temp dir behind a symlink (/var → /private/var); the child reports the real path.
     assert.equal(realpathSync(recorded.cwd), realpathSync(dir));
     assert.equal(recorded.probe, "forwarded");
+    assert.equal(recorded.canonical, "off", "eval routines must not publish canonical pointers");
   } finally {
     cleanup();
   }

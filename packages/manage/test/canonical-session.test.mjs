@@ -20,12 +20,22 @@ test("a canonical pointer at a live run is handed out", () => {
   assert.equal(readCanonicalSession(root)?.sessionId, "wrun_live");
 });
 
-test("a pointer at a failed run is retired, not handed out (the Kyber flip)", () => {
+test("terminal and missing runs cannot replace a live canonical pointer", () => {
+  const root = appRoot({ wrun_live: "running", wrun_failed: "failed", wrun_done: "completed", wrun_cancelled: "cancelled" });
+  rememberCanonicalSession(root, "wrun_live", "digest");
+  for (const id of ["wrun_failed", "wrun_done", "wrun_cancelled", "wrun_missing"]) {
+    rememberCanonicalSession(root, id, "eval-probe");
+    assert.equal(readCanonicalSession(root)?.sessionId, "wrun_live");
+  }
+});
+
+test("a stale terminal pointer is retired and never served", () => {
   const root = appRoot({ wrun_dead: "failed" });
-  rememberCanonicalSession(root, "wrun_dead", "eval-probe");
+  const pointer = join(root, ".eve", "canonical-session.json");
+  writeFileSync(pointer, JSON.stringify({ sessionId: "wrun_dead" }));
   assert.equal(readCanonicalSession(root), undefined);
-  assert.equal(existsSync(join(root, ".eve", "canonical-session.json")), false, "pointer file retired");
-  assert.equal(existsSync(join(root, ".eve", "canonical-session.json.retired")), true);
+  assert.equal(existsSync(pointer), false, "pointer file retired");
+  assert.equal(existsSync(`${pointer}.retired`), true);
 });
 
 test("a pointer at a run the store has never heard of is treated as dead; no store at all means alive", () => {

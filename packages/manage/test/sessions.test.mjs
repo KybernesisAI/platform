@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,7 +18,7 @@ const session = (runId, title, trigger, extra = {}, status = "running", updatedA
   attributes: { "$eve.type": "session", "$eve.title": title, "$eve.trigger": trigger, ...extra },
 });
 
-test("conversations are listed newest first with the surface they came from; turns and timeouts are not conversations", () => {
+test("legacy conversations remain unattributed; turns and timeouts are not conversations", () => {
   const root = appRoot([
     session("wrun_chat", "Using Plaud, what was my most recent recording about?", "http", {}, "running", "2026-10-06T12:00:00Z"),
     session("wrun_text", "Hey", "channel:linq", {}, "running", "2026-10-06T13:00:00Z"),
@@ -29,18 +29,22 @@ test("conversations are listed newest first with the surface they came from; tur
   ], { "chan-1": { sessionId: "wrun_buzz" } });
   const all = listSessions(root);
   assert.deepEqual(all.map((s) => s.id), ["wrun_text", "wrun_chat", "wrun_rout", "wrun_buzz", "wrun_dead"]);
-  assert.deepEqual(all.map((s) => s.surface), ["imessage", "chat", "routines", "buzz", "chat"]);
+  assert.deepEqual(all.map((s) => s.surface), Array(5).fill("unknown"));
+  assert.deepEqual(all.map((s) => s.origin), Array(5).fill("unknown"));
   assert.equal(all[2].routine, "daily-creatine");
-  assert.equal(all[3].channel, "chan-1");
+  assert.equal(all[3].channel, undefined);
   assert.deepEqual(all.map((s) => s.status), ["alive", "alive", "alive", "ended", "failed"]);
   assert.deepEqual(listSessions(root, { includeEnded: false }).map((s) => s.id), ["wrun_text", "wrun_chat", "wrun_rout"]);
   assert.equal(listSessions(root, { limit: 2 }).length, 2);
 });
 
-test("the canonical pointer labels the routines conversation even before a schedule attribute lands", () => {
-  const root = appRoot([session("wrun_canon", "Say good morning", "http")]);
-  assert.equal(listSessions(root, { canonicalId: "wrun_canon" })[0].surface, "routines");
-  assert.equal(listSessions(root)[0].surface, "chat");
+test("changing or deleting the Buzz map and canonical pointer cannot relabel a historical run", () => {
+  const root = appRoot([session("wrun_canon", "Eval probe", "http")], { chan: { sessionId: "wrun_canon" } });
+  assert.equal(listSessions(root, { canonicalId: "wrun_canon" })[0].surface, "unknown");
+  writeFileSync(join(root, ".buzz-sessions.json"), JSON.stringify({ other: { sessionId: "wrun_canon" } }));
+  assert.equal(listSessions(root)[0].surface, "unknown");
+  unlinkSync(join(root, ".buzz-sessions.json"));
+  assert.equal(listSessions(root)[0].surface, "unknown");
 });
 
 test("no run store means no conversations, not an error", () => {
