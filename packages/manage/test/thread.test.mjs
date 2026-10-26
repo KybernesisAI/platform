@@ -191,6 +191,13 @@ test("a message goes to the caller's own address, as the caller, with their repo
   assert.deepEqual(readThread(d, "user_dana").sessions.map((s) => s.id), ["s_1"], "same session, not a new one");
 });
 
+test("the client's own context rides along, cut to size", async () => {
+  const eve = fakeEve();
+  await routes(dir()).find("POST", "/thread/messages").handler(post({ message: "hi", clientContext: "x".repeat(20_000) }), eve.ctx);
+  assert.equal(eve.sent[0].options.context.length, 1);
+  assert.equal(eve.sent[0].options.context[0].length, 8_000);
+});
+
 test("an empty message is refused", async () => {
   const eve = fakeEve();
   const res = await routes(dir()).find("POST", "/thread/messages").handler(post({ message: "  " }), eve.ctx);

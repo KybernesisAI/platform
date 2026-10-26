@@ -55,6 +55,9 @@ export function personPrincipal(caller: ThreadCaller, issuer: string, req: Reque
   };
 }
 
+/** The most a client may add as context to one message. */
+const CLIENT_CONTEXT_MAX = 8_000;
+
 type Message = string | { type: string; [key: string]: unknown }[];
 
 function validMessage(value: unknown): value is Message {
@@ -106,14 +109,15 @@ export function threadRoutes(input: ThreadRouteInput) {
 
     /**
      * Send the person's message into their thread. The body is the same shape
-     * a client sends to eve: `{ message }`, text or content parts. Reports they
+     * a client sends to eve: `{ message, clientContext? }`, the message as text
+     * or content parts. Reports they
      * have not seen discussed ride along as context, and so does the end of the
      * previous session when the thread has just moved to a new one.
      */
     POST(prefix + "/thread/messages", async (req, { from, resolveSession }) => {
       const caller = await identify(req);
       if (caller instanceof Response) return caller;
-      const body = (await req.json().catch(() => ({}))) as { message?: unknown };
+      const body = (await req.json().catch(() => ({}))) as { message?: unknown; clientContext?: unknown };
       if (!validMessage(body.message)) return Response.json({ ok: false, error: "Send { message } as text or content parts." }, { status: 400 });
 
       const address = threadAddress(caller.userId);
@@ -128,6 +132,11 @@ export function threadRoutes(input: ThreadRouteInput) {
       }
       const reports = pendingContext(record);
       if (reports) context.push(reports);
+      // What the client knows that the agent cannot: the person's working
+      // folder, or the end of a conversation this device had before threads.
+      if (typeof body.clientContext === "string" && body.clientContext.trim()) {
+        context.push(body.clientContext.slice(0, CLIENT_CONTEXT_MAX));
+      }
 
       const session = await from(address).send(body.message as never, {
         auth: personPrincipal(caller, issuer, req),
