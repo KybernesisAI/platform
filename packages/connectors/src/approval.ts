@@ -23,7 +23,7 @@ export function asksFirst(toolName: string): boolean {
 
 interface PolicyContext {
   toolName: string;
-  session?: { auth?: { current?: { principalType?: string } | null } };
+  session?: { auth?: { current?: { principalType?: string; attributes?: Record<string, unknown> } | null } };
 }
 
 /**
@@ -31,10 +31,14 @@ interface PolicyContext {
  *
  * A routine or webhook runs with nobody to ask, and a question there would
  * hold the run forever; the person set the routine up, which is their yes.
+ * A routine runs AS its person (so it can read their calendar and ring their
+ * phone), and says so with `trigger: "routine"`: that turn is still unasked.
  */
 export function personApproves(ctx: PolicyContext): "user-approval" | "not-applicable" {
   if (!asksFirst(ctx.toolName)) return "not-applicable";
-  return ctx.session?.auth?.current?.principalType === "user" ? "user-approval" : "not-applicable";
+  const current = ctx.session?.auth?.current;
+  if (current?.attributes?.trigger === "routine") return "not-applicable";
+  return current?.principalType === "user" ? "user-approval" : "not-applicable";
 }
 
 /** The policy as a durable callback, so a parked call finds it again after a restart. */

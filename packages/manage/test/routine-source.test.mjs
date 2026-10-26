@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { routineSource } from "../dist/routine-source.js";
+import { routineOwner, routineSource } from "../dist/routine-source.js";
 
 /**
  * The bug this file exists to prevent: routines were scaffolded with eve's
@@ -58,4 +58,37 @@ test("the agent's channel filename is configurable", () => {
     manageChannelModule: "manage",
   });
   assert.match(src, /\.\.\/channels\/manage\.js/);
+});
+
+test("a routine someone asked for runs as them, and says it is a routine", () => {
+  const owner = routineOwner(
+    {
+      authenticator: "kybernesis",
+      issuer: "https://cp.test",
+      principalId: "usr_1",
+      principalType: "user",
+      subject: "usr_1",
+      attributes: { org: "org_1", email: "me@example.com", agentGrantLevel: "manage", surface: "voice", count: 3 },
+    },
+    "daily-calendar",
+  );
+  assert.deepEqual(owner.attributes, {
+    org: "org_1",
+    email: "me@example.com",
+    agentGrantLevel: "manage",
+    trigger: "routine",
+    routine: "daily-calendar",
+  }, "where the asking turn came from is not where the routine runs");
+  const src = routineSource({ name: "daily-calendar", cron: "0 0 * * *", instruction: "Refresh it.", manageChannelModule: "kyb", owner });
+  assert.doesNotMatch(src, /appAuth/, "not the agent's own principal");
+  assert.match(src, /"principalId":"usr_1"/);
+  assert.match(src, /"trigger":"routine"/);
+  assert.match(src, /run: \(\{ to, waitUntil \}\)/);
+});
+
+test("nobody to run as: not a person, or a framework principal", () => {
+  assert.equal(routineOwner({ principalId: "eve:app", principalType: "runtime" }, "r"), undefined);
+  assert.equal(routineOwner({ principalId: "eve:local-dev", principalType: "user" }, "r"), undefined);
+  assert.equal(routineOwner(undefined, "r"), undefined);
+  assert.equal(routineOwner({ principalId: "agent-1", principalType: "agent" }, "r"), undefined);
 });

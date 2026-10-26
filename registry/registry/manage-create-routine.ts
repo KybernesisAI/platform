@@ -11,7 +11,8 @@ export default defineTool({
     cron: z.string().describe("5-field cron: every day at 10am is `0 10 * * *`"),
     instruction: z.string().describe("What to do each time, written to yourself with enough context to act on alone"),
   }),
-  execute: (input) => routines.create_routine.execute(input),
+  // ctx carries who asked, so the routine runs as them (their calendar, their phone).
+  execute: (input, ctx) => routines.create_routine.execute(input, ctx),
   // The person sees a routine card; the model reads the result without it.
   toModelOutput: routines.create_routine.toModelOutput,
 });

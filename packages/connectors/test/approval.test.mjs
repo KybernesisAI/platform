@@ -40,6 +40,12 @@ test("a person is asked; a routine with nobody to ask runs", () => {
   assert.equal(personApproves({ toolName: "gmail_fetch_emails", ...person }), "not-applicable");
 });
 
+test("a routine that runs as its person still runs unasked", () => {
+  const asPerson = { session: { auth: { current: { principalType: "user", attributes: { trigger: "routine", routine: "digest" } } } } };
+  assert.equal(personApproves({ toolName: "gmail_send_email", ...asPerson }), "not-applicable");
+  assert.equal(personApproves({ toolName: "googlecalendar_create_event", ...asPerson }), "not-applicable");
+});
+
 test("connecting gives a sign-in card, or words when it cannot", () => {
   const link = connectAnswer({ ok: true, service: "HubSpot", slug: "hubspot", connected: false, url: "https://connect.example/s/abc" });
   assert.equal(link.kyb.card, "link");
