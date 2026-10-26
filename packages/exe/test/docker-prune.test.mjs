@@ -45,7 +45,10 @@ const builderRun = "01M1Q3TJVVGCPNVVRPAYEA4WMX";
 const missingRun = "01M1Q0".padEnd(26, "0");
 const oldIdleRun = "01M1Q1".padEnd(26, "1");
 const malformedRun = "01M1Q2".padEnd(26, "2");
-for (const id of [rootRun, builderRun, missingRun, oldIdleRun, malformedRun]) assert.equal(id.length, 26);
+const badJsonRun = "01M1Q5".padEnd(26, "5");
+for (const id of [rootRun, builderRun, missingRun, oldIdleRun, malformedRun, badJsonRun]) assert.equal(id.length, 26);
+
+const currentName = "eve-sbx-fd06eef130a8775fe9785881abd2abba";
 
 const tags = {
   recent: "eve-sbx-tpl-docker-4c41-recent-rt",
@@ -93,6 +96,7 @@ function runPrune({ dryRun = false, noAppEnv = false, unavailableRuns = false } 
   writeRun(app2, `wrun_${builderRun}`, { status: "running" });
   writeRun(app2, `wrun_${oldIdleRun}`, { status: "running" });
   writeRun(app1, `wrun_${malformedRun}`, "not json");
+  writeRun(app1, `wrun_${badJsonRun}`, '{"status":"completed", broken}');
 
   // The fake clock is 2026-09-01T20:00:00Z. Exactly seven days is inclusive.
   const recentMarker = marker(app1, tags.recent, new Date("2026-08-25T20:00:00Z"));
@@ -117,7 +121,17 @@ case "$1" in
         'running-30h|${sessionName(oldIdleRun, "subagents-builder")}|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
         'malformed|${sessionName(malformedRun, "__root__")}|2026-08-31 14:00:00 +0000 UTC|Exited (0) 30 hours ago' \\
         'running-current|eve-sbx-ses-docker-aaaa-wrun_current|2026-08-31 00:00:00 +0000 UTC|Up 1 day' \\
-        'running-old|eve-sbx-ses-docker-aaaa-wrun_old|2026-08-20 00:00:00 +0000 UTC|Up 12 days' \\
+        'running-old|${sessionName(oldIdleRun, "__root__")}|2026-08-20 00:00:00 +0000 UTC|Up 12 days' \
+        'current-running|${currentName}|2026-08-20 00:00:00 +0000 UTC|Up 12 days' \
+        'current-terminal|eve-sbx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|2026-09-01 18:00:00 +0000 UTC|Exited (0) 2 hours ago' \
+        'current-missing|eve-sbx-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|2026-09-01 19:00:00 +0000 UTC|Up 1 hour' \
+        'bad-label|eve-sbx-cccccccccccccccccccccccccccccccc|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'label-failed|eve-sbx-dddddddddddddddddddddddddddddddd|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'conflict|${sessionName(rootRun, "__root__")}|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'rm-failed|eve-sbx-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'bad-json|eve-sbx-ffffffffffffffffffffffffffffffff|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'no-label|eve-sbx-1234567890abcdef1234567890abcdef|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \
+        'role-failed|eve-sbx-1234567890abcdef1234567890abcdee|2026-08-20 00:00:00 +0000 UTC|Exited (0) 12 days ago' \\
         'build-live|eve-sbx-tpl-docker-aaaa-live-build|2026-09-01 19:30:00 +0000 UTC|Up 30 minutes' \\
         'build-leak|eve-sbx-tpl-docker-aaaa-old-build|2026-08-18 00:00:00 +0000 UTC|Up 2 weeks'
     fi
@@ -125,6 +139,18 @@ case "$1" in
   inspect)
     container=$4
     case "$3" in
+      *sessionId*)
+        case "$container" in
+          current-running) echo wrun_${oldIdleRun} ;;
+          current-terminal|rm-failed) echo wrun_${rootRun} ;;
+          current-missing) echo wrun_${missingRun} ;;
+          bad-json) echo wrun_${badJsonRun} ;;
+          bad-label) echo malformed ;;
+          label-failed) exit 1 ;;
+          conflict) echo wrun_${builderRun} ;;
+          *) echo '<no value>' ;;
+        esac
+        ;;
       *State.FinishedAt*)
         case "$container" in
           terminal|missing|running-2h|young|unsafe-missing) echo '2026-09-01T18:00:00Z' ;;
@@ -133,7 +159,7 @@ case "$1" in
         esac
         ;;
       *)
-        case "$container" in build-live|build-leak) echo template-build ;; *) echo '<no value>' ;; esac
+        case "$container" in role-failed) exit 1 ;; build-live|build-leak) echo template-build ;; current-running|current-terminal|current-missing|bad-label|label-failed|conflict|rm-failed|bad-json) echo session ;; *) echo '<no value>' ;; esac
         ;;
     esac
     ;;
@@ -147,7 +173,8 @@ case "$1" in
     printf '${tags.current}\\t2026-09-01 14:23:00 +0000 UTC\\tcurrent-template\\n'
     ;;
   rmi) [ "$2" = failed-template ] && exit 1; exit 0 ;;
-  stop|rm|builder|image) exit 0 ;;
+  rm) [ "$2" = rm-failed ] && exit 1; exit 0 ;;
+  stop|builder|image) exit 0 ;;
 esac
 `);
   // The fake clock must answer RELATIVE times, not just absolute ones.
@@ -233,14 +260,24 @@ test("production-shaped root and subagent names resolve to bare durable run ids"
   assert.ok(calls.includes("rm terminal"));
   assert.ok(calls.includes("rm missing"));
   assert.equal(mutated(calls, "running-2h"), false);
-  assert.ok(calls.includes("rm running-30h"));
-  assert.ok(calls.includes("rm malformed"), "unknown old exited sessions use the idle cutoff");
+  assert.equal(mutated(calls, "running-30h"), false);
+  assert.equal(mutated(calls, "malformed"), false);
   assert.equal(mutated(calls, "running-current"), false);
-  assert.ok(calls.includes("stop running-old"));
-  assert.ok(calls.includes("rm running-old"));
+  assert.equal(mutated(calls, "running-old"), false);
+  assert.equal(mutated(calls, "current-running"), false);
+  assert.ok(calls.includes("rm current-terminal"));
+  assert.ok(calls.includes("stop current-missing"));
+  assert.ok(calls.includes("rm current-missing"));
+  for (const id of ["bad-label", "label-failed", "conflict", "bad-json", "no-label", "role-failed"]) assert.equal(mutated(calls, id), false);
+  assert.match(output, new RegExp(`keeping session container ${currentName}: workflow run wrun_${oldIdleRun} state running`));
+  assert.match(output, /WARNING: keeping session container .*unresolvable sessionId/);
+  assert.match(output, /WARNING: keeping session container .*sessionId label inspect failed/);
+  assert.match(output, /WARNING: keeping session container .*conflicting sessionId/);
+  assert.match(output, /WARNING: failed to remove session container/);
+  assert.match(output, /WARNING: skipping container .*role inspect failed/);
   assert.match(output, new RegExp(`workflow run wrun_${rootRun} is terminal`));
   assert.doesNotMatch(output, new RegExp(`workflow run wrun_${rootRun}-__root__`));
-  assert.match(output, new RegExp(`keeping exited session container .*wrun_${builderRun}-subagents-builder.*run state running`));
+  assert.match(output, new RegExp(`keeping session container .*wrun_${builderRun}-subagents-builder.*state running`));
   assert.ok(calls.includes("rm -f build-leak"));
   assert.equal(mutated(calls, "build-live"), false);
 });
@@ -248,13 +285,13 @@ test("production-shaped root and subagent names resolve to bare durable run ids"
 test("without an app environment or parseable run id a young exited session is kept", needsGnuDate, () => {
   const { output, calls } = runPrune({ noAppEnv: true });
   assert.equal(mutated(calls, "young"), false);
-  assert.match(output, /keeping exited session container .*run state unknown/);
+  assert.match(output, /(?:keeping session container .*state unknown|keeping session container .*unresolvable sessionId)/);
 });
 
 test("an unavailable candidate run directory cannot authorize immediate missing-run deletion", needsGnuDate, () => {
   const { output, calls } = runPrune({ unavailableRuns: true });
   assert.equal(mutated(calls, "unsafe-missing"), false);
-  assert.match(output, /keeping exited session container .*run state unknown/);
+  assert.match(output, /keeping session container .*state unknown|unresolvable sessionId/);
 });
 
 test("recent exact tag markers veto batch removal while stale and absent markers do not", needsGnuDate, () => {
@@ -296,10 +333,9 @@ test("startup runs packaged reclaim before Eve while preserving the orphan sweep
   assert.match(source, /docker rm -f "\$c"/);
 });
 
-test("threshold defaults and operational rationale remain documented beside the rules", () => {
+test("session age backstops are absent and template thresholds remain documented", () => {
   const source = readFileSync(script, "utf8");
-  assert.match(source, /KYB_PRUNE_IDLE_HOURS:-24/);
-  assert.match(source, /KYB_PRUNE_SESSION_HOURS:-168/);
+  assert.doesNotMatch(source, /KYB_PRUNE_IDLE_HOURS|KYB_PRUNE_SESSION_HOURS/);
   assert.match(source, /KYB_PRUNE_TEMPLATE_MARKER_DAYS:-7/);
   assert.doesNotMatch(source, /docker container prune/);
   assert.match(source, /inspect failures protect/i);

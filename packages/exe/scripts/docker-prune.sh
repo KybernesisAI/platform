@@ -15,12 +15,12 @@
 #   Session CONTAINERS stay around too: eve keeps one per durable session so a
 #   conversation can be resumed. Terminal hooks remove sessions that finish,
 #   but a busy agent still accumulates exited containers whose durable run is
-#   running, missing, or unreadable, and failed cleanup otherwise leaks forever.
+#   terminal or conclusively missing. Uncertain sessions are kept for safety.
 #
 # WHAT IS NEVER TOUCHED: volumes (a Claude subscription sign-in lives in one),
 # a recently used template marker, any image a running container depends on,
-# a running session inside its backstop, and anything this script cannot inspect
-# safely enough to authorize deletion.
+# any session whose durable run is running or uncertain, regardless of age,
+# and anything this script cannot inspect safely enough to authorize deletion.
 #
 # KYB_PRUNE_DRY_RUN=1 reports every decision and removes nothing.
 set -u
@@ -42,8 +42,6 @@ DF="${KYB_PRUNE_DF:-df}"
 command -v "$DOCKER" >/dev/null 2>&1 || exit 0
 
 DRY_RUN="${KYB_PRUNE_DRY_RUN:-}"
-SESSION_HOURS="${KYB_PRUNE_SESSION_HOURS:-168}"
-IDLE_HOURS="${KYB_PRUNE_IDLE_HOURS:-24}"
 BUILD_HOURS="${KYB_PRUNE_BUILD_HOURS:-6}"
 GRACE_HOURS="${KYB_PRUNE_TEMPLATE_GRACE_HOURS:-48}"
 MARKER_DAYS="${KYB_PRUNE_TEMPLATE_MARKER_DAYS:-7}"
@@ -81,10 +79,6 @@ app_dirs_authoritative=0
 if [ ! -s "$app_dirs" ]; then add_app_dir "$(pwd)"; fi
 
 now_epoch=$("$DATE" -u +%s 2>/dev/null) || now_epoch=""
-session_cutoff=""
-idle_cutoff=""
-[ -n "$now_epoch" ] && session_cutoff=$((now_epoch - SESSION_HOURS * 3600))
-[ -n "$now_epoch" ] && idle_cutoff=$((now_epoch - IDLE_HOURS * 3600))
 marker_cutoff=""
 [ -n "$now_epoch" ] && marker_cutoff=$((now_epoch - MARKER_DAYS * 86400))
 build_cutoff=$("$DATE" -u -d "${BUILD_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || build_cutoff=""
@@ -92,15 +86,18 @@ build_cutoff=$("$DATE" -u -d "${BUILD_HOURS} hours ago" '+%Y-%m-%d %H:%M:%S' 2>/
 echo "=== $("$DATE" -u +%FT%TZ) start ==="
 "$DF" -h / | tail -1
 
-# A real Eve container adds a scope suffix after the workflow ULID, for example
-# -__root__ or -subagents-builder. Only the exact wrun_ token maps to the run
-# store; malformed names stay unknown and can never authorize "missing".
+# Legacy names embed a run id. Current Eve names are opaque hashes;
+# use the inspected sessionId label first and fall back only when absent.
 container_run_id() {
-  printf '%s\n' "$1" | sed -n 's/^.*-\(wrun_[0-9A-Z]\{26\}\)-.*$/\1/p'
+  printf '%s\n' "$1" | sed -n 's/^eve-sbx-ses-.*-\(wrun_[0-9A-Z]\{26\}\)-.*$/\1/p'
+}
+
+valid_run_id() {
+  [ "${#1}" -eq 31 ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^wrun_[0-9A-Z]{26}$'
 }
 
 # Print terminal, running, missing, or unknown for a workflow run id. Missing is
-# conclusive only when at least one run store was readable and none was unsafe.
+# conclusive only with an authoritative checkout list, readable stores, and none unsafe.
 run_state() {
   run_id=$1
   readable_dirs=0
@@ -109,7 +106,10 @@ run_state() {
   combined=""
   while IFS= read -r app; do
     runs="$app/.eve/.workflow-data/runs"
-    [ -d "$runs" ] || continue
+    if [ ! -d "$runs" ]; then
+      unsafe=1
+      continue
+    fi
     if ! "$LS" "$runs" >/dev/null 2>&1; then
       unsafe=1
       continue
@@ -118,21 +118,8 @@ run_state() {
     file="$runs/$run_id.json"
     [ -e "$file" ] || continue
     found=$((found + 1))
-    text=$(cat "$file" 2>/dev/null) || {
-      unsafe=1
-      continue
-    }
-    state=$(printf '%s' "$text" | awk '
-      { all = all $0 }
-      END {
-        rest = all; count = 0; value = ""
-        while (match(rest, /"status"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
-          item = substr(rest, RSTART, RLENGTH)
-          sub(/^.*:[[:space:]]*"/, "", item); sub(/"$/, "", item)
-          value = item; count++; rest = substr(rest, RSTART + RLENGTH)
-        }
-        if (count == 1) print value; else exit 1
-      }') || {
+    # Read the top-level JSON status; malformed or nested records are unsafe.
+    state=$(node -e 'const fs = require("node:fs"); const v = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!v || Array.isArray(v) || typeof v !== "object" || typeof v.status !== "string") process.exit(1); process.stdout.write(v.status)' "$file" 2>/dev/null) || {
       unsafe=1
       continue
     }
@@ -145,7 +132,7 @@ run_state() {
   if [ "$unsafe" -ne 0 ]; then echo unknown
   elif [ "$found" -gt 0 ]; then
     case "$combined" in completed|failed|cancelled) echo terminal ;; running) echo running ;; *) echo unknown ;; esac
-  elif [ "$readable_dirs" -gt 0 ]; then echo missing
+  elif [ "$readable_dirs" -gt 0 ] && [ "$app_dirs_authoritative" -eq 1 ]; then echo missing
   else echo unknown
   fi
 }
@@ -157,58 +144,54 @@ remove_session() {
     return
   fi
   [ "$running" = 1 ] && "$DOCKER" stop "$id" >/dev/null 2>&1
-  "$DOCKER" rm "$id" >/dev/null 2>&1 && echo "removed session container ${name} (${reason})"
+  if "$DOCKER" rm "$id" >/dev/null 2>&1; then
+    echo "removed session container ${name} (${reason})"
+  else
+    echo "WARNING: failed to remove session container ${name} (${reason})"
+  fi
 }
 
 # 1. Session and build containers.
 #
-# A resumable conversation can legitimately keep a running container for days,
-# so running durable sessions retain the week-long backstop. Exited containers
-# are different: a terminal or conclusively absent durable run is dead now;
-# running or uncertain durable state falls back to FinishedAt and the short idle
-# horizon. A container that restarts between listing and removal wins because
-# session removal is deliberately not forced. Inspect failures protect: not
-# knowing a role, run record, creation time, or finish time is never permission
-# to remove a container.
+# Durable state alone authorizes session deletion: terminal or conclusively
+# missing runs are reaped promptly. There is no idle or week-long age backstop
+# for running or uncertain runs; Eve cannot recreate a deleted live container.
+# Inspect failures protect live sessions; uncertain containers may need
+# operator attention to reclaim disk space.
 "$DOCKER" ps -a --format '{{.ID}}|{{.Names}}|{{.CreatedAt}}|{{.Status}}' 2>/dev/null |
   while IFS='|' read -r id name created status; do
     [ -z "$id" ] && continue
     role=$("$DOCKER" inspect --format '{{ index .Config.Labels "eve.sandbox.role" }}' "$id" 2>/dev/null) || {
-      echo "skipping container ${name}: inspect failed"
+      echo "WARNING: skipping container ${name}: role inspect failed"
       continue
     }
     when=$(echo "$created" | awk '{print $1" "$2}')
     case "$status" in Up*) running=1 ;; *) running=0 ;; esac
 
-    if [ "$role" = "session" ] || [ "${name#eve-sbx-ses-}" != "$name" ]; then
-      if [ "$running" = 1 ]; then
-        created_epoch=$("$DATE" -u -d "$when" +%s 2>/dev/null) || created_epoch=""
-        if [ -n "$session_cutoff" ] && [ -n "$created_epoch" ] && [ "$created_epoch" -lt "$session_cutoff" ]; then
-          remove_session "$id" "$name" "created ${when}, older than ${SESSION_HOURS}h" 1
-        else
-          echo "keeping running session container ${name} (created ${when})"
-        fi
-        continue
-      fi
-
-      run_id=$(container_run_id "$name")
-      state=unknown
-      [ -n "$run_id" ] && state=$(run_state "$run_id")
-      case "$state" in
-        terminal) remove_session "$id" "$name" "workflow run ${run_id} is terminal" 0; continue ;;
-        missing) remove_session "$id" "$name" "workflow run ${run_id} is conclusively missing" 0; continue ;;
-      esac
-
-      finished=$("$DOCKER" inspect --format '{{.State.FinishedAt}}' "$id" 2>/dev/null) || {
-        echo "keeping exited session container ${name}: finished time inspect failed"
+    if [ "$role" = "session" ] || [ "${name#eve-sbx-ses-}" != "$name" ] || printf '%s' "$name" | LC_ALL=C grep -Eq '^eve-sbx-[0-9a-f]{32}$'; then
+      label=$("$DOCKER" inspect --format '{{ index .Config.Labels "eve.sandbox.tag.sessionId" }}' "$id" 2>/dev/null) || {
+        echo "WARNING: keeping session container ${name}: sessionId label inspect failed"
         continue
       }
-      finished_epoch=$("$DATE" -u -d "$finished" +%s 2>/dev/null) || finished_epoch=""
-      if [ -n "$idle_cutoff" ] && [ -n "$finished_epoch" ] && [ "$finished_epoch" -lt "$idle_cutoff" ]; then
-        remove_session "$id" "$name" "finished ${finished}, idle more than ${IDLE_HOURS}h; run state ${state}" 0
-      else
-        echo "keeping exited session container ${name} (finished ${finished}; run state ${state})"
+      case "$label" in
+        '<no value>'|'') run_id=$(container_run_id "$name") ;;
+        *) run_id=$label ;;
+      esac
+      if ! valid_run_id "$run_id"; then
+        echo "WARNING: keeping session container ${name}: unresolvable sessionId (${label})"
+        continue
       fi
+      legacy_id=$(container_run_id "$name")
+      if [ -n "$legacy_id" ] && [ "$label" != '<no value>' ] && [ -n "$label" ] && [ "$legacy_id" != "$run_id" ]; then
+        echo "WARNING: keeping session container ${name}: conflicting sessionId label and legacy name"
+        continue
+      fi
+      state=$(run_state "$run_id")
+      case "$state" in
+        terminal) remove_session "$id" "$name" "workflow run ${run_id} is terminal" "$running" ;;
+        missing) remove_session "$id" "$name" "workflow run ${run_id} is conclusively missing" "$running" ;;
+        *) echo "WARNING: keeping session container ${name}: workflow run ${run_id} state ${state}; no age-based deletion" ;;
+      esac
       continue
     fi
 
