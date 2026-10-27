@@ -15,7 +15,7 @@ import {
   validateEnvUpdate,
   writeEnvFile,
 } from "../dist/setup-env.js";
-import { SafeRestarter, createSetupActions, firstJson, readSetupState, setupRoutes, setupStatus, vncPassword } from "../dist/setup.js";
+import { OutputBuffer, SafeRestarter, createSetupActions, firstJson, readSetupState, setupRoutes, setupStatus, vncPassword } from "../dist/setup.js";
 
 const ANTHROPIC = `sk-ant-api03-${"a".repeat(40)}`;
 
@@ -1258,4 +1258,21 @@ test("update.run: a failed build is put back; an update that changed nothing nei
   await new Promise((r) => setTimeout(r, 50));
   assert.ok(!quiet.includes("npx eve build"));
   assert.equal(restarts, 0);
+});
+
+test("a long command's output keeps its end, where kyb prints its verdict", () => {
+  const out = new OutputBuffer(100);
+  out.add("start\n");
+  out.add("x".repeat(500));
+  out.add("\n✗ Evals failed after upgrade.");
+  const text = out.text();
+  assert.match(text, /^start\n/);
+  assert.match(text, /Evals failed after upgrade\.$/);
+  assert.match(text, /output cut/);
+  assert.ok(text.length < 150);
+
+  const short = new OutputBuffer(100);
+  short.add("ok\n");
+  short.add("done");
+  assert.equal(short.text(), "ok\ndone");
 });
