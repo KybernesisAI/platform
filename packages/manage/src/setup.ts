@@ -127,6 +127,40 @@ function viaLoginShell(file: string, args: string[]): [string, string[]] {
 /** What a login over ssh starts with; the login shell's profile fills in the rest. */
 const LOGIN_ENV = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR", "XDG_RUNTIME_DIR"];
 
+/**
+ * A child's output, bounded, keeping its start and its end.
+ *
+ * Keeping only the start lost the verdict: `kyb upgrade` prints its result
+ * last, after a long eval run, and an update that failed one eval was reported
+ * as "could not be installed" because "Evals failed" fell past the cap.
+ */
+export class OutputBuffer {
+  private head = "";
+  private tail = "";
+  private dropped = false;
+
+  constructor(private readonly cap = 200_000) {}
+
+  add(chunk: string): void {
+    const half = this.cap / 2;
+    if (this.head.length < half) {
+      const room = half - this.head.length;
+      this.head += chunk.slice(0, room);
+      chunk = chunk.slice(room);
+    }
+    if (!chunk) return;
+    this.tail += chunk;
+    if (this.tail.length > half) {
+      this.tail = this.tail.slice(this.tail.length - half);
+      this.dropped = true;
+    }
+  }
+
+  text(): string {
+    return this.dropped ? `${this.head}\n[… output cut …]\n${this.tail}` : this.head + this.tail;
+  }
+}
+
 export const defaultExec: Exec = (file, args, opts) =>
   new Promise((resolve) => {
     const [shell, argv] = viaLoginShell(file, args);
@@ -139,23 +173,18 @@ export const defaultExec: Exec = (file, args, opts) =>
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...base, NO_COLOR: "1", NO_UPDATE_NOTIFIER: "1", ...opts.env },
     });
-    let stdout = "";
-    let stderr = "";
-    const cap = 200_000;
-    child.stdout.on("data", (d: Buffer) => {
-      if (stdout.length < cap) stdout += d.toString();
-    });
-    child.stderr.on("data", (d: Buffer) => {
-      if (stderr.length < cap) stderr += d.toString();
-    });
+    const stdout = new OutputBuffer();
+    const stderr = new OutputBuffer();
+    child.stdout.on("data", (d: Buffer) => stdout.add(d.toString()));
+    child.stderr.on("data", (d: Buffer) => stderr.add(d.toString()));
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 120_000);
     child.on("error", (e) => {
       clearTimeout(timer);
-      resolve({ code: null, stdout, stderr: `${stderr}\n${String(e)}` });
+      resolve({ code: null, stdout: stdout.text(), stderr: `${stderr.text()}\n${String(e)}` });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderr });
+      resolve({ code, stdout: stdout.text(), stderr: stderr.text() });
     });
   });
 
