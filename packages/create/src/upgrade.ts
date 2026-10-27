@@ -753,8 +753,18 @@ async function runUpgradeEvalGate(cwd: string, host: true | string | undefined):
 
   const preflight = await preflightEvalGate(cwd);
   if (preflight.kind === "unavailable") {
-    reportEvalGateUnavailable(cwd, sshTarget(cwd), preflight.reasons);
-    return "unavailable";
+    // The preflight is there to stop a laptop run that cannot reach the
+    // host-only routes. On the agent's own machine (a systemd agent unit runs
+    // this very checkout) there is nowhere better to send it, and a preflight
+    // that cannot confirm a route is not evidence the evals cannot run: the
+    // owner's Update button rolled back an answering agent this way. Run the
+    // evals and let them decide; a route that is really down fails them.
+    if (!onAgentHost(cwd)) {
+      reportEvalGateUnavailable(cwd, sshTarget(cwd), preflight.reasons);
+      return "unavailable";
+    }
+    console.log(`\n${yellow("Could not confirm every route the evals use; running them anyway on the agent's own machine.")}`);
+    for (const reason of preflight.reasons) console.log(`  ${dim(reason)}`);
   }
 
   console.log(bold("\nRunning the eval gate (npm run eval) — deploy only on green …\n"));
@@ -963,6 +973,11 @@ function recoveryGuidance(targets: UpgradeTarget[], bridgeUnit?: string): void {
   if (bridgeUnit) {
     console.log(`\n  The Buzz bridge remains stopped until the tree is verified. Then run:\n    ${dim(`sudo -n systemctl start ${bridgeUnit}`)}`);
   }
+}
+
+/** True when a systemd agent unit on this machine runs this checkout. */
+function onAgentHost(cwd: string): boolean {
+  return findMatchingAgentServiceUnit(cwd, process.env.KYB_SYSTEMD_DIR || undefined) !== null;
 }
 
 function buzzBridgeUnit(cwd: string): string | null {
