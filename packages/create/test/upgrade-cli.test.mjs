@@ -576,6 +576,7 @@ export default defineEvalConfig({ judge: { model: exe("judge") } });
 
 test("an unreachable host-only model and judge stop before eval with distinct guidance", () => {
   const fix = fixture({
+    agentUnit: false,
     eveInstalled: EVE_VERSION,
     eveRange: `^${EVE_VERSION}`,
     agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
@@ -591,6 +592,48 @@ test("an unreachable host-only model and judge stop before eval with distinct gu
     assert.match(result.stdout, /ssh fixture-host 'cd ~\/fixture && npm run eval'/);
     assert.doesNotMatch(result.stdout, /Do NOT deploy/);
     assert.doesNotMatch(commandLog(fix), /^npm run eval$/m);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("on the agent's own machine an unconfirmed route does not stop the evals", () => {
+  const fix = fixture({
+    eveInstalled: EVE_VERSION,
+    eveRange: `^${EVE_VERSION}`,
+    agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
+    compiledRouting: { kind: "external", provider: "anthropic" },
+    claudeProxyReady: false,
+    judgeConfig: exeJudgeConfig,
+    envLocal: "EVE_SSH_HOST=fixture-host\nEXE_LLM_URL=http://127.0.0.1:1/v1\n",
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /running them anyway on the agent's own machine/);
+    assert.match(result.stdout, /the agent model proxy is unreachable/);
+    assert.doesNotMatch(result.stdout, /can only run on its host/);
+    assert.equal(commandLog(fix).match(/^npm run eval$/gm)?.length, 1);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test("on the agent's own machine evals that then fail still fail the upgrade", () => {
+  const fix = fixture({
+    eveInstalled: EVE_VERSION,
+    eveRange: `^${EVE_VERSION}`,
+    agentSource: "model: claudeSubscription({ model, createAnthropic })\n",
+    compiledRouting: { kind: "external", provider: "anthropic" },
+    claudeProxyReady: false,
+    judgeConfig: exeJudgeConfig,
+    envLocal: "EXE_LLM_URL=http://127.0.0.1:1/v1\n",
+    evalStatus: 1,
+  });
+  try {
+    const result = runUpgradeWithEval(fix);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /Evals failed after upgrade/);
   } finally {
     fix.cleanup();
   }
