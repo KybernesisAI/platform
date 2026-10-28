@@ -15,3 +15,4 @@ export * as profile from "./profile.js";
 export type { Profile } from "./profile.js";
 export { fetchControlPlaneFace, profileFromFace, resolveFace, syncProfile, type Face } from "./face.js";
 export { readSurfaceManifest, surfaceWriter, surfacesDir, type SurfaceManifest } from "./surface.js";
+export { channelsFrom, configuredRelays, listChannels, postMessage, type BuzzChannel } from "./outbound.js";

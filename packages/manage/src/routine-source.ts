@@ -12,6 +12,8 @@
  * and continues it — or starts a new one when there is none.
  */
 
+import { asDelivery, deliveryDestination, deliveryLabel, deliveryNote, type RoutineDelivery } from "./routine-delivery.js";
+
 /** Where a routine's answer should go, when the person wanted somewhere specific. */
 export interface RoutineDestination {
   /** Module under agent/channels/ to deliver to, without extension. */
@@ -81,6 +83,11 @@ export interface RoutineSourceInput {
   destination?: RoutineDestination;
   /** The person it runs as. Without one it runs as the agent (`appAuth`). */
   owner?: RoutineOwner;
+  /**
+   * Where its answer goes when not to its owner's thread: a Buzz room (posted
+   * by the manage channel), or Slack or iMessage (the turn runs there).
+   */
+  delivery?: RoutineDelivery;
 }
 
 /**
@@ -91,15 +98,32 @@ export interface RoutineSourceInput {
  * the meaning of the file.
  */
 export function routineSource(input: RoutineSourceInput): string {
-  const dest = input.destination;
+  const delivery = input.delivery;
+  const dest = input.destination ?? (delivery ? deliveryDestination(delivery) : undefined);
   const importLine = dest
     ? `import target from "../channels/${dest.channel}.js";`
     : `import manage from "../channels/${input.manageChannelModule}.js";`;
-  const auth = input.owner ? JSON.stringify(input.owner) : "appAuth";
-  const runArgs = input.owner ? "{ to, waitUntil }" : "{ to, waitUntil, appAuth }";
+  // A routine that delivers elsewhere is marked as such on its owner, so the
+  // phone is not rung for something posted in a room (see @kybernesis/notify).
+  const owner = input.owner && delivery ? { ...input.owner, attributes: { ...input.owner.attributes, delivery: delivery.surface } } : input.owner;
+  const auth = owner ? JSON.stringify(owner) : "appAuth";
+  const runArgs = owner ? "{ to, waitUntil }" : "{ to, waitUntil, appAuth }";
   const sendTo = dest
     ? `to(target, ${JSON.stringify(dest.target)})`
-    : `to(manage, { routine: ${JSON.stringify(input.name)} })`;
+    : delivery
+      ? `to(manage, { routine: ${JSON.stringify(input.name)}, deliver: ${JSON.stringify(delivery)} })`
+      : `to(manage, { routine: ${JSON.stringify(input.name)} })`;
+  const instruction = delivery ? `${input.instruction}\n\n${deliveryNote(delivery)}` : input.instruction;
+  const where = delivery
+    ? `
+ *
+ * Its answer is posted in ${deliveryLabel(delivery)}, and only there.`
+    : dest
+      ? ""
+      : `
+ *
+ * Each firing runs in the background, in its own session. What it has to say
+ * is reported in its owner's thread, never posted as a message there.`;
 
   return `import { defineSchedule } from "eve/schedules";
 ${importLine}
@@ -107,10 +131,7 @@ ${importLine}
 /**
  * ${input.name}
  *
- * Created from KYBER Studio.${dest ? "" : `
- *
- * Each firing runs in the background, in its own session. What it has to say
- * is reported in its owner's thread, never posted as a message there.`}${input.owner ? `
+ * Created from KYBER Studio.${where}${owner ? `
  *
  * Runs as the person who asked for it, so it can use what they can (their
  * calendar, their pages) and their phone hears when it is done.` : ""}
@@ -120,7 +141,7 @@ export default defineSchedule({
   run: (${runArgs}) => {
     waitUntil(
       ${sendTo}.send(
-        ${JSON.stringify(input.instruction)},
+        ${JSON.stringify(instruction)},
         { auth: ${auth} },
       ),
     );
@@ -136,6 +157,8 @@ export interface RoutineRun {
   instruction: string;
   /** The person it runs as; undefined for a routine that runs as the agent (`appAuth`). */
   owner?: RoutineOwner;
+  /** Where its answer goes, when it names a Buzz room rather than its owner's thread. */
+  delivery?: RoutineDelivery;
 }
 
 /**
@@ -145,19 +168,37 @@ export interface RoutineRun {
  * any other shape is undefined: it runs only on its schedule.
  */
 export function readRoutine(source: string): RoutineRun | undefined {
-  const head = /to\(manage, \{ routine: ("(?:[^"\\]|\\.)*") \}\)\.send\(\s*("(?:[^"\\]|\\.)*")\s*,\s*\{\s*auth:\s*/.exec(source);
+  const target = /to\(manage, \{ routine: ("(?:[^"\\]|\\.)*")/.exec(source);
+  if (!target) return undefined;
+  let tail = source.slice(target.index + target[0].length);
+  // A Buzz routine names its room in the target: `deliver: {...}`.
+  let delivery: RoutineDelivery | undefined;
+  const named = /^, deliver: /.exec(tail);
+  if (named) {
+    const json = balancedObject(tail.slice(named[0].length));
+    if (!json) return undefined;
+    try {
+      delivery = asDelivery(JSON.parse(json));
+    } catch {
+      return undefined;
+    }
+    if (!delivery) return undefined;
+    tail = tail.slice(named[0].length + json.length);
+  }
+  const head = /^ \}\)\.send\(\s*("(?:[^"\\]|\\.)*")\s*,\s*\{\s*auth:\s*/.exec(tail);
   if (!head) return undefined;
   let routine: unknown;
   let instruction: unknown;
   try {
-    routine = JSON.parse(head[1]!);
-    instruction = JSON.parse(head[2]!);
+    routine = JSON.parse(target[1]!);
+    instruction = JSON.parse(head[1]!);
   } catch {
     return undefined;
   }
   if (typeof routine !== "string" || typeof instruction !== "string" || !instruction.trim()) return undefined;
-  const rest = source.slice(head.index + head[0].length);
-  if (/^appAuth\b/.test(rest)) return { routine, instruction };
+  const rest = tail.slice(head[0].length);
+  const where = delivery ? { delivery } : {};
+  if (/^appAuth\b/.test(rest)) return { routine, instruction, ...where };
   const json = balancedObject(rest);
   if (!json) return undefined;
   let auth: unknown;
@@ -167,7 +208,7 @@ export function readRoutine(source: string): RoutineRun | undefined {
     return undefined;
   }
   const owner = routineOwner(auth, routine);
-  return owner ? { routine, instruction, owner } : undefined;
+  return owner ? { routine, instruction, owner, ...where } : undefined;
 }
 
 /** The `{ ... }` at the start of `text`, braces balanced and strings respected. */

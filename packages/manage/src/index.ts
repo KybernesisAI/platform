@@ -6,6 +6,16 @@ import { verifyKybernesisRequest } from "@kybernesis/enterprise";
 import { card, describeCron, forModel, nextCronRun, withCards } from "@kybernesis/cards";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineOwner, routineSource } from "./routine-source.js";
+import {
+  asDelivery,
+  DELIVERY_SURFACES,
+  deliveryLabel,
+  resolveRoutineDelivery,
+  runBuzz,
+  settleRun,
+  type DeliverToInput,
+  type RoutineDelivery,
+} from "./routine-delivery.js";
 import { listSessions } from "./sessions.js";
 import { threadRoutes } from "./thread-routes.js";
 import {
@@ -21,7 +31,7 @@ import {
 } from "./thread.js";
 
 /** What a session on this channel is: a person's thread, a background run, or something older. */
-type KybState = { kind: "thread" | "run" | "other"; owner?: string; routine?: string };
+type KybState = { kind: "thread" | "run" | "other"; owner?: string; routine?: string; deliver?: RoutineDelivery };
 import { computerRoutes, type ComputerOptions } from "./computer.js";
 import { setupRoutes, type SetupOptions } from "./setup.js";
 import { memoryRoutes, type MemoryOptions } from "./memory.js";
@@ -209,6 +219,8 @@ async function identify(req: Request, options: ManageOptions): Promise<(Artifact
 }
 
 export interface ManageOptions {
+  /** Runs `kybernesis-buzz` to post a routine's answer in a Buzz room. Tests pass their own. */
+  buzzRunner?: (args: string[], input?: string) => Promise<string>;
   /**
    * The module name of this channel under `agent/channels/`, without extension.
    * A routine created from Studio imports it to deliver its answer, so it must
@@ -401,6 +413,23 @@ function writableRoot(appRoot: string): { ok: true } | { ok: false; reason: stri
   }
 }
 
+/** Where a routine file sends its answer, in words, as list_routines shows it. */
+function deliversTo(source: string): string {
+  const deliver = /deliver: (\{[^\n]*?\}) \}\)/.exec(source)?.[1];
+  if (deliver) {
+    try {
+      return deliveryLabel(asDelivery(JSON.parse(deliver)));
+    } catch {
+      /* hand-edited: fall through */
+    }
+  }
+  const channel = /import target from "\.\.\/channels\/([^".]+)\.js"/.exec(source)?.[1];
+  if (channel === "slack") return deliveryLabel({ surface: "slack", channel: /channelId":"([^"]+)"/.exec(source)?.[1] ?? "?" });
+  if (channel === "linq") return "iMessage";
+  if (channel) return channel;
+  return "KYBER Studio";
+}
+
 function slugify(name: string): string {
   return (
     name
@@ -424,6 +453,8 @@ export function manageChannel(options: ManageOptions = {}) {
   const manageModule = options.channelModule ?? "kyb";
 
   const threads = options.threads === false ? null : threadsDir(options.threads?.dir);
+  /** Posts a routine's answer into a Buzz room, as this agent. */
+  const buzz = options.buzzRunner ?? runBuzz(appRoot);
   /** What each background run has produced so far, by session id. */
   const runs = new Map<string, RunCapture>();
   const captureFor = (id: string): RunCapture => {
@@ -454,6 +485,13 @@ export function manageChannel(options: ManageOptions = {}) {
      */
     receive: async ({ message, target, auth }, { from }) => {
       const routine = String((target as { routine?: unknown }).routine ?? "routine");
+      // A routine that names a Buzz room: it runs in the background like any
+      // other, and its answer is posted there instead of reported (below).
+      const deliver = asDelivery((target as { deliver?: unknown }).deliver);
+      if (deliver?.surface === "buzz") {
+        const owner = threadOwnerOf(auth) ?? AGENT_OWNER;
+        return from(runAddress(routine, owner)).send(message, { auth, state: { kind: "run", owner, routine, deliver } });
+      }
       if (!threads) {
         // Threads switched off: the old single conversation every client could adopt.
         const session = await from(CANONICAL_ADDRESS).send(message, { auth, turnPolicy: "queue", state: { kind: "other" } });
@@ -494,26 +532,12 @@ export function manageChannel(options: ManageOptions = {}) {
 
       // The run's turn ended: its last answer and its cards become the report.
       // A run that said nothing (no_reply) adds nothing.
-      "session.waiting"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
+      async "session.waiting"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
         const { state } = channel;
-        if (!threads || state.kind !== "run" || !state.owner) return;
+        if (state.kind !== "run" || !state.owner) return;
         const run = runs.get(ctx.session.id);
         runs.delete(ctx.session.id);
-        const text = run?.text ?? "";
-        const cards = run ? runCards(run) : [];
-        updateThread(threads, state.owner, (r) => {
-          for (const q of r.reports) if (q.runSessionId === ctx.session.id && q.kind === "question") q.settled = true;
-          if (!text && cards.length === 0) return;
-          r.reports.push({
-            id: `${ctx.session.id}:${r.reports.length}`,
-            kind: "report",
-            routine: state.routine ?? "routine",
-            text,
-            ...(cards.length ? { cards } : {}),
-            at: new Date().toISOString(),
-            runSessionId: ctx.session.id,
-          });
-        });
+        await settleRun({ owner: state.owner, routine: state.routine, deliver: state.deliver, sessionId: ctx.session.id, run, threads, buzz });
       },
 
       // A run that failed for good reports nothing; its open questions close.
@@ -771,6 +795,8 @@ export function manageChannel(options: ManageOptions = {}) {
           name?: string;
           cron?: string;
           instruction?: string;
+          /** Where its answer goes; Studio when absent. */
+          deliver?: DeliverToInput;
         };
         if (!body.name || !body.cron || !body.instruction) {
           return Response.json(
@@ -791,6 +817,13 @@ export function manageChannel(options: ManageOptions = {}) {
           );
         }
 
+        let delivery: RoutineDelivery | undefined;
+        try {
+          delivery = await resolveRoutineDelivery(body.deliver, { appRoot, principalId: caller.userId });
+        } catch (error) {
+          return Response.json({ ok: false, error: (error as Error).message }, { status: 400 });
+        }
+
         // Authored as source, because that is what it is: the repository stays
         // the truth, and this file is reviewable and revertable like any other.
         const source = routineSource({
@@ -798,6 +831,7 @@ export function manageChannel(options: ManageOptions = {}) {
           cron: body.cron,
           instruction: body.instruction,
           manageChannelModule: manageModule,
+          delivery,
           // It runs as whoever made it in Studio: their calendar, their pages, their phone.
           owner: routineOwner(
             {
@@ -839,6 +873,7 @@ export function manageChannel(options: ManageOptions = {}) {
         return Response.json({
           ok: true,
           file: `agent/schedules/${slug}.ts`,
+          deliversTo: deliveryLabel(delivery),
           restarted: Boolean(options.restartCommand),
         });
       }),
@@ -932,7 +967,7 @@ export function routineTools(options: ManageOptions = {}) {
   return {
     create_routine: {
       description:
-        "Create a recurring routine for yourself: something you will do on a schedule without being asked again. Use when the user asks to be reminded, to get a digest, or for anything repeating. Requires a cron expression — convert their words yourself (every day at 10am is `0 10 * * *`, weekday mornings at 8:40 is `40 8 * * 1-5`).",
+        "Create a recurring routine for yourself: something you will do on a schedule without being asked again. Use when the user asks to be reminded, to get a digest, or for anything repeating. Requires a cron expression — convert their words yourself (every day at 10am is `0 10 * * *`, weekday mornings at 8:40 is `40 8 * * 1-5`). Its answer goes to the user in KYBER Studio and on their phone, unless they name somewhere else to post it (a Buzz or Slack channel such as #dev, or their iMessage): then set deliver_to, and it goes there and only there. Never write where to post into the instruction.",
       inputSchema: {
         type: "object",
         properties: {
@@ -942,6 +977,15 @@ export function routineTools(options: ManageOptions = {}) {
             type: "string",
             description: "What to do each time. Write it as an instruction to yourself, with enough context to act on alone.",
           },
+          deliver_to: {
+            type: "object",
+            description: "Only when the user names where the answer should go. Leave it out for KYBER Studio and the phone.",
+            properties: {
+              surface: { type: "string", enum: [...DELIVERY_SURFACES], description: "studio (the default), buzz, slack or imessage" },
+              channel: { type: "string", description: "For buzz or slack: the channel, e.g. '#dev', or its id" },
+            },
+            required: ["surface"],
+          },
         },
         required: ["name", "cron", "instruction"],
       },
@@ -949,7 +993,10 @@ export function routineTools(options: ManageOptions = {}) {
        * `ctx` is the tool's context. Pass it: the routine then runs as the person
        * whose turn this is. Without it (an older tool file) it runs as the agent.
        */
-      execute: async (input: { name: string; cron: string; instruction: string }, ctx?: unknown) => {
+      execute: async (
+        input: { name: string; cron: string; instruction: string; deliver_to?: DeliverToInput },
+        ctx?: unknown,
+      ) => {
         const writable = writableRoot(appRoot);
         if (!writable.ok) throw new Error(writable.reason);
 
@@ -958,6 +1005,9 @@ export function routineTools(options: ManageOptions = {}) {
         if (existsSync(file)) {
           throw new Error(`A routine named "${slug}" already exists. Pick another name or delete it.`);
         }
+        const owner = routineOwner((ctx as { session?: { auth?: { current?: unknown } } } | undefined)?.session?.auth?.current, slug);
+        // Resolved before anything is written: "#dev" that is not a room is said now, not at 8am.
+        const delivery = await resolveRoutineDelivery(input.deliver_to, { appRoot, principalId: owner?.principalId, ...(options.buzzRunner ? { buzz: options.buzzRunner } : {}) });
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(
           file,
@@ -966,7 +1016,8 @@ export function routineTools(options: ManageOptions = {}) {
             cron: input.cron,
             instruction: input.instruction,
             manageChannelModule: manageModule,
-            owner: routineOwner((ctx as { session?: { auth?: { current?: unknown } } } | undefined)?.session?.auth?.current, slug),
+            owner,
+            delivery,
           }),
           "utf8",
         );
@@ -990,12 +1041,14 @@ export function routineTools(options: ManageOptions = {}) {
             name: slug,
             cron: input.cron,
             file: `agent/schedules/${slug}.ts`,
+            deliversTo: deliveryLabel(delivery),
             ...(nextRun ? { firstRun: nextRun } : {}),
             note: !options.restartCommand
               ? "Written. It needs a rebuild and restart to take effect."
               : missesFirst
                 ? `Written, but it goes live in about two minutes, after its first time (${soonest}) has passed, so it will not run then.${nextRun ? ` Its first run is ${nextRun}.` : " It will not run at all."} Tell the user plainly, and that Run it now on the card runs it straight away in the background.`
                 : "Written. It goes live in about two minutes, when I reload. Tell the user it is set and finish your reply now.",
+            ...(delivery ? { posts: `Each run's answer is posted in ${deliveryLabel(delivery)}, not in Studio. Say so.` } : {}),
           },
           card(
             "routine",
@@ -1003,6 +1056,7 @@ export function routineTools(options: ManageOptions = {}) {
               name: input.name.trim().slice(0, 120) || slug,
               schedule: describeCron(input.cron),
               ...(nextRun ? { nextRun } : {}),
+              posts: [deliveryLabel(delivery)],
               // The cron runs in host time; with it and the host's offset the apps say it in the reader's zone.
               cron: input.cron.trim(),
               offset: -new Date(nextRun ?? Date.now()).getTimezoneOffset(),
@@ -1016,7 +1070,8 @@ export function routineTools(options: ManageOptions = {}) {
                 // for an agent that does not serve that route (they fall back).
                 {
                   label: "Run it now",
-                  routine: slug,
+                  // A Slack or iMessage routine starts its turn on that channel, which only its schedule can do.
+                  ...(delivery && delivery.surface !== "buzz" ? {} : { routine: slug }),
                   say: `Run the "${slug}" routine now, as if it were its scheduled time.`,
                   primary: true,
                 },
@@ -1044,6 +1099,7 @@ export function routineTools(options: ManageOptions = {}) {
             return {
               name: f.replace(/\.ts$/, ""),
               cron: /cron:\s*"([^"]+)"/.exec(source)?.[1] ?? null,
+              deliversTo: deliversTo(source),
               // Both shapes: `markdown:` is the pre-0.8.4 form that discarded
               // its output, still on disk until a routine is recreated.
               instruction:
@@ -1084,6 +1140,13 @@ export function routineTools(options: ManageOptions = {}) {
 }
 
 export { readRoutine, routineOwner, routineSource, type RoutineOwner, type RoutineRun, type RoutineSourceInput } from "./routine-source.js";
+export {
+  deliveryLabel,
+  resolveRoutineDelivery,
+  settleRun,
+  type DeliverToInput,
+  type RoutineDelivery,
+} from "./routine-delivery.js";
 export { TicketStore, probeComputer, ticketFromUrl, type ComputerOptions } from "./computer.js";
 export { fileRoutes, resolveDelivery, deliveryHeaders, deliveryDir, type FilesOptions } from "./files.js";
 export {

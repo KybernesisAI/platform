@@ -1,6 +1,6 @@
 import { defineHook } from "eve/hooks";
 
-import { askingUser, notify, preview } from "../../src/index.js";
+import { askingUser, deliversToStudio, notify, preview } from "../../src/index.js";
 
 /**
  * Two moments a person wants to hear about: the agent parked on a question
@@ -12,9 +12,13 @@ import { askingUser, notify, preview } from "../../src/index.js";
  */
 const lastReply = new Map<string, string>();
 
+function attributesOf(ctx: unknown): Record<string, unknown> | undefined {
+  return (ctx as { session?: { auth?: { current?: { attributes?: Record<string, unknown> } } } })?.session?.auth?.current?.attributes;
+}
+
 /** The surface the client declared for this turn, when it did (see @kybernesis/enterprise). */
 function surfaceOf(ctx: unknown): string | undefined {
-  const attrs = (ctx as { session?: { auth?: { current?: { attributes?: Record<string, unknown> } } } })?.session?.auth?.current?.attributes;
+  const attrs = attributesOf(ctx);
   return typeof attrs?.surface === "string" ? attrs.surface : undefined;
 }
 
@@ -67,6 +71,10 @@ export default defineHook({
         // — mirrored onto the watch they are talking into — is noise. Questions
         // still push: those need the app to answer.
         if (surfaceOf(ctx) === "voice") return;
+        // A routine its owner told to post somewhere else (a Buzz or Slack
+        // channel, their iMessage) is read there. Ringing the phone for it as
+        // well is the noise they chose to avoid by naming the place.
+        if (!deliversToStudio(attributesOf(ctx))) return;
         const r = await notify({ ...s, user, sessionId, kind: "reply", body: preview(reply) });
         console.log(`[notify] reply for ${user.slice(0, 8)} → ${r.status}`);
       } catch {
