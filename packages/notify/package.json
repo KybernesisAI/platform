@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/notify",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Keep a person in the loop with their agent: a hook that rings their phone through the Kybernesis control plane when it parks on a question or finishes a reply, and a working_on_it tool that tells them it has started a long job.",
   "license": "Apache-2.0",
   "type": "module",

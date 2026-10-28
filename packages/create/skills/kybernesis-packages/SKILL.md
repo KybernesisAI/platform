@@ -87,7 +87,13 @@ then `eve add @kybernesis/<item>`). Each covers one axis:
   routine gets created from chat without anyone touching the repo. The registry
   item writes `create_routine`, `list_routines` and `delete_routine` into
   `agent/tools/` (sharing `agent/lib/routines.ts`, which reads the restart from
-  `agent/channels/kyb.ts`), so `kyb init --studio` agents have them. Since 0.11
+  `agent/channels/kyb.ts`), so `kyb init --studio` agents have them, and
+  `kyb upgrade` adds them to an older agent with manage and no create_routine.
+  A routine reports in its owner's Studio thread and rings their phone unless
+  the person names another place (0.32, `deliver_to`): a Buzz room (resolved
+  by name once, posted by manage through `kybernesis-buzz post`, buzz 0.18), a
+  Slack channel or their iMessage (the turn starts on that channel). Then it
+  goes there only, and notify 0.4.2 does not ring the phone. Since 0.11
   it also carries the owner's setup routes (`GET /eve/v1/kyb/setup`,
   `POST .../setup/env`, `POST .../setup/action`): a `manage` grant only;
   allowlisted env (`EXE_MODEL`, `EXE_LLM_URL`, `ANTHROPIC_API_KEY`,

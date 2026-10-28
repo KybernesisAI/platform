@@ -70,6 +70,16 @@ export function askingUser(ctx: HookLike | undefined): string | undefined {
 }
 
 
+/**
+ * Whether a finished turn's reply belongs in KYBER Studio and on the phone.
+ * True for everything but a routine whose owner named somewhere else for it
+ * to post (`delivery` on its principal, written by @kybernesis/manage).
+ */
+export function deliversToStudio(attributes: Record<string, unknown> | undefined): boolean {
+  const delivery = attributes?.delivery;
+  return typeof delivery !== "string" || delivery === "" || delivery === "studio";
+}
+
 /** One line of a message, for a lock screen. */
 export function preview(text: string, max = 140): string {
   const line = text.replace(/\s+/g, " ").trim();

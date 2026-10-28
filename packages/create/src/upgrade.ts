@@ -14,6 +14,7 @@ import { findMatchingAgentServiceUnit, repairManageRestart } from "./systemd.js"
 import { repairTerminalSandboxCleanupHooks } from "./sandbox-cleanup.js";
 import { repairExeClaudeRoute } from "./exe-claude-route.js";
 import { planStudioCore, repairStudioCore } from "./studio-core.js";
+import { repairRoutineTools } from "./routine-tools.js";
 import { repairOptInTools, repairRemovedDefaultTools as repairRemovedDefaultTools_ } from "./removed-default-tools.js";
 
 import { EVE_VERSION, REGISTRY_URL, bold, capture, dim, green, parseEnv, red, run, yellow } from "./util.js";
@@ -1286,7 +1287,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
     repairHostArtifacts(cwd, deps);
     repairEvalCommand(cwd);
     repairNotifySetup(cwd, deps);
-    const added = repairStudioCore(cwd, deps);
+    const added: unknown[] = [...repairStudioCore(cwd, deps), ...repairRoutineTools(cwd, deps)];
     repairReasoningSandboxes(cwd, deps);
     repairManageRestart(cwd, deps);
     repairExeClaudeRoutes(cwd, deps);
@@ -1391,6 +1392,7 @@ export async function upgrade(options: UpgradeOptions = {}): Promise<void> {
   repairEvalCommand(cwd);
   repairNotifySetup(cwd, deps);
   repairStudioCore(cwd, deps);
+  repairRoutineTools(cwd, deps);
   repairReasoningSandboxes(cwd, deps);
   repairManageRestart(cwd, deps);
   repairExeClaudeRoutes(cwd, deps);

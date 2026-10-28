@@ -422,6 +422,9 @@ test("upgrade on a current agent that already has them adds nothing and runs no 
   *"@kybernesis/magic/package.json"*) echo 0.1.0 ;;`,
   });
   try {
+    // It has the routine tools too (the manage item writes them).
+    mkdirSync(join(fix.dir, "agent/tools"), { recursive: true });
+    writeFileSync(join(fix.dir, "agent/tools/create_routine.ts"), "export default {};\n");
     const result = runUpgradeWithEval(fix);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const log = commandLog(fix);

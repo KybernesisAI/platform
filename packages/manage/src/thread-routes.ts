@@ -212,7 +212,7 @@ export function threadRoutes(input: ThreadRouteInput) {
             }
             const session = await from(runAddress(run.routine, owner)).send(run.instruction, {
               auth,
-              state: { kind: "run", owner, routine: run.routine },
+              state: { kind: "run", owner, routine: run.routine, ...(run.delivery ? { deliver: run.delivery } : {}) },
             } as never);
             return Response.json({ ok: true, sessionId: session.id, routine: run.routine });
           }),

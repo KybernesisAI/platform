@@ -8,6 +8,7 @@ import { asHexPubkey, loadKey, loadOrCreateKey, npubEncode } from "./keys.js";
 import * as profile from "./profile.js";
 import { nameFromDid, syncProfileFromName, type SyncOutcome } from "./agentid.js";
 import { resolveFace, syncProfile } from "./face.js";
+import { listChannels, postMessage } from "./outbound.js";
 
 /**
  * Setup and operation for an agent that lives in a workspace.
@@ -441,7 +442,36 @@ else if (command === "install-cli") {
     process.exit(1);
   });
 }
-else if (command === "id") {
+else if (command === "channels") {
+  // JSON on stdout, for the routine tools that resolve "#dev" to an id once.
+  listChannels()
+    .then((found) => {
+      const name = flag("name")?.trim().replace(/^#/, "").toLowerCase();
+      const channels = name ? found.channels.filter((c) => c.name.toLowerCase() === name) : found.channels;
+      console.log(JSON.stringify({ ...found, channels }));
+    })
+    .catch((error: Error) => {
+      console.error(error.message);
+      process.exit(1);
+    });
+} else if (command === "post") {
+  // The words come on stdin, so a newline is a newline and nothing is an argument.
+  const channel = flag("channel");
+  if (!channel) {
+    console.error("usage: kybernesis-buzz post --channel <id> [--relay <community>] < message");
+    process.exit(1);
+  }
+  let text = "";
+  process.stdin.on("data", (chunk) => (text += String(chunk)));
+  process.stdin.on("end", () => {
+    postMessage({ channel, text, relay: flag("relay") })
+      .then((out) => console.log(out || "posted"))
+      .catch((error: Error) => {
+        console.error(error.message);
+        process.exit(1);
+      });
+  });
+} else if (command === "id") {
   const hex = asHexPubkey(process.argv[3]);
   if (!hex) {
     console.error("usage: kybernesis-buzz id <npub… or 64-char hex>");
@@ -458,6 +488,8 @@ else if (command === "id") {
     run               run the bridge
     service [path]    print (or write) a systemd unit for it
     id <npub|hex>     show a public key in both forms
+    channels [--name n]  list the rooms this agent can post in, as JSON
+    post --channel id [--relay r]  post stdin into a room, as this agent
 
   Environment:
 
