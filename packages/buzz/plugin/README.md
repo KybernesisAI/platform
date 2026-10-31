@@ -25,8 +25,9 @@ Settings → Plugins → Manage plugins, enter `KybernesisAI/platform` (Buzz rea
 sign-in), pick **Kybernesis cards**, and install. A folder works too: Load from folder and choose
 `release/`. `release/` is committed so either way installs without a build.
 
-`release/` also carries `README.md` and `icon.png` from `assets/`, which Buzz shows on its Plugins
-screen.
+`release/` also carries `README.md` and `icon.png` from `assets/`. Buzz (checked against
+block/buzz-app at 662e918) shows a README and an icon only for its bundled plugins, so neither
+appears for this one yet; they stay in `release/` for when Buzz does.
 
 ## Build
 
@@ -40,18 +41,13 @@ Buzz lends its own React (`ctx.react`); the build points `react` and `react/jsx-
 `src/react.ts` and `src/jsx-runtime.ts`, which bind to it in `apply`. The build refuses any output
 that is not one self-contained module.
 
-## Sign
+## Unsigned on purpose
 
-A signed release names its publisher in Buzz, and only that publisher can ship updates. The
-publisher is Kybernesis, not a person, so `scripts/sign.mjs` signs with a key kept in the
-publishing Mac's Keychain (`ai.kybernesis.buzz-plugin-publisher`) instead of `buzzodz plugin sign`,
-which can only use the Buzz identity of whoever is signed in. It writes the same NIP-PS pair
-Buzz's tool writes; the artifact is byte-identical to buzz-app's own.
+Releases ship unsigned, like the community plugins. Buzz shows a signed external plugin's
+publisher as its raw public key in the Plugins list, in its own column, which squeezes the name
+and description; an unsigned one gets the name and the description only.
 
-```sh
-npm run sign -- --create-key   # once, on the publishing Mac
-npm run build && npm run sign  # every release; commit release/ including the two signed files
-```
-
-`npm run build` empties `release/`, so a signature never outlives its build. Losing the key ends
-updates under this publisher (everyone would reinstall), so keep a copy of it somewhere safe.
+Switching between signed and unsigned counts as a change of publisher in Buzz: Update refuses,
+and each person removes the plugin and installs it again, once. Don't sign a release again without
+deciding that for everyone. (The last signed release, publisher `ffe9508b…3eb9`, is in git
+history with its signing script.)

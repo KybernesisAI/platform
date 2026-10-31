@@ -45,8 +45,7 @@ export default defineConfig({
         }
         if (!main.exports.includes("apply")) throw new Error("Export apply(ctx)");
         this.emitFile({ type: "asset", fileName: "manifest.json", source: JSON.stringify(manifest, null, 2) });
-        // What Buzz's Plugins screen shows. Signing covers these bytes too, and a
-        // rebuild empties release/, so a stale signature never survives a build.
+        // Carried with the release for Buzz's Plugins screen.
         for (const name of ["README.md", "icon.png"]) {
           this.emitFile({ type: "asset", fileName: name, source: readFileSync(here(`./assets/${name}`)) });
         }
