@@ -1,6 +1,6 @@
 import { installComputerUse, startComputerUse } from "eve/computer-use/sandbox";
 import type { SandboxSession } from "eve/sandbox";
-import { installChrome, installDesktopShell, isBakedComputer, startDesktopShell } from "./provider.js";
+import { hasCurrentInstall, hasEarlierInstall, installChrome, installDesktopShell, markCurrentInstall, startDesktopShell } from "./provider.js";
 
 /**
  * Everything the computer needs, once, at `eve build`: eve's desktop stack,
@@ -8,14 +8,27 @@ import { installChrome, installDesktopShell, isBakedComputer, startDesktopShell 
  * so the shared screen shows a real desktop from the moment the build ends,
  * not a black display waiting for the first session to open the sandbox.
  *
- * A computer started from a current bake (see `bakeComputerImage`) already
- * has all three installed, so it only starts the desktop.
+ * A computer started from a current bake (see `bakeComputerImage`), or one an
+ * earlier build already installed for the same bake key, has all three, so it
+ * only starts the desktop. Installing on every build made every restart depend
+ * on outside package servers: on 2026-10-31 Mozilla stopped listing the Firefox
+ * ESR line eve's installer requires, and an agent whose computer was already
+ * complete could not rebuild and stayed down. For the same reason a failed
+ * install on a computer that an earlier prepare finished is a warning, not a
+ * failed build: the stack already there keeps working.
  */
 export async function prepareComputer(sandbox: SandboxSession): Promise<void> {
-  if (!(await isBakedComputer(sandbox))) {
-    await installComputerUse(sandbox);
-    await installChrome(sandbox);
-    await installDesktopShell(sandbox);
+  if (!(await hasCurrentInstall(sandbox))) {
+    try {
+      await installComputerUse(sandbox);
+      await installChrome(sandbox);
+      await installDesktopShell(sandbox);
+      await markCurrentInstall(sandbox);
+    } catch (error) {
+      if (!(await hasEarlierInstall(sandbox))) throw error;
+      const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      console.warn(`computer: install failed, keeping the stack an earlier build installed (${reason})`);
+    }
   }
   await startComputer(sandbox);
 }

@@ -166,7 +166,7 @@ function recipeHash(): string {
 // Kept in step with package.json by a test. Not read from package.json at run
 // time: eve bundles the agent's modules, so a relative require of
 // "../package.json" resolves inside eve's build output and throws.
-export const COMPUTER_VERSION = "0.4.1";
+export const COMPUTER_VERSION = "0.4.2";
 
 /** Identifies what a bake contains: this package's prepare and eve's computer-use stack. */
 export function bakeKey(): string {
@@ -181,9 +181,29 @@ export function bakedImageTag(): string {
 /** @internal Present on a computer started from a current bake. */
 export const BAKED_MARKER = () => `${PREPARED_MARKER_DIR}/baked-${bakeKey()}`;
 
+/** @internal Present on a computer whose own `prepare` already installed the current stack. */
+export const INSTALLED_MARKER = () => `${PREPARED_MARKER_DIR}/installed-${bakeKey()}`;
+
 /** @internal Whether this computer came from a bake that matches the installed packages. */
 export async function isBakedComputer(sandbox: SandboxSession): Promise<boolean> {
   const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()}` });
+  return result.exitCode === 0;
+}
+
+/** @internal Whether the current stack is already on this computer, from a bake or an earlier build. */
+export async function hasCurrentInstall(sandbox: SandboxSession): Promise<boolean> {
+  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()} || test -f ${INSTALLED_MARKER()}` });
+  return result.exitCode === 0;
+}
+
+/** @internal Record that `prepare` installed the current stack, so the next build does not install it again. */
+export async function markCurrentInstall(sandbox: SandboxSession): Promise<void> {
+  await sandbox.run({ command: `sudo -n mkdir -p ${PREPARED_MARKER_DIR} && sudo -n touch ${INSTALLED_MARKER()}` });
+}
+
+/** @internal Whether any earlier `prepare` finished on this computer, whatever version it installed. */
+export async function hasEarlierInstall(sandbox: SandboxSession): Promise<boolean> {
+  const result = await sandbox.run({ command: `test -f ${PREPARED_MARKER}` });
   return result.exitCode === 0;
 }
 
