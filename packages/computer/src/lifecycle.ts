@@ -16,11 +16,14 @@ import { hasCurrentInstall, hasEarlierInstall, installChrome, installDesktopShel
  * complete could not rebuild and stayed down. For the same reason a failed
  * install on a computer that an earlier prepare finished is a warning, not a
  * failed build: the stack already there keeps working.
+ *
+ * eve's installer is run without its Firefox step (see `withoutFirefox`), so a
+ * brand-new computer no longer depends on Mozilla listing one ESR line.
  */
 export async function prepareComputer(sandbox: SandboxSession): Promise<void> {
   if (!(await hasCurrentInstall(sandbox))) {
     try {
-      await installComputerUse(sandbox);
+      await installComputerUse(withoutFirefox(sandbox));
       await installChrome(sandbox);
       await installDesktopShell(sandbox);
       await markCurrentInstall(sandbox);
@@ -73,4 +76,47 @@ export function computerUpCommand(sandbox: Pick<SandboxSession, "resolvePath">):
     `COMPUTER_USE_REQUEST='{"action":"health"}' COMPUTER_USE_SOCKET_PATH='${root}/cua-driver.sock' node '${driverRoot}/client.mjs' >/dev/null 2>&1 || exit 1`,
     "exit 0",
   ].join("\n");
+}
+
+/** The script eve's `installComputerUse` writes into the computer and then runs. */
+const INSTALL_SCRIPT = /install-computer-use\.sh$/;
+
+/**
+ * eve's computer-use install script without its Firefox ESR steps: Mozilla's
+ * apt repository, the check that it lists the 140 line, and the install.
+ *
+ * On 2026-10-31 Mozilla stopped listing Firefox ESR 140 (only 153 remains), so
+ * eve's installer exits before anything else is installed and every brand-new
+ * computer failed `eve build`. This computer never keeps Firefox: `installChrome`
+ * removes it right after, and every page opens in Chrome. So nothing is lost by
+ * not installing it, and the build stops depending on that repository at all.
+ *
+ * A script that does not have the expected shape (a later eve) is returned as
+ * it is, so this can only ever remove the Firefox steps, never break the rest.
+ *
+ * @internal Exported for tests.
+ */
+export function stripFirefoxInstall(script: string): string {
+  const repository = /install -d -m 0755 \/etc\/apt\/keyrings\n[\s\S]*?FIREFOX_ESR_VERSION="[^\n]*\nif \[\[ -z "\$\{FIREFOX_ESR_VERSION\}" \]\]; then\n[^\n]*\n[^\n]*\nfi\n/;
+  const install = /DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\\n\s*"firefox-esr=\$\{FIREFOX_ESR_VERSION\}"\napt-get clean\n/;
+  if (!repository.test(script) || !install.test(script)) return script;
+  return script.replace(repository, "").replace(install, "");
+}
+
+/** @internal The sandbox as eve's installer sees it: the same, except the install script it writes has no Firefox steps. */
+export function withoutFirefox(sandbox: SandboxSession): SandboxSession {
+  return new Proxy(sandbox, {
+    get(target, property) {
+      if (property === "writeTextFile") {
+        return (input: Parameters<SandboxSession["writeTextFile"]>[0]) =>
+          target.writeTextFile(
+            INSTALL_SCRIPT.test(input.path) && typeof input.content === "string"
+              ? { ...input, content: stripFirefoxInstall(input.content) }
+              : input,
+          );
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
