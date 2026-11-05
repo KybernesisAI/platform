@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { computerUpCommand, prepareComputer, startComputer } from "../dist/lifecycle.js";
+import { computerUpCommand, prepareComputer, startComputer, stripFirefoxInstall } from "../dist/lifecycle.js";
 
 const sandbox = (upExit) => {
   const commands = [];
@@ -89,4 +89,44 @@ test("a failed install keeps a computer an earlier prepare finished, and still s
 test("a failed install on a computer that was never prepared fails the build", async () => {
   const box = preparing({ installExit: 1 });
   await assert.rejects(prepareComputer(box), /computer-use installation failed/);
+});
+
+// eve's own install script, captured from its real installComputerUse.
+const eveInstallScript = async () => {
+  const { installComputerUse } = await import("eve/computer-use/sandbox");
+  let script;
+  await installComputerUse({
+    resolvePath: (path) => `/workspace/${path}`,
+    writeTextFile: async ({ path, content }) => { if (path.endsWith("install-computer-use.sh")) script = content; },
+    run: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+  });
+  return script;
+};
+
+test("eve's install script loses its Firefox steps and keeps everything else", async () => {
+  const original = await eveInstallScript();
+  assert.match(original, /firefox-esr=/, "eve's script still installs Firefox; if not, this fix can go");
+  const stripped = stripFirefoxInstall(original);
+  assert.doesNotMatch(stripped, /packages\.mozilla\.org/);
+  assert.doesNotMatch(stripped, /FIREFOX_ESR_VERSION/);
+  assert.doesNotMatch(stripped, /firefox-esr=/);
+  for (const kept of ["apt-get update", "xfce4", "xdotool", "xvfb", "GeistMono", "Colloid", "managed xdg-open", "npm install --prefix"]) {
+    assert.ok(stripped.includes(kept), `kept ${kept}`);
+  }
+});
+
+test("a script of another shape is left exactly as it is", () => {
+  const other = "#!/usr/bin/env bash\napt-get install -y firefox-esr\n";
+  assert.equal(stripFirefoxInstall(other), other);
+});
+
+test("prepare hands eve's installer a computer that writes the script without Firefox", async () => {
+  const written = [];
+  const box = preparing();
+  box.writeTextFile = async ({ path, content }) => { written.push({ path, content }); };
+  await prepareComputer(box);
+  const script = written.find((file) => file.path.endsWith("install-computer-use.sh"));
+  assert.ok(script, "eve wrote its install script");
+  assert.doesNotMatch(script.content, /firefox-esr=/);
+  assert.ok(written.some((file) => !file.path.endsWith("install-computer-use.sh")), "the driver files are written as they are");
 });
