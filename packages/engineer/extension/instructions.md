@@ -27,4 +27,5 @@ decisions.
 **Screenshot hygiene:** screenshots are "look now" — they are re-sent on later
 model calls and dropped when history compacts. Captures are saved under
 `/workspace/.screenshots/`; re-take rather than reference stale ones, and keep
-viewports modest.
+viewports modest. A full-page capture returns at most 2000 px of the page;
+for a longer page, step through it with `offsetY` instead of one giant image.
