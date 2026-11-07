@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/connectors",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Connector tools for an eve agent, resolved per user from the Kybernesis control plane.",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,5 +35,10 @@
     "@types/node": "^22.10.2",
     "eve": "0.81.1",
     "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/connectors"
   }
 }

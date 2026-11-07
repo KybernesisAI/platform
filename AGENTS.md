@@ -90,19 +90,31 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
 
 1. Edit here → `npm run build` (root) → per-package `npm run typecheck`.
 2. Bump the package version.
-3. Publish. Ian publishes from his machine with browser 2FA (`ianborders`
-   publishes new versions; only the **kybernesis** account can create new
-   packages in the @kybernesis scope). Agents never publish: hand him the exact
-   command, never with `--otp`. `scripts/prepublish.mjs` rebuilds `dist/` (it is not in git, so a stale one shipped manage 0.13.0 without its routes) and refuses a version
+3. Merge. Merging a version bump to `master` IS the release:
+   `.github/workflows/publish.yml` runs `scripts/release.mjs` on every push
+   (build, eve-line check, typecheck, tests, then every version npm lacks in
+   dependency order, `latest` plus the `eve-<line>` tag, catching up any line
+   tag left behind). A push to `maint/eve-<line>` publishes under that line's
+   tag only. Nobody types a publish command and nobody holds an npm token:
+   each package trusts that workflow on npmjs.com (Trusted Publishing, OIDC,
+   provenance on every version). npm binds the trust to the file name
+   `publish.yml` and the GitHub environment `npm`; renaming either stops every
+   publish. Every package's `repository.url` must point at this repo or npm
+   refuses the provenance. Check the run in the Actions tab; its summary lists
+   what went out. `scripts/prepublish.mjs` rebuilds `dist/` (not in git; a
+   stale one shipped manage 0.13.0 without its routes) and refuses a version
    already on npm. The packument shows about a minute before the tarball, so
-   poll the tarball URL before deploying a consumer. The command to hand him
-   is always the same, however many packages moved:
-   `cd ~/platform && npm run release` (`scripts/release.mjs`: clean master,
-   `npm ci`, build, eve-line check, then publishes every version npm lacks in
-   dependency order, tags each `eve-<line>`, then waits up to 10 minutes for
-   the tarballs and only warns about a slow one, never stops; a
-   brand-new package is skipped unless signed in as kybernesis, so he reruns
-   it under that account). `npm run release -- --dry-run` lists what would go.
+   poll the tarball URL before deploying a consumer.
+   **A brand-new package** is the one thing CI cannot do: only the
+   **kybernesis** npm account can create a package in the scope, so CI skips it
+   with a warning. Its first publish runs from Ian's Mac as kybernesis
+   (`cd ~/platform && npm run release`, browser 2FA, never `--otp`), then
+   add the trusted publisher: `node scripts/trust-publisher.mjs @kybernesis/<new>`
+   copies arcana's (GitHub Actions, `KybernesisAI` / `platform` / `publish.yml` /
+   environment `npm`, allow publish and allow npm dist-tag; `npm trust` alone
+   cannot grant the dist-tag permission), or fill the same values on its
+   npmjs.com settings page. A new trusted publisher expires unless a
+   publish uses it within 2 days, so bump the package right after.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
    + regenerate `registry/r/<item>.json` (content-embedded copy) + the catalog
    `registry/r/registry.json` + `registry/index.html`, run

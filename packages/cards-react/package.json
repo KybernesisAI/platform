@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/cards-react",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "React components that draw Kybernesis cards: one frame and one body per card type, themed by CSS variables, with the host's own way to open links, artifacts and files.",
   "license": "Apache-2.0",
   "type": "module",
