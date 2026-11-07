@@ -109,9 +109,11 @@ Kybernesis. Eve is the plumbing; this repo is the ecosystem/moat.
    **kybernesis** npm account can create a package in the scope, so CI skips it
    with a warning. Its first publish runs from Ian's Mac as kybernesis
    (`cd ~/platform && npm run release`, browser 2FA, never `--otp`), then
-   add the trusted publisher on its npmjs.com settings page (GitHub Actions,
-   `KybernesisAI` / `platform` / `publish.yml` / environment `npm`, allow
-   publish and allow npm dist-tag). A new trusted publisher expires unless a
+   add the trusted publisher: `node scripts/trust-publisher.mjs @kybernesis/<new>`
+   copies arcana's (GitHub Actions, `KybernesisAI` / `platform` / `publish.yml` /
+   environment `npm`, allow publish and allow npm dist-tag; `npm trust` alone
+   cannot grant the dist-tag permission), or fill the same values on its
+   npmjs.com settings page. A new trusted publisher expires unless a
    publish uses it within 2 days, so bump the package right after.
 4. If install-time files changed, update the matching `registry/registry/*.ts`
    + regenerate `registry/r/<item>.json` (content-embedded copy) + the catalog
