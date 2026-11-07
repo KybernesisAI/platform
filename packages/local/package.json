@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/local",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Let a deployed eve agent work on the user's own machine, through KYBER Studio.",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,5 +32,10 @@
     "@types/node": "^22.10.2",
     "eve": "0.81.1",
     "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/local"
   }
 }

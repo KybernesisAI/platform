@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/manage",
-  "version": "0.32.0",
+  "version": "0.32.1",
   "description": "Let KYBER Studio install capabilities and write schedules onto a running eve agent.",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,5 +37,10 @@
     "@types/node": "^22.10.2",
     "eve": "0.81.1",
     "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KybernesisAI/platform.git",
+    "directory": "packages/manage"
   }
 }

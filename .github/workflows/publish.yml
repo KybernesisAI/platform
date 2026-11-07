@@ -1,0 +1,57 @@
+# Publishes every @kybernesis package whose version npm does not have yet.
+#
+# Merging a version bump to master IS the release: this runs scripts/release.mjs,
+# which builds, checks the eve line, typechecks, tests, publishes in dependency
+# order and moves `latest` plus the eve-line tag. A push to maint/eve-<line>
+# publishes that line's patches under its own tag and never touches `latest`
+# (the maint branch needs this file merged forward to do so).
+#
+# There is no npm token. Each package trusts this workflow on npmjs.com (Trusted
+# Publishing): GitHub mints a short-lived OIDC identity per run, npm exchanges it
+# for a publish credential, and every version gets a provenance statement.
+# npm binds that trust to this file's NAME (publish.yml) and the `npm`
+# environment. Renaming either breaks publishing for every package.
+#
+# Pushes that bump nothing finish in seconds ("Nothing to release").
+name: Publish
+
+on:
+  push:
+    branches: [master, "maint/eve-*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only list what would be published
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # the OIDC identity npm trusts
+
+# One release at a time per branch, in push order; never cancel a run that may
+# be halfway through publishing.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          # No cache in a release build: what ships is built from a clean install.
+
+      # Trusted publishing needs npm 11.5.1+, and moving a dist-tag with it 11.21.0+.
+      - name: npm with trusted publishing and dist-tags
+        run: npm install -g npm@^11.21.0 && npm --version
+
+      - name: Release
+        run: node scripts/release.mjs ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
