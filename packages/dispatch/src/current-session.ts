@@ -52,13 +52,41 @@ export function recordCurrentSession(input: CurrentSession, appRoot?: string): v
   }
 }
 
+/** Local Eve run metadata is the deployment discriminator; caller identity is not. */
+function localRun(sessionId: string, appRoot?: string): Record<string, unknown> | undefined {
+  // The id comes from a request or pointer file, never allow it to escape runs/.
+  if (!/^wrun_[a-zA-Z0-9_-]+$/.test(sessionId)) return undefined;
+  const root = appRoot ?? process.env.EVE_APP_DIR ?? process.cwd();
+  try {
+    const raw = JSON.parse(readFileSync(join(root, ".eve", ".workflow-data", "runs", `${sessionId}.json`), "utf8")) as unknown;
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? raw as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Only a locally recorded production run may become the routine's conversation. */
+export function shouldRecordCurrentSession(sessionId: string, appRoot?: string): boolean {
+  if (process.env.EVE_DEV === "1" || process.env.EVE_EVALUATION === "1") return false;
+  const run = localRun(sessionId, appRoot);
+  return typeof run?.deploymentId === "string" && /^dpl_local@.+$/.test(run.deploymentId) &&
+    (run.status === "pending" || run.status === "running");
+}
+
+/** An explicitly terminal local run is not an addressable conversation. */
+function terminalSession(sessionId: string, appRoot?: string): boolean {
+  const status = localRun(sessionId, appRoot)?.status;
+  return status === "cancelled" || status === "completed" || status === "failed";
+}
+
 /** Read the pointer, or undefined when there has never been a turn. */
 export function readCurrentSession(appRoot?: string): CurrentSession | undefined {
   try {
     const raw = JSON.parse(readFileSync(currentSessionFile(appRoot), "utf8")) as unknown;
     if (typeof raw !== "object" || raw === null) return undefined;
     const o = raw as Record<string, unknown>;
-    if (typeof o.sessionId !== "string" || o.sessionId === "") return undefined;
+    if (typeof o.sessionId !== "string" || o.sessionId === "" || terminalSession(o.sessionId, appRoot)) return undefined;
     return {
       sessionId: o.sessionId,
       ...(typeof o.principalId === "string" ? { principalId: o.principalId } : {}),

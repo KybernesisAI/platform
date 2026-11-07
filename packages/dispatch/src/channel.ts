@@ -1,6 +1,6 @@
 import { defaultEveAuth, eveChannel } from "eve/channels/eve";
 import { withCallbackBase } from "./callback-base.js";
-import { recordCurrentSession } from "./current-session.js";
+import { recordCurrentSession, shouldRecordCurrentSession } from "./current-session.js";
 import {
   localDev,
   placeholderAuth,
@@ -8,6 +8,20 @@ import {
   vercelSubject,
   type VercelSubjectEnvironment,
 } from "eve/channels/auth";
+
+/** Observe an inbound turn without changing Eve's default authentication. */
+export function dispatchOnMessage(ctx: Parameters<typeof defaultEveAuth>[0]): { auth: ReturnType<typeof defaultEveAuth> } {
+  const id = ctx.eve.sessionId;
+  if (typeof id === "string" && id !== "" && shouldRecordCurrentSession(id)) {
+    const principal = ctx.eve.caller?.principalId;
+    recordCurrentSession({
+      sessionId: id,
+      ...(typeof principal === "string" ? { principalId: principal } : {}),
+      at: new Date().toISOString(),
+    });
+  }
+  return { auth: defaultEveAuth(ctx) };
+}
 
 /**
  * A peer deployment allowed to call this agent, named by its Vercel identity.
@@ -139,18 +153,7 @@ export function dispatchChannel(options: DispatchChannelOptions) {
     //
     // `defaultEveAuth` is returned unchanged: this observes, it must never
     // change who a turn runs as.
-    onMessage: (ctx) => {
-      const id = ctx.eve.sessionId;
-      if (typeof id === "string" && id !== "") {
-        const principal = ctx.eve.caller?.principalId;
-        recordCurrentSession({
-          sessionId: id,
-          ...(typeof principal === "string" ? { principalId: principal } : {}),
-          at: new Date().toISOString(),
-        });
-      }
-      return { auth: defaultEveAuth(ctx) };
-    },
+    onMessage: dispatchOnMessage,
     auth: [
       // Verifies which deployment is calling: this project's own tokens are
       // always accepted; other projects only when enumerated as peers.
