@@ -34,19 +34,34 @@ function storeWith(id = "session-original", streamIndex = 4) {
   return store;
 }
 
-function eventResponse(id, events) {
+// eve 1.0: a send hands back a delivery, and the delivery's stream is that request's events.
+function eventResponse(id, events, deliveryId = "d1") {
   return {
     sessionId: id,
-    async *[Symbol.asyncIterator]() {
+    deliveryId,
+    async *stream() {
       yield* events;
     },
   };
 }
 
+/** A delivery whose stream says nothing until the caller aborts it. */
+function stallingDelivery(id, { clean = true } = {}) {
+  return {
+    sessionId: id,
+    deliveryId: "d1",
+    stream: ({ signal }) => abortingStall(signal, { clean })[Symbol.asyncIterator](),
+  };
+}
+
+const reply = (value) => ({ type: "content.completed", data: { kind: "text", phase: "reply", value } });
+const narration = (value) => ({ type: "content.completed", data: { kind: "text", phase: "narration", value } });
+
 function completedEvents(message = "ok") {
   return [
-    { type: "message.completed", data: { finishReason: "stop", message } },
-    { type: "session.completed", data: {} },
+    reply(message),
+    { type: "turn.settled", data: { turnId: "t", outcome: "completed" } },
+    { type: "delivery.settled", data: { deliveryId: "d1", outcome: "handled", turnId: "t" } },
   ];
 }
 
@@ -200,7 +215,7 @@ test("clean response iterator completion after abort is still reported as timeou
       attach(id) {
         return attachedSession(id, async (_message, options) => {
           responseSignal = options.signal;
-          return { sessionId: id, ...abortingStall(options.signal, { clean: true }) };
+          return stallingDelivery(id);
         });
       },
       async create() { assert.fail("must preserve the existing session"); },
@@ -223,13 +238,13 @@ test("progress resets inactivity for a turn lasting more than 45 minutes", async
   let responseStarted = false;
   const response = {
     sessionId: "session-original",
-    async *[Symbol.asyncIterator]() {
+    deliveryId: "d1",
+    async *stream() {
       responseStarted = true;
       for (let index = 0; index < 12; index += 1) {
         yield await new Promise((resolve) => pending.push(resolve));
       }
-      yield { type: "message.completed", data: { finishReason: "stop", message: "long answer" } };
-      yield { type: "session.completed", data: {} };
+      yield* completedEvents("long answer");
     },
   };
   const client = {
@@ -244,7 +259,7 @@ test("progress resets inactivity for a turn lasting more than 45 minutes", async
   await waitFor(() => responseStarted && pending.length > 0);
   for (let index = 0; index < 12; index += 1) {
     t.mock.timers.tick(4 * 60_000);
-    pending.shift()({ type: "step.completed", data: { stepIndex: index } });
+    pending.shift()({ type: "model.settled", data: { runId: `r${index}`, outcome: "completed" } });
     await waitFor(() => index === 11 || pending.length > 0);
   }
 
@@ -277,7 +292,7 @@ test("fresh create acknowledgement and response silence are independently bounde
       async create(options) {
         responseSignal = options.signal;
         return {
-          response: { sessionId: "new", ...abortingStall(options.signal, { clean: true }) },
+          delivery: stallingDelivery("new"),
           session: { state: { sessionId: "new", streamIndex: 0 } },
         };
       },
@@ -353,7 +368,7 @@ test("an explicit Eve 404 replaces the stale session", async () => {
       async create(input) {
         createdInput = input;
         return {
-          response: eventResponse("session-new", completedEvents("new reply")),
+          delivery: eventResponse("session-new", completedEvents("new reply")),
           session: { state: { sessionId: "session-new", streamIndex: 1 } },
         };
       },
@@ -371,17 +386,19 @@ test("an explicit Eve 404 replaces the stale session", async () => {
 
 test("collector preserves final-message, failed, and waiting HITL semantics", async () => {
   const request = {
-    action: { callId: "call", input: {}, kind: "tool-call", toolName: "ask_question" },
+    requestId: "request",
     kind: "question",
     prompt: "Continue?",
-    requestId: "request",
+    action: { toolName: "ask_question", input: {} },
   };
   const store = storeWith();
   const events = [
-    { type: "message.completed", data: { finishReason: "tool-calls", message: "not final" } },
-    { type: "input.requested", data: { requests: [request] } },
-    { type: "message.completed", data: { finishReason: "stop", message: "latest" } },
-    { type: "session.waiting", data: {} },
+    narration("not final"),
+    { type: "call.requested", data: { callId: "call", owner: { turnId: "t" }, capability: { kind: "tool", name: "ask_question" }, input: {} } },
+    { type: "interaction.opened", data: { interactionId: "request", subject: { callId: "call" }, request: { kind: "question", prompt: "Continue?" } } },
+    reply("latest"),
+    { type: "turn.paused", data: { turnId: "t", awaiting: [{ interactionId: "request" }] } },
+    { type: "delivery.settled", data: { deliveryId: "d1", outcome: "awaiting-input", turnId: "t" } },
   ];
   const client = { sessions: { attach: (id) => ({
     state: { sessionId: id, streamIndex: 9 },
@@ -401,7 +418,10 @@ test("collector preserves final-message, failed, and waiting HITL semantics", as
 
   const failedStore = storeWith();
   const failedClient = { sessions: { attach: (id) => attachedSession(id, async () =>
-    eventResponse(id, [{ type: "session.failed", data: {} }])) } };
+    eventResponse(id, [
+      { type: "turn.settled", data: { turnId: "t", outcome: "failed", error: { code: "model_error", message: "boom" } } },
+      { type: "delivery.settled", data: { deliveryId: "d1", outcome: "failed", turnId: "t" } },
+    ])) } };
   assert.equal((await answerTurn(failedClient, failedStore, "channel", "question", "relay")).status, "failed");
 });
 
@@ -409,10 +429,10 @@ test("the outcome carries the cards the turn's tools handed back, as the apps re
   const stats = { kyb: 1, card: "stats", title: "This week", data: { tiles: [{ label: "Visitors", value: "12,480" }] } };
   const events = [
     { type: "turn.started", data: { turnId: "turn-1" } },
-    { type: "actions.requested", data: { turnId: "turn-1", actions: [{ callId: "c1", kind: "tool-call", toolName: "show", input: {} }] } },
-    { type: "action.result", data: { status: "completed", result: { callId: "c1", toolName: "show", output: { ok: true, kyb: stats } } } },
-    { type: "message.completed", data: { finishReason: "stop", message: "Here is the week." } },
-    { type: "session.waiting", data: {} },
+    { type: "call.requested", data: { callId: "c1", owner: { turnId: "turn-1" }, capability: { kind: "tool", name: "show" }, input: {} }, scope: { turnId: "turn-1" } },
+    { type: "call.settled", data: { callId: "c1", outcome: "completed", output: { ok: true, kyb: stats } }, scope: { turnId: "turn-1" } },
+    { ...reply("Here is the week."), scope: { turnId: "turn-1" } },
+    { type: "turn.settled", data: { turnId: "turn-1", outcome: "completed" } },
   ];
   const client = { sessions: { attach: (id) => ({
     state: { sessionId: id, streamIndex: 0 },
@@ -485,7 +505,8 @@ test("a quiet response stream outlives the silence bound while the agent works, 
       attach(id) {
         return attachedSession(id, async () => ({
           sessionId: id,
-          async *[Symbol.asyncIterator]() {
+          deliveryId: "d1",
+          async *stream() {
             await new Promise((r) => setTimeout(r, 300));
             yield* completedEvents("done after a quiet stretch");
           },
@@ -505,9 +526,10 @@ test("the work ceiling still bounds a response stream that never speaks again", 
       attach(id) {
         // A stream that never yields again, but ends when the caller aborts,
         // as the eve client's does.
-        return attachedSession(id, async (_message, { signal }) => ({
+        return attachedSession(id, async () => ({
           sessionId: id,
-          async *[Symbol.asyncIterator]() {
+          deliveryId: "d1",
+          async *stream({ signal }) {
             await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
           },
         }));
@@ -522,91 +544,72 @@ test("the work ceiling still bounds a response stream that never speaks again", 
   assert.equal(store.get("relay", "channel").id, "session-original");
 });
 
-test("a boundary from an earlier turn does not end this one: the bridge follows the session until its own turn ends", async () => {
-  // The send ends a still-running earlier turn. Its session.waiting is the
-  // first event on the wire, before this turn's turn.started, and the
-  // client's send stream stops there. The bridge must keep following the
-  // session and answer from THIS turn.
+test("events of another turn inside the delivery's window are not this turn's answer", async () => {
+  // A message that cancels a still-running turn: that turn settles inside
+  // this delivery's window, with its own text. Only this delivery's turn counts.
   const store = storeWith();
-  const logs = [];
-  const followed = [];
-  let cursor = 5;
   const client = {
     sessions: {
       attach(id) {
-        return {
-          state: { sessionId: id, get streamIndex() { return cursor; } },
-          stream: async function* ({ follow, startIndex }) {
-            if (!follow) return; // nothing unread before the send
-            followed.push(startIndex);
-            cursor += 4;
-            yield { type: "turn.started", data: { turnId: "turn_9" } };
-            yield { type: "message.appended", data: { delta: "work" } };
-            yield { type: "message.completed", data: { finishReason: "stop", message: "the real answer" } };
-            yield { type: "session.waiting", data: { turnId: "turn_9" } };
-          },
-          send: async () => ({
-            sessionId: id,
-            async *[Symbol.asyncIterator]() {
-              cursor += 1;
-              yield { type: "session.waiting", data: { turnId: "turn_8" } }; // the cancelled earlier turn
-            },
-          }),
-        };
+        return attachedSession(id, async () => eventResponse(id, [
+          { type: "delivery.admitted", data: { deliveryId: "d1" } },
+          { ...reply("the old turn's text"), scope: { turnId: "turn_8" } },
+          { type: "turn.settled", data: { turnId: "turn_8", outcome: "cancelled" } },
+          { type: "delivery.consumed", data: { deliveryId: "d1", turnId: "turn_9", parts: [{ kind: "text", text: "again" }] } },
+          { ...reply("the real answer"), scope: { turnId: "turn_9" } },
+          { type: "turn.settled", data: { turnId: "turn_9", outcome: "completed" } },
+          { type: "delivery.settled", data: { deliveryId: "d1", outcome: "handled", turnId: "turn_9" } },
+        ]));
       },
       async create() { throw new Error("must not create"); },
     },
   };
-  const result = await answerTurn(client, store, "channel", "again", "relay", (m) => logs.push(m));
+  const result = await answerTurn(client, store, "channel", "again", "relay");
   assert.equal(result.message, "the real answer");
-  assert.equal(result.status, "waiting");
-  assert.deepEqual(followed, [6], "followed from the cursor after the stale boundary");
-  assert.equal(store.get("relay", "channel").streamIndex, 10);
-  assert.ok(logs.some((m) => m.includes("earlier turn's boundary")));
+  assert.equal(result.status, "completed");
 });
 
-test("a stream that starts this turn and ends at its own boundary needs no continuation", async () => {
+test("the read stops at this delivery's settlement, without following the session", async () => {
   const store = storeWith();
-  let followed = 0;
+  let readPast = false;
   const client = {
     sessions: {
       attach(id) {
-        return {
-          state: { sessionId: id, streamIndex: 5 },
-          stream: async function* ({ follow }) { if (follow) followed += 1; },
-          send: async () => ({
-            sessionId: id,
-            async *[Symbol.asyncIterator]() {
-              yield { type: "turn.started", data: { turnId: "turn_1" } };
-              yield { type: "message.completed", data: { finishReason: "stop", message: "direct" } };
-              yield { type: "session.waiting", data: { turnId: "turn_1" } };
-            },
-          }),
-        };
+        return attachedSession(id, async () => ({
+          sessionId: id,
+          deliveryId: "d1",
+          async *stream() {
+            yield reply("direct");
+            yield { type: "delivery.settled", data: { deliveryId: "d1", outcome: "handled" } };
+            readPast = true;
+            await new Promise(() => {});
+          },
+        }));
       },
       async create() { throw new Error("must not create"); },
     },
   };
   const result = await answerTurn(client, store, "channel", "hi", "relay");
   assert.equal(result.message, "direct");
-  assert.equal(followed, 0);
+  assert.equal(readPast, false);
 });
 
-test("eve 0.81: a question held inside a tool ends the send as waiting, without following the open turn", async () => {
+test("a question held inside a tool ends the send as waiting, without following the open turn", async () => {
   const request = {
-    action: { callId: "c1", input: {}, kind: "tool-call", toolName: "approve_spend_request" },
+    requestId: "wrun_1-ask-1",
     kind: "question",
     prompt: "Approve the purchase?",
-    requestId: "wrun_1-ask-1",
+    action: { toolName: "approve_spend_request", input: {} },
   };
   const store = storeWith();
   let readPastHold = false;
   const events = (async function* () {
     yield { type: "turn.started", data: { turnId: "t" } };
-    yield { type: "message.completed", data: { finishReason: "stop", message: "I've put the purchase in front of you." } };
-    yield { type: "turn.waiting", data: { on: "tasks", turnId: "t" } };
-    yield { type: "input.requested", data: { requests: [request] } };
-    yield { type: "turn.waiting", data: { on: "input", turnId: "t" } };
+    yield reply("I've put the purchase in front of you.");
+    yield { type: "call.requested", data: { callId: "c1", owner: { turnId: "t" }, capability: { kind: "tool", name: "approve_spend_request" }, input: {} } };
+    yield { type: "interaction.opened", data: { interactionId: "wrun_1-ask-1", subject: { callId: "c1" }, request: { kind: "question", prompt: "Approve the purchase?" } } };
+    yield { type: "turn.paused", data: { turnId: "t", awaiting: [{ interactionId: "wrun_1-ask-1" }] } };
+    yield { type: "delivery.settled", data: { deliveryId: "d1", outcome: "awaiting-input", turnId: "t" } };
     // The turn is held open: nothing more comes until someone answers.
     readPastHold = true;
     await new Promise(() => {});
@@ -614,7 +617,7 @@ test("eve 0.81: a question held inside a tool ends the send as waiting, without 
   const client = { sessions: { attach: (id) => ({
     state: { sessionId: id, streamIndex: 9 },
     async *stream() {},
-    async send() { return { sessionId: id, [Symbol.asyncIterator]: () => events }; },
+    async send() { return { sessionId: id, deliveryId: "d1", stream: () => events }; },
   }) } };
 
   const outcome = await answerTurn(client, store, "channel", "buy it", "relay");
@@ -624,16 +627,16 @@ test("eve 0.81: a question held inside a tool ends the send as waiting, without 
   assert.equal(readPastHold, false);
 });
 
-test("eve 0.81: a turn held for its tasks is read on to the final reply", async () => {
+test("a turn held for its tasks is read on to the final reply", async () => {
   const store = storeWith();
   const events = [
     { type: "turn.started", data: { turnId: "t" } },
-    { type: "message.completed", data: { finishReason: "stop", message: "I've asked the researcher." } },
-    { type: "turn.waiting", data: { on: "tasks", turnId: "t" } },
-    { type: "task.settled", data: { callId: "c1", kind: "agent", name: "researcher", status: "completed", output: "Three." } },
-    { type: "message.completed", data: { finishReason: "stop", message: "The researcher found three." } },
-    { type: "turn.completed", data: { turnId: "t" } },
-    { type: "session.waiting", data: {} },
+    reply("I've asked the researcher."),
+    { type: "task.started", data: { taskId: "k1", startedBy: { callId: "c1" }, kind: "agent", name: "researcher" } },
+    { type: "task.ended", data: { taskId: "k1", outcome: "completed" } },
+    reply("The researcher found three."),
+    { type: "turn.settled", data: { turnId: "t", outcome: "completed" } },
+    { type: "delivery.settled", data: { deliveryId: "d1", outcome: "handled", turnId: "t" } },
   ];
   const client = { sessions: { attach: (id) => attachedSession(id, async () => eventResponse(id, events)) } };
   const outcome = await answerTurn(client, store, "channel", "how many?", "relay");

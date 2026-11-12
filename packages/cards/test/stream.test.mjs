@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   newStepState,
   openedRequests,
+  noteCall,
   readStep,
   replyText,
   settledRequestIds,
@@ -68,9 +69,26 @@ test("v27: the reply, the pause, the request and the end read the same as v26", 
   assert.deepEqual(events.map(replyText).filter(Boolean), ["Sent."]);
   assert.equal(events.filter(waitsOnPerson).length, 1);
   const opened = events.flatMap(openedRequests);
-  assert.deepEqual(opened, [{ id: "i1", kind: "approval", prompt: "Send it?", options: [{ id: "approve", label: "Approve" }, { id: "deny", label: "Deny" }], allowFreeform: false }]);
+  assert.deepEqual(opened, [{ id: "i1", requestId: "i1", kind: "approval", prompt: "Send it?", options: [{ id: "approve", label: "Approve" }, { id: "deny", label: "Deny" }], allowFreeform: false }]);
   assert.deepEqual(events.flatMap(settledRequestIds), ["i1"]);
   assert.deepEqual(events.map(turnEnd).filter(Boolean), ["completed"]);
+});
+
+test("a v27 approval names the tool its call requested, as a v26 one did", () => {
+  const calls = new Map();
+  const requested = { type: "call.requested", data: { callId: "c1", capability: { kind: "tool", name: "gmail__send_email" }, input: { to: "a@example.com" } } };
+  noteCall(calls, requested);
+  const opened = openedRequests(
+    { type: "interaction.opened", data: { interactionId: "i9", subject: { callId: "c1" }, request: { kind: "approval", prompt: "Send it?", options: [{ id: "approve", label: "Approve", style: "primary" }] } } },
+    calls,
+  );
+  assert.deepEqual(opened[0].action, { toolName: "gmail__send_email", input: { to: "a@example.com" } });
+  assert.equal(opened[0].options[0].style, "primary");
+  const relayed = openedRequests({
+    type: "interaction.opened",
+    data: { interactionId: "i10", subject: { callId: "c2" }, request: { kind: "approval", prompt: "Ok?" }, origin: { sessionId: "s2", interactionId: "i3", call: { callId: "x", name: "notion__create_page", input: { title: "T" } } } },
+  });
+  assert.deepEqual(relayed[0].action, { toolName: "notion__create_page", input: { title: "T" } });
 });
 
 test("v26 events still read", () => {

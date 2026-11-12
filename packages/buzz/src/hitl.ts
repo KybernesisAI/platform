@@ -1,11 +1,4 @@
-import {
-  parseInputResponses,
-  resolveTextToResponses,
-  type ClientSession,
-  type InputRequest,
-  type InputResponse,
-  type MessageStreamEvent,
-} from "eve/client";
+import type { ClientSession } from "eve/client";
 import {
   askFrom,
   askText,
@@ -13,15 +6,31 @@ import {
   hiddenAsk,
   hiddenSettled,
   newStepState,
+  noteCall,
+  openedRequests,
   readStep,
+  replyText,
   settledLine,
+  settledRequestIds,
+  turnEnd,
   settleWith,
   type Ask,
   type AskAnswer,
   type AskPerson,
   type AskSettled,
+  type CallNames,
   type Card,
+  type StreamEvent,
 } from "@kybernesis/cards";
+import {
+  cursorAfter,
+  inputRequestFrom,
+  parseInputResponses,
+  resolveTextToResponses,
+  toEveAnswers,
+  type InputRequest,
+  type InputResponse,
+} from "./eve-input.js";
 import type { StoredAsker, StoredPrompt, StoredSession } from "./sessions.js";
 import { failureFromEvent, silentTurnReply, type TurnFailure } from "./turn.js";
 
@@ -229,7 +238,7 @@ export function invalidInputReply(requests: readonly InputRequest[]): string {
  * Submit a matched reply without consuming its response stream.
  *
  * No `clientContext`: the turn already carries the channel from when it
- * started, and eve 0.81 treats context on a respond as new turn input. It then
+ * started, and eve 0.81 treated context on a respond as new turn input. It then
  * runs one more model step after the agent's reply, with the agent's message
  * last, which models that refuse prefill reject. The turn fails and the whole
  * conversation ends, on an approve, a decline or an answer alike.
@@ -238,9 +247,7 @@ export async function respondToPendingConversation(
   session: Pick<ClientSession, "respond">,
   responses: readonly InputResponse[],
 ): Promise<void> {
-  await session.respond(responses, {
-    streamReconnectPolicy: { reconnect: false },
-  });
+  await session.respond(toEveAnswers(responses), { reconnect: false });
 }
 
 /**
@@ -347,8 +354,11 @@ export async function followPendingConversation(
   let streamIndex = initial.streamIndex;
   let completedMessage = "";
   let steps = newStepState();
+  const calls: CallNames = new Map();
   /** Failures since the last answer. A declined call is the person's choice, not one. */
   let failures: TurnFailure[] = [];
+  /** Requests opened in this line, posted together once the line's last event is read. */
+  let opened: InputRequest[] = [];
 
   /** Tell the room, then stop supervising: a failed run will not come back. */
   const failThenClear = async () => {
@@ -364,83 +374,92 @@ export async function followPendingConversation(
   };
 
   const publishThenClear = async () => {
-    // Do not persist past message.completed/turn.completed until publication
-    // succeeds. If this callback throws or the process dies, recovery replays
-    // the unpublished output from the last safe cursor.
+    // Do not persist past the reply until publication succeeds. If this
+    // callback throws or the process dies, recovery replays the unpublished
+    // output from the last safe cursor.
     const cards = cardsOf(steps.steps.values());
     if (completedMessage.trim() || cards.length) await callbacks.onMessage(completedMessage, cards);
     state = withoutSupervision(state);
     await persist();
   };
 
-  for await (const event of session.stream({
+  for await (const raw of session.stream({
     follow: true,
     startIndex: initial.streamIndex,
     signal,
   })) {
     if (signal.aborted) return;
-    const streamEvent = event as MessageStreamEvent;
-    // ClientSession updates its public cursor only when the async iterator
-    // closes; count yielded durable events so crash recovery can persist while
-    // the follower is still open.
-    streamIndex += 1;
-    readStep(steps, streamEvent.type, streamEvent.data);
-    const declined = streamEvent.type === "action.result" && (streamEvent.data as { status?: unknown }).status === "rejected";
-    const failure = declined ? null : failureFromEvent(streamEvent as { type: string; data?: unknown });
+    const event = raw as unknown as StreamEvent;
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    // eve 1.0 counts stored lines; the cursor stays on a line still being read.
+    // Persisted only at boundaries, so it never passes unpublished output.
+    streamIndex = cursorAfter(event, streamIndex);
+    noteCall(calls, event);
+    readStep(steps, event.type, event.data, event.meta, event.scope);
+    const declined = event.type === "call.settled" ? data.outcome === "rejected" : event.type === "action.result" && data.status === "rejected";
+    const failure = declined ? null : failureFromEvent(event, calls);
     if (failure) failures.push(failure);
 
-    switch (streamEvent.type) {
-      case "input.requested":
+    const asked = openedRequests(event, calls).map(inputRequestFrom);
+    if (asked.length) {
+      if (!opened.length) {
         completedMessage = "";
         steps = newStepState();
         failures = [];
-        state = withPending(state, streamEvent.data.requests);
-        // Keep the durable cursor before the prompt until Buzz accepts it for
-        // relay delivery; a reconnect can then replay and render the request.
-        await callbacks.onInputRequested(streamEvent.data.requests);
-        await persist();
-        break;
-      case "input.resolved": {
-        const resolved = new Set(streamEvent.data.resolutions.map((resolution) => resolution.requestId));
-        const remaining = state.pendingInputRequests?.filter((request) => !resolved.has(request.requestId)) ?? [];
-        state = remaining.length > 0 ? withPending(state, remaining) : withResumeInFlight(state);
-        await persist();
-        break;
       }
-      case "message.completed":
-        // A resumed turn can end more than one step with prose (the answer, then a wrap-up line).
-        // The room gets the whole turn, not whichever message happened to come last.
-        if (streamEvent.data.finishReason !== "tool-calls" && streamEvent.data.message) {
-          completedMessage = completedMessage
-            ? `${completedMessage}\n\n${streamEvent.data.message}`
-            : streamEvent.data.message;
-        }
-        // The durable cursor remains before unpublished output. A restarted
-        // follower may replay this event safely because it is the sole publisher.
-        break;
-      case "turn.completed":
-      case "session.waiting":
-        if (!state.pendingInputRequests?.length) {
-          await publishThenClear();
-          return;
-        }
-        await persist();
-        break;
-      case "turn.failed":
-      case "session.failed":
-        await failThenClear();
-        return;
-      case "turn.cancelled":
-      case "session.completed":
-        state = withoutSupervision(state);
-        await persist();
-        return;
-      default:
-        // Replaying progress events after a crash has no outward side effect.
-        // Persist semantic boundaries rather than writing the session file for
-        // every token delta.
-        break;
+      opened.push(...asked);
     }
+    // Several questions can open in one line: post them together, once.
+    if (opened.length && event.meta?.endOfLine !== false) {
+      const requests = [...(state.pendingInputRequests ?? []), ...opened];
+      opened = [];
+      state = withPending(state, requests);
+      // Keep the durable cursor before the prompt until Buzz accepts it for
+      // relay delivery; a reconnect can then replay and render the request.
+      await callbacks.onInputRequested(requests);
+      await persist();
+      continue;
+    }
+
+    const resolved = new Set(settledRequestIds(event));
+    if (resolved.size) {
+      const remaining = state.pendingInputRequests?.filter((request) => !resolved.has(request.requestId)) ?? [];
+      state = remaining.length > 0 ? withPending(state, remaining) : withResumeInFlight(state);
+      await persist();
+      continue;
+    }
+
+    const reply = replyText(event);
+    if (reply) {
+      // A resumed turn can end more than one step with prose (the answer, then a wrap-up line).
+      // The room gets the whole turn, not whichever message happened to come last.
+      completedMessage = completedMessage ? `${completedMessage}\n\n${reply}` : reply;
+      // The durable cursor remains before unpublished output. A restarted
+      // follower may replay this event safely because it is the sole publisher.
+      continue;
+    }
+
+    const ended = turnEnd(event);
+    if (ended === "completed" || event.type === "session.waiting") {
+      if (!state.pendingInputRequests?.length) {
+        await publishThenClear();
+        return;
+      }
+      await persist();
+      continue;
+    }
+    if (ended === "failed" || event.type === "session.failed" || (event.type === "session.ended" && data.outcome === "failed")) {
+      await failThenClear();
+      return;
+    }
+    if (ended === "cancelled" || event.type === "session.completed" || event.type === "session.ended") {
+      state = withoutSupervision(state);
+      await persist();
+      return;
+    }
+    // Replaying progress events after a crash has no outward side effect.
+    // Persist semantic boundaries rather than writing the session file for
+    // every token delta.
   }
 
   /**

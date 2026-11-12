@@ -1,14 +1,29 @@
 import {
   ClientError,
-  createDataUrlFilePart,
+  ClientSessionStrandedError,
   type Client,
-  type InputRequest,
-  type MessageResponse,
-  type MessageResult,
-  type MessageStreamEvent,
+  type ClientSession,
+  type CreatedClientSession,
+  type MessagePart,
   type SendTurnInput,
- type CreatedClientSession } from "eve/client";
-import { cardsOf, newStepState, progressGate, progressNotes, readStep, type Card } from "@kybernesis/cards";
+  type SessionStreamEvent,
+} from "eve/client";
+import {
+  cardsOf,
+  newStepState,
+  noteCall,
+  openedRequests,
+  progressGate,
+  progressNotes,
+  readStep,
+  replyText,
+  settledRequestIds,
+  turnIdOf,
+  type CallNames,
+  type Card,
+  type StreamEvent,
+} from "@kybernesis/cards";
+import { inputRequestFrom, type InputRequest } from "./eve-input.js";
 import { isImage, type FetchedMedia, type MediaRef } from "./media.js";
 import { SessionStore } from "./sessions.js";
 
@@ -105,10 +120,16 @@ export type TurnFailure =
  */
 export type ProgressListener = (text: string) => void;
 
+/** The receipt eve hands back for one accepted message. */
+type Delivery = Awaited<ReturnType<ClientSession["send"]>>;
+
+/** How a turn's request ended: answered, waiting on a person, or failed. */
+export type TurnStatus = "completed" | "waiting" | "failed";
+
 /** Everything the bridge needs to decide how one eve turn should be rendered. */
 export interface TurnOutcome {
   message: string;
-  status: MessageResult["status"];
+  status: TurnStatus;
   inputRequests: readonly InputRequest[];
   sessionId: string;
   streamIndex: number;
@@ -120,14 +141,33 @@ export interface TurnOutcome {
 
 const clip = (text: unknown, max = 200): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
-/** Read a failure out of one stream event, or nothing when the event is not one. */
-export function failureFromEvent(event: { type: string; data?: unknown }): TurnFailure | null {
+/**
+ * Read a failure out of one stream event, or nothing when the event is not one.
+ *
+ * eve 1.0 settles a call with only its id, so pass the calls seen so far
+ * (`noteCall`) for the failure to name its tool. eve 0.81 events are read too.
+ */
+export function failureFromEvent(event: { type: string; data?: unknown }, calls?: CallNames): TurnFailure | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
+  const error = (data.error ?? {}) as Record<string, unknown>;
+  if (event.type === "call.settled") {
+    if (data.outcome !== "failed" && data.outcome !== "rejected") return null;
+    const output = typeof data.output === "string" ? data.output : data.output !== undefined ? JSON.stringify(data.output) : "";
+    const name = typeof data.callId === "string" ? calls?.get(data.callId)?.name : undefined;
+    return { kind: "tool", toolName: name ?? "a tool", message: clip(error.message ?? (output || data.outcome)) };
+  }
+  if (event.type === "model.settled") {
+    if (data.outcome !== "failed") return null;
+    return { kind: "model", code: String(error.code ?? "model.failed"), message: clip(error.message) };
+  }
+  if (event.type === "turn.settled") {
+    if (data.outcome !== "failed") return null;
+    return { kind: "model", code: String(error.code ?? "turn.failed"), message: clip(error.message) };
+  }
   if (event.type === "action.result") {
     const result = (data.result ?? {}) as Record<string, unknown>;
     const failed = data.status === "failed" || data.status === "rejected" || result.isError === true;
     if (!failed) return null;
-    const error = (data.error ?? {}) as Record<string, unknown>;
     const output = typeof result.output === "string" ? result.output : result.output !== undefined ? JSON.stringify(result.output) : "";
     return {
       kind: "tool",
@@ -190,18 +230,16 @@ export async function composeMessage(
   log: (message: string) => void = () => {},
 ): Promise<TurnMessage> {
   if (attachments.length === 0) return text;
+  const dataUrl = (bytes: Uint8Array, mediaType: string) => `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
 
-  const parts: Exclude<TurnMessage, string> = [];
+  const parts: MessagePart[] = [];
   if (text) parts.push({ type: "text", text });
 
   for (const ref of attachments) {
     try {
       const media = await fetchAttachment(ref);
       if (isImage(media.mediaType)) {
-        parts.push(createDataUrlFilePart({
-          bytes: media.bytes,
-          mediaType: media.mediaType,
-        }));
+        parts.push({ type: "file", data: dataUrl(media.bytes, media.mediaType), mediaType: media.mediaType });
       } else {
         parts.push({
           type: "text",
@@ -252,7 +290,7 @@ function silenceWatchdog(timeouts: AgentTimeouts): SilenceWatchdog {
 }
 
 async function drainUnread(
-  stream: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
+  stream: (signal: AbortSignal) => AsyncIterable<SessionStreamEvent>,
   timeouts: AgentTimeouts,
 ): Promise<number> {
   const watchdog = silenceWatchdog(timeouts);
@@ -276,72 +314,43 @@ async function drainUnread(
   }
 }
 
-const isTurnBoundary = (type: string): boolean =>
-  type === "session.waiting" || type === "session.completed" || type === "session.failed";
-
 /**
- * eve ≥0.69 no longer ends a turn at a question or sign-in from inside a tool:
- * it emits `turn.waiting` with `on: "input"` and holds the turn open, and the
- * answer resumes that same turn. For the bridge that is where this send stops,
- * as `session.waiting` did before, with the questions to relay. eve's own
- * `result()` stops at the same event. `on: "tasks"` is not a stop: delegated
- * work is running and the reply is still to come.
+ * Read one request's events, from the line that admitted it to the line that
+ * settled it.
+ *
+ * eve 1.0 hands every send a delivery whose stream is exactly that, so the
+ * stale-tail problem 0.81 had (a send's stream opening on the previous turn's
+ * boundary and reading it as the answer) is gone by construction. Events of
+ * another turn can still sit inside the window, such as the turn this message
+ * cancelled settling: only events of this delivery's own turn count.
  */
-const isHeldForInput = (event: { type: string; data?: unknown }): boolean =>
-  event.type === "turn.waiting" && (event.data as { on?: unknown } | undefined)?.on === "input";
-
-async function collectResponse(
-  response: MessageResponse,
+async function collectDelivery(
+  delivery: Delivery,
   watchdog: SilenceWatchdog,
   phase: AgentSilencePhase,
   streamIndex: () => number,
-  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
   onProgress?: ProgressListener,
 ): Promise<TurnOutcome> {
   const freshNote = progressGate();
+  const calls: CallNames = new Map();
   let message = "";
-  let status: MessageResult["status"] = "completed";
+  let status: TurnStatus = "completed";
   let inputRequests: InputRequest[] = [];
-  let failures: TurnFailure[] = [];
-  let steps = newStepState();
-  let sawTurnStart = false;
-  let endedAtOwnBoundary = false;
-  let staleBoundaryFirst = false;
-  let seen = 0;
+  const failures: TurnFailure[] = [];
+  const steps = newStepState();
+  let ownTurn: string | undefined;
 
-  /**
-   * One event of this turn, or of the turn before it.
-   *
-   * The client ends a send's stream at the first session boundary after the
-   * cursor. When the send itself ends an earlier, still-running turn (a person
-   * asks again while a twenty-minute delegation is under way), that earlier
-   * turn's `session.waiting` is the first thing on the wire, before this
-   * turn's `turn.started`. Read as ours it made an empty answer, and the
-   * abandoned stream then closed the request, which cancelled the real turn
-   * five minutes into its work. So: nothing counts until this turn has
-   * started, and a boundary only ends the collection once it has.
-   */
-  const consume = (event: MessageStreamEvent): boolean => {
-    watchdog.arm(phase);
-    seen += 1;
-    // A boundary as the very first event, before anything of this turn, is the
-    // earlier turn's. Anything else is treated as ours (a stream without
-    // turn.started still answers as before).
-    if (seen === 1 && isTurnBoundary(event.type) && !sawTurnStart) staleBoundaryFirst = true;
-    if (event.type === "turn.started") {
-      sawTurnStart = true;
-      message = "";
-      status = "completed";
-      inputRequests = [];
-      failures = [];
-      steps = newStepState();
-      return false;
-    }
-    readStep(steps, event.type, event.data);
-    // Not before this turn has started when the stream opened on an earlier one's tail.
-    if (onProgress && (sawTurnStart || !staleBoundaryFirst)) {
-      for (const note of progressNotes(event.type, event.data)) {
+  let settledOwn = false;
+  /** Events of some turn, read before this delivery named its own: kept until it does. */
+  let early: StreamEvent[] = [];
+
+  const take = (event: StreamEvent): void => {
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    noteCall(calls, event);
+    readStep(steps, event.type, event.data, event.meta, event.scope);
+    if (onProgress) {
+      for (const note of progressNotes(event.type, event.data, event.scope)) {
         if (!freshNote(note)) continue;
         try {
           onProgress(note.text);
@@ -350,53 +359,70 @@ async function collectResponse(
         }
       }
     }
-    const failure = failureFromEvent(event as { type: string; data?: unknown });
+    const failure = failureFromEvent(event, calls);
     if (failure) failures.push(failure);
-    if (event.type === "message.completed" && event.data.finishReason !== "tool-calls") {
-      message = event.data.message ?? "";
-    } else if (event.type === "input.requested") {
-      inputRequests.push(...event.data.requests);
-    } else if (event.type === "session.waiting" || isHeldForInput(event)) {
-      status = "waiting";
-    } else if (event.type === "session.failed") {
-      status = "failed";
-    } else if (event.type === "session.completed") {
-      status = "completed";
+    // The last answer the turn gave, as before: a turn held for its tasks says
+    // "I've asked the researcher", then the answer once the task reports.
+    const reply = replyText(event);
+    if (reply?.trim()) message = reply;
+    inputRequests.push(...openedRequests(event, calls).map(inputRequestFrom));
+    const settled = new Set(settledRequestIds(event));
+    if (settled.size) inputRequests = inputRequests.filter((r) => !settled.has(r.requestId));
+    if (event.type === "turn.settled" && data.outcome === "failed") status = "failed";
+    if (event.type === "session.ended") status = data.outcome === "failed" ? "failed" : "completed";
+  };
+
+  const learnTurn = (turnId: string) => {
+    if (ownTurn) return;
+    ownTurn = turnId;
+    const kept = early.filter((e) => turnIdOf(e) === turnId);
+    early = [];
+    for (const e of kept) take(e);
+  };
+
+  const consume = (raw: SessionStreamEvent): void => {
+    watchdog.arm(phase);
+    const event = raw as unknown as StreamEvent;
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    if (event.type === "delivery.consumed" && data.deliveryId === delivery.deliveryId && typeof data.turnId === "string") {
+      learnTurn(data.turnId);
+      return;
     }
-    const ends = isTurnBoundary(event.type) || isHeldForInput(event);
-    if (ends && !staleBoundaryFirst) {
-      endedAtOwnBoundary = true;
-      return true;
+    if (event.type === "delivery.settled" && data.deliveryId === delivery.deliveryId) {
+      if (typeof data.turnId === "string") learnTurn(data.turnId);
+      status = data.outcome === "awaiting-input" ? "waiting" : data.outcome === "failed" || data.outcome === "refused" ? "failed" : "completed";
+      settledOwn = true;
+      return;
     }
-    if (ends && staleBoundaryFirst && sawTurnStart) {
-      endedAtOwnBoundary = true;
-      return true;
+    const turn = turnIdOf(event);
+    if (turn && !ownTurn) {
+      early.push(event);
+      return;
     }
-    return false;
+    if (turn && turn !== ownTurn) return;
+    take(event);
   };
 
   watchdog.arm(phase);
   try {
     try {
-      for await (const event of response) {
-        if (consume(event)) break;
-      }
-      if (staleBoundaryFirst && !endedAtOwnBoundary && continueStream) {
-        log("the stream ended on an earlier turn's boundary before this turn started; following the session until this turn ends");
-        for await (const event of continueStream(watchdog.signal)) {
-          if (consume(event)) break;
-        }
+      for await (const event of delivery.stream({ signal: watchdog.signal })) {
+        consume(event);
+        // The settlement's whole line is read, then this request is done.
+        if (settledOwn && (event as { meta?: { endOfLine?: boolean } }).meta?.endOfLine !== false) break;
       }
     } catch (error) {
       watchdog.throwIfTimedOut();
       throw error;
     }
     watchdog.throwIfTimedOut();
+    // A stream that never named this delivery's turn: what it read is all there is.
+    if (!ownTurn) for (const e of early.splice(0)) take(e);
     return {
       message,
       status,
       inputRequests,
-      sessionId: response.sessionId,
+      sessionId: delivery.sessionId,
       streamIndex: streamIndex(),
       failures,
       cards: cardsOf(steps.steps.values()),
@@ -407,25 +433,24 @@ async function collectResponse(
 }
 
 async function sendExisting(
-  responsePromise: (signal: AbortSignal) => Promise<MessageResponse>,
+  send: (signal: AbortSignal) => Promise<Delivery>,
   streamIndex: () => number,
   timeouts: AgentTimeouts,
-  continueStream?: (signal: AbortSignal) => AsyncIterable<MessageStreamEvent>,
   log: (message: string) => void = () => {},
   onProgress?: ProgressListener,
 ): Promise<TurnOutcome> {
   const watchdog = silenceWatchdog(timeouts);
   watchdog.arm("send acknowledgement");
   try {
-    let response: MessageResponse;
+    let delivery: Delivery;
     try {
-      response = await responsePromise(watchdog.signal);
+      delivery = await send(watchdog.signal);
     } catch (error) {
       watchdog.throwIfTimedOut();
       throw error;
     }
     watchdog.throwIfTimedOut();
-    return await collectResponse(response, watchdog, "response stream", streamIndex, continueStream, log, onProgress);
+    return await collectDelivery(delivery, watchdog, "response stream", streamIndex, log, onProgress);
   } finally {
     watchdog.dispose();
   }
@@ -463,7 +488,7 @@ export async function answerTurn(
   const existing = sessions.get(community, channel);
   if (existing) {
     try {
-      // attach() is local in eve 0.49 and performs no network I/O.
+      // attach() is local and performs no network I/O.
       const session = client.sessions.attach(existing.id, { streamIndex: existing.streamIndex });
 
       /**
@@ -502,7 +527,6 @@ export async function answerTurn(
         }),
         () => session.state.streamIndex,
         intervalMs,
-        (signal) => session.stream({ follow: true, startIndex: session.state.streamIndex, signal }),
         log,
         onProgress,
       );
@@ -543,12 +567,11 @@ export async function answerTurn(
       throw error;
     }
     watchdog.throwIfTimedOut();
-    const result = await collectResponse(
-      created.response,
+    const result = await collectDelivery(
+      created.delivery,
       watchdog,
       "create response stream",
       () => created.session.state.streamIndex,
-      (signal) => created.session.stream({ follow: true, startIndex: created.session.state.streamIndex, signal }),
       log,
       onProgress,
     );
@@ -579,7 +602,11 @@ export async function answerTurn(
  * until someone edited the store by hand.
  */
 export function isSessionGone(error: unknown): boolean {
+  // An eve upgrade strands every conversation the old version ran (409
+  // session_stranded): it can never take another turn, so start over.
+  if (ClientSessionStrandedError.is(error)) return true;
   if (!(error instanceof ClientError)) return false;
+  if (error.status === 409 && error.code === "session_stranded") return true;
   // 410 session_expired, "Session history is no longer available.": a run that
   // ended (a failed turn ends the session) can no longer be read. Seen on
   // 2026-10-24 when the next message in a channel failed instead of starting over.

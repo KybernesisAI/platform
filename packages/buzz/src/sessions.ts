@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AskSettled } from "@kybernesis/cards";
-import type { InputRequest } from "eve/client";
+import type { InputRequest } from "./eve-input.js";
 
 /** The person whose message raised a question: their chat key, account and name. */
 export interface StoredAsker {

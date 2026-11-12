@@ -85,10 +85,12 @@ export {
   waitsOnPerson,
   sessionSettled,
   openedRequests,
+  noteCall,
   settledRequestIds,
   toAnswers,
   type StreamEvent,
   type TurnEnd,
   type OpenRequest,
+  type CallNames,
   type Answer,
 } from "./stream.js";

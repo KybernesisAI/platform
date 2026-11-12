@@ -180,32 +180,70 @@ export function sessionSettled(event: StreamEvent): boolean {
 export interface OpenRequest {
   /** v27 `interactionId`, v26 `requestId`: what an answer names. */
   id: string;
+  /** Same as `id`, under the name the card format and older clients read. */
+  requestId: string;
+  /** v26 kinds (`tool-approval`, `question`, ...) or v27 kinds (`approval`, `question`, `sign-in`, `budget`). */
   kind: string;
   prompt: string;
-  options: { id: string; label: string }[];
+  options: { id: string; label: string; description?: string; style?: string }[];
   allowFreeform: boolean;
+  /** The tool an approval asks about, when the stream named it. */
+  action?: { toolName: string; input?: unknown };
   /** v27 only: the child session's request this one relays. */
   origin?: unknown;
 }
 
-/** Requests for a person that this event opens (v27 `interaction.opened`, v26 `input.requested`). */
-export function openedRequests(event: StreamEvent): OpenRequest[] {
+/** The tool calls a stream has requested so far, by call id: what an approval asks about. */
+export type CallNames = Map<string, { name: string; input?: unknown }>;
+
+/** Note the tool a v27 `call.requested` names, so a later approval can say which tool it is for. */
+export function noteCall(calls: CallNames, event: StreamEvent): void {
+  if (event.type !== "call.requested") return;
+  const data = isObj(event.data) ? event.data : {};
+  const callId = str(data.callId);
+  const capability = isObj(data.capability) ? data.capability : {};
+  const name = str(capability.name);
+  if (callId && name) calls.set(callId, { name, ...(data.input !== undefined ? { input: data.input } : {}) });
+}
+
+/**
+ * Requests for a person that this event opens (v27 `interaction.opened`, v26
+ * `input.requested`). Pass the calls seen so far (`noteCall`) so a v27
+ * approval names its tool, as a v26 one did.
+ */
+export function openedRequests(event: StreamEvent, calls?: CallNames): OpenRequest[] {
   const data = isObj(event.data) ? event.data : {};
   const options = (raw: unknown): OpenRequest["options"] =>
     Array.isArray(raw)
-      ? raw.filter(isObj).map((o) => ({ id: str(o.id) ?? "", label: str(o.label) ?? str(o.id) ?? "" })).filter((o) => o.id)
+      ? raw
+          .filter(isObj)
+          .map((o) => ({
+            id: str(o.id) ?? "",
+            label: str(o.label) ?? str(o.id) ?? "",
+            ...(str(o.description) ? { description: str(o.description) } : {}),
+            ...(str(o.style) ? { style: str(o.style) } : {}),
+          }))
+          .filter((o) => o.id)
       : [];
   if (event.type === "interaction.opened") {
     const request = isObj(data.request) ? data.request : {};
     const id = str(data.interactionId);
     if (!id) return [];
+    const subject = isObj(data.subject) ? data.subject : {};
+    const origin = isObj(data.origin) ? data.origin : undefined;
+    const originCall = origin && isObj(origin.call) ? origin.call : undefined;
+    const subjectCall = str(subject.callId) && calls instanceof Map ? calls.get(str(subject.callId)!) : undefined;
+    const toolName = str(originCall?.name) ?? subjectCall?.name;
+    const input = originCall ? originCall.input : subjectCall?.input;
     return [
       {
         id,
+        requestId: id,
         kind: str(request.kind) ?? "question",
         prompt: str(request.prompt) ?? "",
         options: options(request.options),
         allowFreeform: request.allowFreeform === true,
+        ...(toolName ? { action: { toolName, ...(input !== undefined ? { input } : {}) } } : {}),
         ...(data.origin !== undefined ? { origin: data.origin } : {}),
       },
     ];
@@ -214,13 +252,17 @@ export function openedRequests(event: StreamEvent): OpenRequest[] {
     return data.requests.filter(isObj).flatMap((r) => {
       const id = str(r.requestId);
       if (!id) return [];
+      const action = isObj(r.action) ? r.action : undefined;
+      const toolName = str(action?.toolName);
       return [
         {
           id,
+          requestId: id,
           kind: str(r.kind) ?? "question",
           prompt: str(r.prompt) ?? "",
           options: options(r.options),
           allowFreeform: r.allowFreeform === true,
+          ...(toolName ? { action: { toolName, ...(action!.input !== undefined ? { input: action!.input } : {}) } } : {}),
         },
       ];
     });
@@ -236,7 +278,12 @@ export function settledRequestIds(event: StreamEvent): string[] {
     return id ? [id] : [];
   }
   if (event.type === "input.resolved") {
-    const ids = Array.isArray(data.requestIds) ? data.requestIds : [data.requestId];
+    // eve 0.81 lists `resolutions: [{requestId, outcome}]`; earlier builds named the ids directly.
+    const ids = Array.isArray(data.resolutions)
+      ? data.resolutions.filter(isObj).map((r) => r.requestId)
+      : Array.isArray(data.requestIds)
+        ? data.requestIds
+        : [data.requestId];
     return ids.map(str).filter((id): id is string => Boolean(id));
   }
   return [];
