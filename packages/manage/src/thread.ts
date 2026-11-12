@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cardsOf, newStepState, readStep, type Card, type StepState } from "@kybernesis/cards";
+import { cardsOf, newStepState, personText, readStep, replyText, type Card, type StepState, type StreamEvent } from "@kybernesis/cards";
 
 /**
  * One continuous conversation per person, on every device.
@@ -169,16 +169,22 @@ export function recapContext(exchanges: Exchange[]): string | undefined {
   return `This conversation continues from an earlier session. The last exchanges were:\n${lines.join("\n")}`;
 }
 
-/** The exchanges in a session's stream: what the person said and what the agent finally answered. */
+/**
+ * The exchanges in a session's stream: what the person said and what the agent
+ * finally answered. Reads events in either stream format (eve 0.81 or 1.0).
+ */
 export function exchangesFrom(events: Iterable<{ type?: unknown; data?: unknown }>): Exchange[] {
   const out: Exchange[] = [];
   for (const e of events) {
-    const data = (e.data ?? {}) as { message?: unknown; finishReason?: unknown };
-    if (e.type === "message.received" && typeof data.message === "string" && data.message.trim()) {
-      out.push({ role: "person", text: data.message });
-    } else if (e.type === "message.completed" && typeof data.message === "string" && data.finishReason !== "tool-calls" && data.message.trim()) {
-      out.push({ role: "agent", text: data.message });
+    if (typeof e.type !== "string") continue;
+    const event = e as StreamEvent;
+    const person = personText(event);
+    if (person?.trim()) {
+      out.push({ role: "person", text: person });
+      continue;
     }
+    const reply = replyText(event);
+    if (reply?.trim()) out.push({ role: "agent", text: reply });
   }
   return out;
 }
@@ -196,13 +202,18 @@ export function newRunCapture(): RunCapture {
   return { steps: newStepState() };
 }
 
-export function captureRunEvent(capture: RunCapture, type: string, data: unknown): void {
-  if (type === "message.completed") {
-    const d = (data ?? {}) as { message?: unknown; finishReason?: unknown };
-    if (typeof d.message === "string" && d.finishReason !== "tool-calls" && d.message.trim()) capture.text = d.message;
+export function captureRunEvent(
+  capture: RunCapture,
+  type: string,
+  data: unknown,
+  scope?: { turnId?: string; runId?: string; taskId?: string },
+): void {
+  const reply = replyText({ type, data });
+  if (reply !== undefined) {
+    if (reply.trim()) capture.text = reply;
     return;
   }
-  readStep(capture.steps, type, data);
+  readStep(capture.steps, type, data, undefined, scope);
 }
 
 export function runCards(capture: RunCapture): Card[] {

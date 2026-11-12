@@ -78,6 +78,7 @@ export {
   isTransportRecord,
   turnIdOf,
   replyText,
+  personText,
   narrationText,
   turnEnd,
   failureMessage,

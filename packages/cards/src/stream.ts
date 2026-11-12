@@ -82,6 +82,25 @@ export function turnIdOf(event: StreamEvent): string | undefined {
 }
 
 /**
+ * What the person said, when the event is their message: v26
+ * `message.received`, v27 `delivery.consumed` (its text parts, joined). Context
+ * a delivery only adds carries no parts, so it is not the person's words.
+ */
+export function personText(event: StreamEvent): string | undefined {
+  const data = isObj(event.data) ? event.data : {};
+  if (event.type === "delivery.consumed") {
+    const parts = Array.isArray(data.parts) ? data.parts.filter(isObj) : [];
+    const text = parts
+      .filter((p) => p.kind === "text")
+      .map((p) => str(p.text) ?? "")
+      .join("\n");
+    return text || undefined;
+  }
+  if (event.type === "message.received") return str(data.message);
+  return undefined;
+}
+
+/**
  * The reply text an event carries, when it is the answer and not narration:
  * v26 `message.completed` that did not end in tool calls, v27 text
  * `content.completed` in the reply phase.

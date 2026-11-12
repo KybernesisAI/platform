@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { verifyKybernesisRequest } from "@kybernesis/enterprise";
-import { card, describeCron, forModel, nextCronRun, withCards } from "@kybernesis/cards";
+import { card, describeCron, forModel, nextCronRun, openedRequests, turnEnd, withCards, type StreamEvent } from "@kybernesis/cards";
 import { defineChannel, GET, POST } from "eve/channels";
 import { routineOwner, routineSource } from "./routine-source.js";
 import {
@@ -462,12 +462,22 @@ export function manageChannel(options: ManageOptions = {}) {
     if (!c) runs.set(id, (c = newRunCapture()));
     return c;
   };
-  const capture = (type: string) => (data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) => {
-    if (channel.state.kind === "run") captureRunEvent(captureFor(ctx.session.id), type, data);
+  type Ev = { type: string; data?: unknown; scope?: { turnId?: string; runId?: string; taskId?: string } };
+  type Ctx = { channel: { state: KybState }; session: { id: string } };
+  const capture = (event: Ev, ctx: Ctx) => {
+    if (ctx.channel.state.kind === "run") captureRunEvent(captureFor(ctx.session.id), event.type, event.data, event.scope);
+  };
+  const closeQuestions = (state: KybState, sessionId: string) => {
+    if (!threads || state.kind !== "run" || !state.owner) return;
+    updateThread(threads, state.owner, (r) => {
+      for (const q of r.reports) if (q.runSessionId === sessionId && q.kind === "question") q.settled = true;
+    });
   };
 
-  return defineChannel<KybState>({
+  return defineChannel<KybState, { state: KybState }>({
     state: { kind: "other" },
+    // eve 1.0 hands events the channel's own context, not its state: pass the state through.
+    context: (state) => ({ state }),
 
     /**
      * Where a routine runs.
@@ -495,7 +505,7 @@ export function manageChannel(options: ManageOptions = {}) {
       if (!threads) {
         // Threads switched off: the old single conversation every client could adopt.
         const session = await from(CANONICAL_ADDRESS).send(message, { auth, turnPolicy: "queue", state: { kind: "other" } });
-        rememberCanonicalSession(appRoot, session.id, routine);
+        rememberCanonicalSession(appRoot, session.sessionId, routine);
         return session;
       }
       const owner = threadOwnerOf(auth) ?? AGENT_OWNER;
@@ -503,26 +513,36 @@ export function manageChannel(options: ManageOptions = {}) {
     },
 
     events: {
-      "actions.requested": capture("actions.requested"),
-      "action.result": capture("action.result"),
-      "task.started": capture("task.started"),
-      "task.settled": capture("task.settled"),
-      "message.completed": capture("message.completed"),
+      // What a background run did, as it does it: its calls, its subagents, its answer.
+      "call.requested": capture,
+      "call.started": capture,
+      "call.progress": capture,
+      "call.settled": capture,
+      "task.ended": capture,
+      "content.completed": capture,
 
       // A run that stops to ask: the question goes into its owner's thread,
       // where they answer it (POST /thread/respond with the run's session id).
-      "input.requested"(data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
-        const { state } = channel;
+      "interaction.opened"(event: Ev, ctx: Ctx) {
+        const { state } = ctx.channel;
         if (!threads || state.kind !== "run" || !state.owner) return;
-        const requests = (data as { requests?: unknown }).requests;
-        if (!Array.isArray(requests) || requests.length === 0) return;
-        const prompt = (requests[0] as { prompt?: unknown }).prompt;
+        const opened = openedRequests(event);
+        if (opened.length === 0) return;
+        // The shape the apps already answer: one request per question, with its id.
+        const requests = opened.map((r) => ({
+          requestId: r.id,
+          interactionId: r.id,
+          kind: r.kind,
+          prompt: r.prompt,
+          options: r.options,
+          allowFreeform: r.allowFreeform,
+        }));
         updateThread(threads, state.owner, (r) => {
           r.reports.push({
             id: `${ctx.session.id}:${r.reports.length}`,
             kind: "question",
             routine: state.routine ?? "routine",
-            text: typeof prompt === "string" ? prompt : "",
+            text: opened[0]!.prompt,
             at: new Date().toISOString(),
             runSessionId: ctx.session.id,
             requests,
@@ -532,22 +552,19 @@ export function manageChannel(options: ManageOptions = {}) {
 
       // The run's turn ended: its last answer and its cards become the report.
       // A run that said nothing (no_reply) adds nothing.
-      async "session.waiting"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
-        const { state } = channel;
+      async "turn.settled"(event: Ev, ctx: Ctx) {
+        const { state } = ctx.channel;
         if (state.kind !== "run" || !state.owner) return;
         const run = runs.get(ctx.session.id);
         runs.delete(ctx.session.id);
+        if (turnEnd(event as StreamEvent) !== "completed") closeQuestions(state, ctx.session.id);
         await settleRun({ owner: state.owner, routine: state.routine, deliver: state.deliver, sessionId: ctx.session.id, run, threads, buzz });
       },
 
       // A run that failed for good reports nothing; its open questions close.
-      "session.failed"(_data: unknown, channel: { state: KybState }, ctx: { session: { id: string } }) {
+      "session.ended"(_event: Ev, ctx: Ctx) {
         runs.delete(ctx.session.id);
-        const { state } = channel;
-        if (!threads || state.kind !== "run" || !state.owner) return;
-        updateThread(threads, state.owner, (r) => {
-          for (const q of r.reports) if (q.runSessionId === ctx.session.id && q.kind === "question") q.settled = true;
-        });
+        closeQuestions(ctx.channel.state, ctx.session.id);
       },
     } as never,
     // Routes take no channel state; the generic only types the sessions this channel starts.

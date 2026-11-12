@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { GET, POST } from "eve/channels";
-import { parseInputResponses } from "eve/client";
+import { GET, POST, SessionStrandedError } from "eve/channels";
+import { toAnswers } from "@kybernesis/cards";
 import { sessions } from "eve/server";
 import { readRoutine, routineOwner } from "./routine-source.js";
 import {
@@ -94,6 +94,30 @@ async function readExchanges(sessionId: string) {
   return exchangesFrom(events);
 }
 
+/** An answer to a question an eve upgrade left behind: the session that asked can never run again. */
+const stranded = () =>
+  Response.json(
+    { ok: false, error: "That question was asked before the agent was updated and can no longer be answered. Ask again." },
+    { status: 409 },
+  );
+
+/**
+ * A cancel or clear, answered in the shape the apps already read
+ * (`{status: "accepted", sessionId}` or `{status: "no_active_session"}`).
+ * eve 1.0 returns a delivery receipt, and throws when nothing holds the address.
+ */
+async function control(run: () => Promise<{ sessionId: string }>) {
+  try {
+    const delivery = await run();
+    return { status: "accepted" as const, sessionId: delivery.sessionId };
+  } catch (error) {
+    if ((error as { code?: unknown })?.code === "session_not_active" || SessionStrandedError.is(error)) {
+      return { status: "no_active_session" as const };
+    }
+    throw error;
+  }
+}
+
 /**
  * The thread routes. Every one answers only for the caller's own thread: the
  * owner is the verified identity, never something in the request body.
@@ -171,9 +195,9 @@ export function threadRoutes(input: ThreadRouteInput) {
         state: { kind: "thread", owner: caller.userId },
         ...(context.length ? { context } : {}),
       } as never);
-      noteSession(record, session.id);
+      noteSession(record, session.sessionId);
       writeThread(dir, record);
-      return Response.json({ ok: true, sessionId: session.id });
+      return Response.json({ ok: true, sessionId: session.sessionId });
     }),
 
     /**
@@ -214,7 +238,7 @@ export function threadRoutes(input: ThreadRouteInput) {
               auth,
               state: { kind: "run", owner, routine: run.routine, ...(run.delivery ? { deliver: run.delivery } : {}) },
             } as never);
-            return Response.json({ ok: true, sessionId: session.id, routine: run.routine });
+            return Response.json({ ok: true, sessionId: session.sessionId, routine: run.routine });
           }),
         ]
       : []),
@@ -227,12 +251,11 @@ export function threadRoutes(input: ThreadRouteInput) {
     POST(prefix + "/thread/respond", async (req, { from, attachSession }) => {
       const caller = await identify(req);
       if (caller instanceof Response) return caller;
-      const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown; inputResponses?: unknown };
-      let responses;
-      try {
-        responses = parseInputResponses(body.inputResponses);
-      } catch {
-        return Response.json({ ok: false, error: "inputResponses is not valid." }, { status: 400 });
+      const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown; inputResponses?: unknown; answers?: unknown };
+      // eve 1.0 takes `answers`; the apps on the store still send `inputResponses`. Both are accepted.
+      const responses = toAnswers(body.answers ?? body.inputResponses);
+      if (responses.length === 0) {
+        return Response.json({ ok: false, error: "answers is not valid." }, { status: 400 });
       }
       const auth = personPrincipal(caller, issuer, req);
       const record = readThread(dir, caller.userId);
@@ -246,14 +269,26 @@ export function threadRoutes(input: ThreadRouteInput) {
         if (!owner) {
           return Response.json({ ok: false, error: "No such conversation in your thread." }, { status: 404 });
         }
-        const session = await attachSession(runId).respond(responses as never, { auth } as never);
+        let session;
+        try {
+          session = await attachSession(runId).respond(responses as never, { auth } as never);
+        } catch (error) {
+          if (!SessionStrandedError.is(error)) throw error;
+          return stranded();
+        }
         updateThread(dir, owner, (r) => {
           for (const q of r.reports) if (q.runSessionId === runId && q.kind === "question") q.settled = true;
         });
-        return Response.json({ ok: true, sessionId: (session as { sessionId?: string }).sessionId ?? runId });
+        return Response.json({ ok: true, sessionId: session.sessionId ?? runId });
       }
-      const session = await from(threadAddress(caller.userId)).respond(responses as never, { auth } as never);
-      return Response.json({ ok: true, sessionId: session.id });
+      let session;
+      try {
+        session = await from(threadAddress(caller.userId)).respond(responses as never, { auth } as never);
+      } catch (error) {
+        if (!SessionStrandedError.is(error)) throw error;
+        return stranded();
+      }
+      return Response.json({ ok: true, sessionId: session.sessionId });
     }),
 
     /** Stop the turn in progress. The thread and its history stay. */
@@ -261,9 +296,8 @@ export function threadRoutes(input: ThreadRouteInput) {
       const caller = await identify(req);
       if (caller instanceof Response) return caller;
       const body = (await req.json().catch(() => ({}))) as { turnId?: unknown };
-      return Response.json(
-        await from(threadAddress(caller.userId)).cancel(typeof body.turnId === "string" ? { turnId: body.turnId } : {}),
-      );
+      const turnId = typeof body.turnId === "string" ? { turnId: body.turnId } : {};
+      return Response.json(await control(() => from(threadAddress(caller.userId)).cancel(turnId)));
     }),
 
     /**
@@ -273,7 +307,7 @@ export function threadRoutes(input: ThreadRouteInput) {
     POST(prefix + "/thread/fresh", async (req, { from }) => {
       const caller = await identify(req);
       if (caller instanceof Response) return caller;
-      const result = await from(threadAddress(caller.userId)).clear();
+      const result = await control(() => from(threadAddress(caller.userId)).clear());
       updateThread(dir, caller.userId, (r) => {
         r.fresh = [...(r.fresh ?? []), new Date().toISOString()].slice(-50);
         for (const report of r.reports) report.told = true;
