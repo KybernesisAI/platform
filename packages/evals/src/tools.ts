@@ -45,3 +45,51 @@ export function isResultFrom(
   const name = resultToolName(event);
   return name !== null && suffixes.some((suffix) => name.endsWith(suffix));
 }
+
+/** A tool call that completed: the tool's name and what it returned. */
+export interface CompletedCall {
+  name: string;
+  output: unknown;
+}
+
+/**
+ * The tool calls that completed, in the order they completed.
+ *
+ * eve 1.0 names the tool on `call.requested` (`capability.name`) and settles it
+ * on `call.settled` with only its `callId`, so a single event no longer says
+ * which tool finished; this pairs them. eve 0.81 `action.result` events are
+ * read too.
+ */
+export function completedCalls(events: readonly { type: string; data?: unknown }[]): CompletedCall[] {
+  const named = new Map<string, string>();
+  const out: CompletedCall[] = [];
+  for (const event of events) {
+    const data = (event.data ?? {}) as {
+      callId?: unknown;
+      outcome?: unknown;
+      output?: unknown;
+      capability?: { name?: unknown };
+      result?: { output?: unknown };
+    };
+    if (event.type === "call.requested" && typeof data.callId === "string" && typeof data.capability?.name === "string") {
+      named.set(data.callId, data.capability.name);
+    } else if (event.type === "call.settled" && typeof data.callId === "string" && data.outcome === "completed") {
+      const name = named.get(data.callId);
+      if (name) out.push({ name, output: data.output });
+    } else {
+      const name = resultToolName(event);
+      if (name) out.push({ name, output: data.result?.output });
+    }
+  }
+  return out;
+}
+
+/** Names of the tools whose calls completed, in the order they completed. */
+export function completedToolNames(events: readonly { type: string; data?: unknown }[]): string[] {
+  return completedCalls(events).map((call) => call.name);
+}
+
+/** True when a call to a tool matching one of `suffixes` completed. */
+export function completedFrom(events: readonly { type: string; data?: unknown }[], suffixes: readonly string[]): boolean {
+  return completedToolNames(events).some((name) => suffixes.some((suffix) => name.endsWith(suffix)));
+}
