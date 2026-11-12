@@ -93,7 +93,7 @@ test("a failed install on a computer that was never prepared fails the build", a
 
 // eve's own install script, captured from its real installComputerUse.
 const eveInstallScript = async () => {
-  const { installComputerUse } = await import("eve/computer-use/sandbox");
+  const { installComputerUse } = await import("eve/extensions/computer-use/sandbox");
   let script;
   await installComputerUse({
     resolvePath: (path) => `/workspace/${path}`,
@@ -105,11 +105,12 @@ const eveInstallScript = async () => {
 
 test("eve's install script loses its Firefox steps and keeps everything else", async () => {
   const original = await eveInstallScript();
-  assert.match(original, /firefox-esr=/, "eve's script still installs Firefox; if not, this fix can go");
+  assert.match(original, /firefox-esr/, "eve's script still installs Firefox; if not, this fix can go");
   const stripped = stripFirefoxInstall(original);
   assert.doesNotMatch(stripped, /packages\.mozilla\.org/);
-  assert.doesNotMatch(stripped, /FIREFOX_ESR_VERSION/);
-  assert.doesNotMatch(stripped, /firefox-esr=/);
+  assert.doesNotMatch(stripped, /mozilla/);
+  // The managed xdg-open eve writes still names Firefox's window class; installChrome replaces it.
+  assert.doesNotMatch(stripped.replace(/managed Firefox|--class firefox-esr/g, ""), /firefox-esr/);
   for (const kept of ["apt-get update", "xfce4", "xdotool", "xvfb", "GeistMono", "Colloid", "managed xdg-open", "npm install --prefix"]) {
     assert.ok(stripped.includes(kept), `kept ${kept}`);
   }

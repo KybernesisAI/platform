@@ -1,4 +1,4 @@
-import { computer_use } from "eve/computer-use/tools";
+import { computer_use } from "eve/extensions/computer-use/tools";
 import { defineTool, toolOutput, toolOutputPart, type ToolContext } from "eve/tools";
 import { never } from "eve/tools/approval";
 
