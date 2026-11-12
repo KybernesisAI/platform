@@ -11,6 +11,9 @@ import { join, relative } from "node:path";
 /** Where `kyb init` pointed the @kybernesis registry before the registry served one copy per eve line. */
 export const UNVERSIONED_REGISTRY_URL = "https://registry.kybernesis.ai/r/{name}.json";
 
+/** Any copy of the @kybernesis registry a scaffold wrote: unversioned, or one eve line's. */
+const KYBERNESIS_REGISTRY = /^https:\/\/registry\.kybernesis\.ai\/r\/(eve-\d+\.\d+\/)?\{name\}\.json$/;
+
 /**
  * Third-party extensions, at the releases proven on the certified eve. The
  * registry items install their newest release, which is built on a later eve
@@ -81,9 +84,10 @@ export function migrateManifest(pkg: Record<string, unknown>, registryUrl: strin
 
   let registry: ManifestMigration["registry"] = null;
   const registries = pkg.registries as Record<string, unknown> | undefined;
-  if (registries?.["@kybernesis"] === UNVERSIONED_REGISTRY_URL && registryUrl !== UNVERSIONED_REGISTRY_URL) {
+  const current = registries?.["@kybernesis"];
+  if (registries && typeof current === "string" && current !== registryUrl && KYBERNESIS_REGISTRY.test(current)) {
     registries["@kybernesis"] = registryUrl;
-    registry = { from: UNVERSIONED_REGISTRY_URL, to: registryUrl };
+    registry = { from: current, to: registryUrl };
   }
   return { moves, registry };
 }
@@ -188,8 +192,29 @@ export function migrateSources(cwd: string, { write = true }: { write?: boolean 
       action: `rewrite ${names.map((n) => `\`${n}\``).join(" and ")}: eve 0.81 finds tools with \`eve__search\`, calls them with \`eve__tool\`, and loads skills with \`eve__skill\``,
     });
   }
+
+  // eve 1.0 renamed or removed these; code that still uses them no longer compiles or never fires.
+  for (const path of [...walk(join(cwd, "agent"), (name) => /\.[cm]?[jt]s$/.test(name)), ...walk(join(cwd, "evals"), (name) => /\.[cm]?[jt]s$/.test(name))]) {
+    const source = readFileSync(path, "utf8");
+    const found = Object.keys(EVE_1_RENAMES).filter((name) => source.includes(name));
+    if (found.length === 0) continue;
+    result.manual.push({ file: rel(path), action: found.map((name) => `${name}: ${EVE_1_RENAMES[name]}`).join("; ") });
+  }
   return result;
 }
+
+/** What eve 1.0 renamed or removed that authored agent and eval code used, and what replaces it. */
+export const EVE_1_RENAMES: Readonly<Record<string, string>> = {
+  calledSubagent: "eve 1.0 calls it `calledAgent`",
+  watchTurn: "eve 1.0 watches a background task with `turn.session.watch()`",
+  '"session.completed"': "eve 1.0 sends one `session.ended` with an outcome",
+  '"session.failed"': "eve 1.0 sends one `session.ended` with an outcome",
+  '"turn.completed"': "eve 1.0 sends `turn.settled` with an outcome",
+  '"message.completed"': "eve 1.0 sends `content.completed` with a phase",
+  inputResponses: "eve 1.0 takes `answers` keyed by `interactionId`",
+  streamReconnectPolicy: "eve 1.0 calls it `reconnect`",
+  '"eve/computer-use/': "eve 1.0 moved it to `eve/extensions/computer-use/`",
+};
 
 /** The conversation store. The first boot on eve 0.81 deletes one written by an older line. */
 export const WORKFLOW_STORE = ".eve/.workflow-data";

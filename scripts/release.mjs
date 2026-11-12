@@ -25,7 +25,10 @@
  *      first. From master a publish moves `latest`, then the eve-line tag
  *      (`eve-0.81`) follows it, because line registry items and `kyb upgrade`
  *      install `@kybernesis/<pkg>@eve-<line>`. From `maint/eve-<line>` a publish
- *      moves only that line's tag and never `latest`;
+ *      moves only that line's tag and never `latest`. While master certifies a
+ *      prerelease eve (`1.0.0-rc.10`), master publishes the same way, under the
+ *      line tag only, so `latest` stays on the last line certified on a final eve
+ *      and nothing that installs `latest` lands on a release candidate;
  *   4. from master, catch up any eve-line tag left behind an already published
  *      master version (a tag step that failed or was skipped), never backwards;
  *   5. wait for the tarballs to be downloadable, and warn (never stop) about any
@@ -111,6 +114,9 @@ if (!lineTag) fail("Could not read EVE_VERSION from packages/create/src/util.ts.
 if (maintLine && maintLine !== lineTag) {
   fail(`Branch ${branch} certifies eve ${eveVersion} (${lineTag}), not ${maintLine}. Fix EVE_VERSION or the branch name.`);
 }
+// A prerelease eve (1.0.0-rc.10) never gets `latest`: publish under the line tag only.
+const prereleaseEve = /^\d+\.\d+\.\d+-/.test(eveVersion);
+const lineOnly = Boolean(maintLine) || prereleaseEve;
 
 const newer = (a, b) => {
   const [x, y] = [a, b].map((v) => v.split(/[.+-]/).slice(0, 3).map(Number));
@@ -171,7 +177,7 @@ if (!ci) {
   }
 }
 const canCreate = !ci && account === SCOPE_OWNER;
-const tagsMoved = maintLine ? lineTag : `latest, ${lineTag}`;
+const tagsMoved = lineOnly ? lineTag : `latest, ${lineTag}`;
 
 console.log(
   `\n  Release from ${branch} ${read("git", ["rev-parse", "--short", "HEAD"])}, ` +
@@ -226,12 +232,13 @@ for (const item of ordered) {
   }
   console.log(`\n  Publishing ${id}`);
   try {
-    // From a maint branch the line tag is the publish tag: `latest` belongs to master.
-    run("npm", maintLine ? ["publish", "--tag", lineTag] : ["publish"], { cwd: `packages/${item.dir}` });
+    // From a maint branch, or while master certifies a prerelease eve, the line
+    // tag is the publish tag: `latest` belongs to master on a final eve.
+    run("npm", lineOnly ? ["publish", "--tag", lineTag] : ["publish"], { cwd: `packages/${item.dir}` });
   } catch {
     fail(`${id} did not publish. Everything before it is out; ${again}.`);
   }
-  if (!maintLine) {
+  if (!lineOnly) {
     try {
       run("npm", ["dist-tag", "add", id, lineTag]);
     } catch {

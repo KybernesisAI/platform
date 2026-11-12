@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { LEGACY_GITHUB_TOOLS_MOUNT, githubToolsMountTs } from "../dist/templates.js";
-import { EVE_VERSION } from "../dist/util.js";
+import { EVE_LINE_TAG, EVE_VERSION } from "../dist/util.js";
 import { diskUsageDoctorCheck } from "../dist/doctor.js";
 import { dockerPruneCronArtifact, registeredDockerPruneAppDirs } from "../dist/docker-prune-cron.js";
 
@@ -1057,7 +1057,7 @@ test("a hop to a new eve line moves the scaffold's third-party extensions, judge
     const pkg = JSON.parse(readFileSync(join(fix.dir, "package.json"), "utf8"));
     assert.equal(pkg.dependencies["@agent-browser/eve"], undefined);
     assert.equal(pkg.dependencies["@github-tools/eve-extension"], "0.8.1");
-    assert.equal(pkg.registries["@kybernesis"], "https://registry.kybernesis.ai/r/eve-0.81/{name}.json");
+    assert.equal(pkg.registries["@kybernesis"], `https://registry.kybernesis.ai/r/${EVE_LINE_TAG}/{name}.json`);
     assert.equal(existsSync(join(fix.dir, "agent/extensions/browser.ts")), false);
     assert.match(readFileSync(join(fix.dir, "evals/evals.config.ts"), "utf8"), /p\.decisionModel\("judge"\)/);
     assert.equal(readFileSync(join(fix.dir, ".eve/.workflow-data.eve-0.38/runs/open.json"), "utf8"), readFileSync(join(fix.dir, ".eve/.workflow-data/runs/open.json"), "utf8"));
@@ -1096,12 +1096,12 @@ test("a failed eval gate after a line hop puts the old line's conversations back
 });
 
 test("an agent on a newer eve line than this kyb is refused, with the kyb for its line", () => {
-  const fix = fixture({ allCurrent: true, eveInstalled: "0.99.0", eveRange: "0.99.0" });
+  const fix = fixture({ allCurrent: true, eveInstalled: "1.99.0", eveRange: "1.99.0" });
   try {
     const manifest = readFileSync(join(fix.dir, "package.json"), "utf8");
     const result = runUpgrade(fix);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /npx --yes --package=@kybernesis\/create@eve-0\.99 kyb upgrade/);
+    assert.match(result.stderr, /npx --yes --package=@kybernesis\/create@eve-1\.99 kyb upgrade/);
     assert.equal(readFileSync(join(fix.dir, "package.json"), "utf8"), manifest);
     assert.doesNotMatch(commandLog(fix), /^npm (install|view @kybernesis\/buzz)/m);
 

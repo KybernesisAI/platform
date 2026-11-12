@@ -6,7 +6,7 @@ import tool from "../dist/extension/tools/working_on_it.mjs";
 
 test("the note comes back in the result, on one line, where the surfaces read it", async () => {
   const output = await tool.execute({ message: "On it.\n  Building your daily calendar page now." });
-  assert.deepEqual(output, { sent: true, message: "On it. Building your daily calendar page now." });
+  assert.deepEqual(output, { sent: true, kind: "kybernesis.progress-note", message: "On it. Building your daily calendar page now." });
   const notes = progressNotes("action.result", {
     turnId: "t1",
     status: "completed",
