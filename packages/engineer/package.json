@@ -62,7 +62,7 @@
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "eve": ">=1.0.0-rc.10 <1.1.0"
+    "eve": ">=1.0.0-rc.10 <2.0.0"
   },
   "engines": {
     "node": ">=20"
