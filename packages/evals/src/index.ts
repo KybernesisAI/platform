@@ -15,5 +15,9 @@ export {
   MEMORY_WRITE_SUFFIXES,
   isResultFrom,
   resultToolName,
+  completedCalls,
+  completedToolNames,
+  completedFrom,
+  type CompletedCall,
 } from "./tools.js";
 export { hasPendingWork, settleBackgroundWork } from "./background.js";

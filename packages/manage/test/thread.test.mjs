@@ -116,6 +116,28 @@ test("the recap carries the end of the previous session", () => {
   assert.equal(recapContext([]), undefined);
 });
 
+test("the recap reads an eve 1.0 stream too", () => {
+  const events = [
+    { type: "delivery.consumed", data: { deliveryId: "d1", turnId: "t1", parts: [{ kind: "text", text: "Book the dentist" }] } },
+    { type: "delivery.consumed", data: { deliveryId: "d2", turnId: "t1", parts: [] } },
+    { type: "content.completed", data: { kind: "text", phase: "narration", value: "Checking the calendar." } },
+    { type: "content.completed", data: { kind: "text", phase: "reply", value: "Booked for Tuesday." } },
+    { type: "turn.settled", data: { turnId: "t1", outcome: "completed" } },
+  ];
+  assert.deepEqual(exchangesFrom(events), [
+    { role: "person", text: "Book the dentist" },
+    { role: "agent", text: "Booked for Tuesday." },
+  ]);
+});
+
+test("a run's report on eve 1.0 is its reply, not its narration", () => {
+  const capture = newRunCapture();
+  captureRunEvent(capture, "content.completed", { kind: "text", phase: "narration", value: "Looking at your calendar." });
+  assert.equal(capture.text, undefined);
+  captureRunEvent(capture, "content.completed", { kind: "text", phase: "reply", value: "Two meetings today." });
+  assert.equal(capture.text, "Two meetings today.");
+});
+
 test("a run's report is its final answer, not a step on the way", () => {
   const capture = newRunCapture();
   captureRunEvent(capture, "message.completed", { message: "Looking at your calendar.", finishReason: "tool-calls" });
@@ -152,19 +174,22 @@ function fakeEve(live = {}) {
         send: async (message, options) => {
           sent.push({ address, message, options });
           live[address] ??= `s_${sent.length}`;
-          return { id: live[address] };
+          return { sessionId: live[address], deliveryId: `d_${sent.length}` };
         },
         respond: async (responses, options) => {
           responded.push({ address, responses, options });
-          return { id: live[address] };
+          return { sessionId: live[address], deliveryId: "d_answer" };
         },
-        cancel: async () => ({ ok: true }),
-        clear: async () => ({ ok: true }),
+        cancel: async () => ({ sessionId: live[address], deliveryId: "d_cancel" }),
+        clear: async () => {
+          if (!live[address]) throw Object.assign(new Error("not active"), { code: "session_not_active" });
+          return { sessionId: live[address], deliveryId: "d_clear" };
+        },
       }),
       attachSession: (id) => ({
         respond: async (responses, options) => {
           responded.push({ session: id, responses, options });
-          return { status: "accepted", sessionId: id };
+          return { sessionId: id, deliveryId: "d_answer" };
         },
       }),
     },
@@ -253,6 +278,27 @@ test("a background run's question can be answered only by the person it reported
   assert.equal(dana.responded[0].session, "run_q");
   assert.equal(dana.responded[0].options.auth.principalId, "user_dana");
   assert.equal(readThread(d, "user_dana").reports[0].settled, true);
+});
+
+test("an answer in the eve 1.0 shape reaches eve as one, and an old-shape deny becomes deny", async () => {
+  const d = dir();
+  updateThread(d, "user_dana", (r) => r.reports.push(report({ kind: "question", runSessionId: "run_q", text: "Send it?" })));
+  const eve = fakeEve();
+  const ok = await routes(d).find("POST", "/thread/respond").handler(post({ sessionId: "run_q", answers: [{ interactionId: "int_1", optionId: "approve" }] }), eve.ctx);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(eve.responded[0].responses, [{ interactionId: "int_1", optionId: "approve" }]);
+
+  const old = fakeEve({ "thread:user_dana": "s_live" });
+  await routes(d).find("POST", "/thread/respond").handler(post({ inputResponses: [{ requestId: "req_2", optionId: "cancel" }] }), old.ctx);
+  assert.deepEqual(old.responded[0].responses, [{ interactionId: "req_2", optionId: "deny" }]);
+
+  const bad = await routes(d).find("POST", "/thread/respond").handler(post({ answers: "yes" }), fakeEve().ctx);
+  assert.equal(bad.status, 400);
+});
+
+test("start fresh with nothing to clear says so, as before", async () => {
+  const res = await routes(dir()).find("POST", "/thread/fresh").handler(post({}), fakeEve().ctx);
+  assert.deepEqual(await res.json(), { status: "no_active_session" });
 });
 
 test("start fresh clears the agent's context and marks reports told", async () => {

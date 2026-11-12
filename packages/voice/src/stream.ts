@@ -93,6 +93,15 @@ export function commentaryChunks(text: string, max = 1400): string[] {
 /** The label a watch shows while the agent works — the tool it is running, when there is one. */
 export function activityFrom(event: { type: string; data?: Record<string, unknown> }): string | null {
   const data = event.data ?? {};
+  // eve 1.0 (v27): one call.requested per call, naming what it invokes.
+  if (event.type === "call.requested") {
+    const capability = data.capability as { kind?: string; name?: unknown; hidden?: boolean } | undefined;
+    if (!capability || capability.hidden || capability.kind === "control") return null;
+    const name = typeof capability.name === "string" ? capability.name : undefined;
+    return name ? `Using ${name.replace(/__/g, " › ").replace(/_/g, " ")}` : "Working";
+  }
+  if (event.type === "content.delta" && data.kind === "reasoning") return "Thinking";
+  // v26 (eve 0.81), kept for a watch talking to an older agent.
   if (event.type === "actions.requested") {
     const actions = (data.actions ?? data.calls) as { name?: unknown; toolName?: unknown }[] | undefined;
     const name = actions?.map((a) => a.toolName ?? a.name).find((n) => typeof n === "string") as string | undefined;
@@ -149,7 +158,7 @@ export class LiveCall {
   constructor(private readonly o: LiveCallOptions) {
     const token = o.userHeaders.authorization.replace(/^Bearer\s+/i, "");
     this.client = new Client({
-      host: o.agentUrl,
+      baseUrl: o.agentUrl,
       auth: { bearer: token },
       // The bundle the person signed in with, and where they are: a live call.
       // The agent's notify hook uses the surface to not push a reply the person
@@ -341,23 +350,25 @@ export class LiveCall {
     const began = Date.now();
 
     try {
-      const response = this.session
+      const delivery = this.session
         ? await this.session.send(request)
         : await this.client.sessions.create({ message: request }).then((created) => {
             this.session = created.session;
-            return created.response;
+            return created.delivery;
           });
 
       let reply = "";
       let asked = false;
-      for await (const event of response as AsyncIterable<{ type: string; data?: Record<string, unknown> }>) {
+      for await (const event of delivery.stream() as AsyncIterable<{ type: string; data?: Record<string, unknown> }>) {
         if (this.work.signal.aborted) return;
         const label = activityFrom(event);
         if (label) this.o.watch.event({ type: "activity", label });
         const data = event.data ?? {};
-        if (event.type === "input.requested") asked = true;
-        if (event.type === "message.completed" && typeof data.message === "string" && data.finishReason !== "tool-calls") {
-          reply = data.message;
+        // eve 1.0 (v27): a question or approval opens an interaction; the
+        // answer is text content in the reply phase.
+        if (event.type === "interaction.opened") asked = true;
+        if (event.type === "content.completed" && data.kind === "text" && data.phase === "reply" && typeof data.value === "string") {
+          reply = data.value;
         }
       }
       if (this.ended) return;

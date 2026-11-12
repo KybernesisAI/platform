@@ -1,4 +1,4 @@
-import { installComputerUse, startComputerUse } from "eve/computer-use/sandbox";
+import { installComputerUse, startComputerUse } from "eve/extensions/computer-use/sandbox";
 import type { SandboxSession } from "eve/sandbox";
 import { hasCurrentInstall, hasEarlierInstall, installChrome, installDesktopShell, markCurrentInstall, startDesktopShell } from "./provider.js";
 
@@ -83,7 +83,8 @@ const INSTALL_SCRIPT = /install-computer-use\.sh$/;
 
 /**
  * eve's computer-use install script without its Firefox ESR steps: Mozilla's
- * apt repository, the check that it lists the 140 line, and the install.
+ * apt repository and the install (on eve 0.81 also the check that it lists the
+ * 140 line). Both script shapes are recognised, 0.81's and 1.0's.
  *
  * On 2026-10-31 Mozilla stopped listing Firefox ESR 140 (only 153 remains), so
  * eve's installer exits before anything else is installed and every brand-new
@@ -97,10 +98,15 @@ const INSTALL_SCRIPT = /install-computer-use\.sh$/;
  * @internal Exported for tests.
  */
 export function stripFirefoxInstall(script: string): string {
+  // eve 0.81: Mozilla's repository, a check that it lists ESR 140, and a separate pinned install.
   const repository = /install -d -m 0755 \/etc\/apt\/keyrings\n[\s\S]*?FIREFOX_ESR_VERSION="[^\n]*\nif \[\[ -z "\$\{FIREFOX_ESR_VERSION\}" \]\]; then\n[^\n]*\n[^\n]*\nfi\n/;
   const install = /DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\\n\s*"firefox-esr=\$\{FIREFOX_ESR_VERSION\}"\napt-get clean\n/;
-  if (!repository.test(script) || !install.test(script)) return script;
-  return script.replace(repository, "").replace(install, "");
+  if (repository.test(script) && install.test(script)) return script.replace(repository, "").replace(install, "");
+  // eve 1.0: Mozilla's repository, then firefox-esr as one line of the desktop install.
+  const repository10 = /install -d -m 0755 \/etc\/apt\/keyrings\ncurl -fsSL https:\/\/packages\.mozilla\.org\/[\s\S]*?> \/etc\/apt\/preferences\.d\/mozilla\n/;
+  const install10 = /\n {2}firefox-esr \\\n/;
+  if (repository10.test(script) && install10.test(script)) return script.replace(repository10, "").replace(install10, "\n");
+  return script;
 }
 
 /** @internal The sandbox as eve's installer sees it: the same, except the install script it writes has no Firefox steps. */

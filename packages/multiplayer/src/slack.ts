@@ -167,7 +167,7 @@ export function multiplayerSlackChannel(options: MultiplayerSlackOptions) {
     // and someone who is not linked cannot answer for someone who is.
     ...(asPerson
       ? {
-          async onInputResponse(ctx, submission) {
+          async onAnswers(ctx, submission) {
             const surface: Surface = ctx.slack.channelId.startsWith("D") ? "dm" : "channel";
             const auth = await asPerson(
               { userId: submission.user.id, userName: submission.user.username ?? submission.user.name, teamId: ctx.slack.teamId ?? null },
@@ -185,7 +185,7 @@ export function multiplayerSlackChannel(options: MultiplayerSlackOptions) {
       if (!message.author || message.author.isBot) return null;
 
       if (dmReset && message.text.trim() === dmReset) {
-        await ctx.reset({ reason: `Slack user requested ${dmReset}` });
+        await ctx.end({ reason: `Slack user requested ${dmReset}` });
         await ctx.thread.post("Started a fresh conversation.");
         return null;
       }

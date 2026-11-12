@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
-export const EVE_VERSION = "0.81.1";
+export const EVE_VERSION = "1.0.0-rc.10";
 /** The npm dist-tag every @kybernesis package carries for EVE_VERSION's line, e.g. `eve-0.81`. */
 export const EVE_LINE_TAG = `eve-${EVE_VERSION.split(".").slice(0, 2).join(".")}`;
 /**
@@ -11,7 +11,7 @@ export const EVE_LINE_TAG = `eve-${EVE_VERSION.split(".").slice(0, 2).join(".")}
  */
 export const linePackage = (name: string): string => `@kybernesis/${name}@${EVE_LINE_TAG}`;
 /** The registry items built for EVE_VERSION's line; every @kybernesis dep in them is tagged for it. */
-export const REGISTRY_URL = "https://registry.kybernesis.ai/r/eve-0.81/{name}.json";
+export const REGISTRY_URL = `https://registry.kybernesis.ai/r/${EVE_LINE_TAG}/{name}.json`;
 export const DEFAULT_ISSUER = "https://agent.kybernesis.ai";
 
 const TTY = process.stdout.isTTY === true;

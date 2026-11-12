@@ -1,4 +1,4 @@
-import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool } from "eve/tools";
+import { defineDynamic, defineTool, type DynamicContext } from "eve/tools";
 import { z } from "zod";
 import { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
 import { type McpServer, callMcpTool, listMcpTools } from "./mcp.js";
@@ -9,7 +9,7 @@ export { DEFAULT_MAX_RESULT_CHARS, boundResult } from "./bound.js";
 export { asksFirst, personApproves } from "./approval.js";
 export { connectAnswer, type AgentLinkAnswer } from "./connect.js";
 
-/** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
+/** What a memo may hold: eve saves it as JSON with the session and hands it back after a cold start. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
 
@@ -361,51 +361,61 @@ async function connectService(options: ConnectorToolsOptions, user: string, serv
 
 /** Tools for every service the current principal has connected. */
 /**
- * The options of the live mount, for durable callbacks.
+ * What the control plane said this principal can use, saved with the session.
  *
- * A parked tool call replays in a fresh process with only its JSON closure.
- * Options are not JSON (a credential is a secret, not a closure value), so the
- * callback finds the mount again here — the authored tool file re-mounts on
- * every cold start, before any replay can run.
+ * eve 1.0 runs a dynamic tool's function before every model call and rebuilds
+ * the tools from ordinary code. The observation (which tools, which accounts,
+ * which MCP servers and their tool lists) is JSON and lives in a memo keyed on
+ * the turn (or the session, with `sessionOnly`), so a turn sees one fixed set
+ * and a cold start rebuilds the same tools without asking the control plane.
  */
-let mounted: ConnectorToolsOptions = {};
+interface Observed {
+  user: string | null;
+  tools: RemoteTool[];
+  accounts: Accounts;
+  servers: { server: McpServer; remote: { name: string; description?: string }[] }[];
+}
+
+async function observe(options: ConnectorToolsOptions, user: string | undefined): Promise<Observed> {
+  const { tools, accounts } = await fetchTools(options, user);
+  const servers: Observed["servers"] = [];
+  for (const server of await fetchMcpServers(options, user)) {
+    try {
+      const remote = (await listMcpTools(server)).map((t) => ({
+        name: t.name,
+        ...(t.description ? { description: t.description } : {}),
+      }));
+      servers.push({ server, remote });
+    } catch {
+      // One unreachable server must not cost the others their tools.
+    }
+  }
+  return { user: user ?? null, tools, accounts, servers };
+}
 
 export function connectorTools(options: ConnectorToolsOptions = {}) {
-  mounted = options;
-  const resolve = async (_event: unknown, ctx: unknown) => {
-    const user = principalOf(ctx);
-    const { tools, accounts } = await fetchTools(options, user);
+  const resolve = async (ctx: DynamicContext) => {
+    const key = options.sessionOnly ? ["connectors", ctx.session.id] : ["connectors", ctx.turn?.id ?? null];
+    const observed = (await ctx.memo(key, async () =>
+      observe(options, principalOf(ctx)) as unknown as Promise<JsonObject>,
+    )) as unknown as Observed;
+    const user = observed.user ?? undefined;
+    const { tools, accounts } = observed;
 
-    const entries: [string, unknown][] = [];
+    const entries: [string, ReturnType<typeof defineTool>][] = [];
 
     // Remote MCP servers, each namespaced by its own slug: two servers
     // exposing `search` is ordinary, and the model must be able to say which.
-    for (const server of await fetchMcpServers(options, user)) {
-      let remote: { name: string; description?: string }[] = [];
-      try {
-        remote = await listMcpTools(server);
-      } catch {
-        // One unreachable server must not cost the others their tools.
-        continue;
-      }
+    for (const { server, remote } of observed.servers) {
       for (const tool of remote) {
         entries.push([
           `${server.slug}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
           defineTool({
             description: `${tool.description ?? tool.name} — from ${server.name}.`,
             ...(options.askBeforeSending === false ? {} : { approval: askBeforeSending() }),
-            inputSchema: defineDurableSchema({
-              closure: {},
-              schema: () => z.object({}).passthrough(),
-            }),
-            execute: defineDurableCallback({
-              closure: { server: server as unknown as JsonObject, tool: tool.name },
-              callback: async ({ server, tool }, input: Record<string, unknown>) =>
-                boundResult(
-                  await callMcpTool(server as unknown as McpServer, tool, input),
-                  mounted.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS,
-                ),
-            }),
+            inputSchema: z.object({}).passthrough(),
+            execute: async (input: Record<string, unknown>) =>
+              boundResult(await callMcpTool(server, tool.name, input), options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS),
           }),
         ]);
       }
@@ -441,15 +451,8 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
                 `${tool.name}${tool.toolkit ? ` (${tool.toolkit})` : ""} — connected by the user.`) +
               qualifier,
             ...(options.askBeforeSending === false ? {} : { approval: askBeforeSending() }),
-            inputSchema: defineDurableSchema({
-              closure: { spec: (tool.inputSchema ?? null) as JsonObject | null },
-              schema: ({ spec }) => toolInputSchema({ inputSchema: (spec ?? undefined) as Record<string, unknown> | undefined }),
-            }),
-            execute: defineDurableCallback({
-              closure: { slug: tool.slug, user: user ?? null, account: named.account ?? null },
-              callback: ({ slug, user, account }, input: Record<string, unknown>) =>
-                runTool(mounted, slug, input, user ?? undefined, account ?? undefined),
-            }),
+            inputSchema: toolInputSchema({ inputSchema: tool.inputSchema as Record<string, unknown> | undefined }),
+            execute: (input: Record<string, unknown>) => runTool(options, tool.slug, input, user, named.account ?? undefined),
           }),
         ]);
       }
@@ -462,17 +465,10 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
         defineTool({
           description:
             "Connect an app or service (for example Gmail, Google Calendar, HubSpot) for the person you are talking to. It gives them a button to sign in with their own account in their browser; you never see a password. Use it when they ask to connect, link or sign in to something, or when a task needs a service they have not connected. Leave service empty to list what this company can connect.",
-          inputSchema: defineDurableSchema({
-            closure: {},
-            schema: () =>
-              z.object({
-                service: z.string().max(80).optional().describe("The service as the person said it, e.g. HubSpot or Google Calendar"),
-              }),
+          inputSchema: z.object({
+            service: z.string().max(80).optional().describe("The service as the person said it, e.g. HubSpot or Google Calendar"),
           }),
-          execute: defineDurableCallback({
-            closure: { user },
-            callback: ({ user }, input: { service?: string }) => connectService(mounted, user, input.service),
-          }),
+          execute: (input: { service?: string }) => connectService(options, user, input.service),
         }),
       ]);
     }
@@ -480,9 +476,5 @@ export function connectorTools(options: ConnectorToolsOptions = {}) {
     return entries.length ? Object.fromEntries(entries) : null;
   };
 
-  return defineDynamic({
-    events: options.sessionOnly
-      ? { "session.started": resolve }
-      : { "turn.started": resolve },
-  });
+  return defineDynamic(resolve);
 }

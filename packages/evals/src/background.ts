@@ -10,7 +10,7 @@ import type { EveEvalContext, EveEvalTurn } from "eve/evals";
  *
  * eve ≥0.69 holds the turn open while its tasks work, so a declared
  * subagent's answer usually lands in the same turn. Pending work still shows
- * in two shapes: a `task.started` with no `task.settled` for the same call
+ * in two shapes: a `task.started` with no `task.ended` for the same task
  * (a turn that ended or timed out while a task worked), or a tool result
  * carrying `status: "working"` (remote peers through @kybernesis/dispatch).
  */
@@ -29,7 +29,7 @@ export async function settleBackgroundWork(
   let current = turn;
   for (let hop = 0; hop < maxHops; hop++) {
     if (!hasPendingWork(current)) return current;
-    const live = t.target.watchTurn(current.sessionId, { startIndex: current.session.state.streamIndex });
+    const live = current.session.watch();
     const next = await Promise.race([
       live.result(),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
@@ -41,9 +41,9 @@ export async function settleBackgroundWork(
 }
 
 export function hasPendingWork(turn: EveEvalTurn): boolean {
-  const settled = new Set<unknown>();
-  for (const event of turn.events) if (event.type === "task.settled") settled.add(event.data.callId);
-  const unsettled = turn.events.some((event) => event.type === "task.started" && !settled.has(event.data.callId));
+  const ended = new Set<string>();
+  for (const event of turn.events) if (event.type === "task.ended") ended.add(event.data.taskId);
+  const unsettled = turn.events.some((event) => event.type === "task.started" && !ended.has(event.data.taskId));
   if (unsettled) return true;
   return turn.toolCalls.some((call) => {
     const output = call.output;

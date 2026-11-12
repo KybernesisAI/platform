@@ -273,10 +273,9 @@ export function buzzBridge(options: BuzzBridgeOptions) {
 
   const clientFor = (pubkey: string) => {
     const credentials = credentialsFor(pubkey);
-    // `host`, not `baseUrl`: a wrong key is ignored rather than rejected, and the client then
-    // builds a nonsense URL — an error about a malformed URL rather than about a mistyped option.
+    // eve 1.0 names it `baseUrl` (0.81 took `host`), and requires it.
     return new Client({
-      host: options.agentUrl,
+      baseUrl: options.agentUrl,
       auth: { bearer: credentials.bearer },
       headers: credentials.headers,
     });
@@ -607,7 +606,7 @@ export function buzzBridge(options: BuzzBridgeOptions) {
       await serialize(from, channel, async () => {
         const pending = sessions.get(from, channel);
         if (pending?.pendingInputRequests?.length) {
-          let responses: readonly import("eve/client").InputResponse[] | null;
+          let responses: readonly import("./eve-input.js").InputResponse[] | null;
           const carried = readHiddenAnswers(text);
           if (askerOnly && pending.asker && !isAsker(pending.asker, event.pubkey, speaker.user.id)) {
             // Someone else's question. A remark in its thread is people talking, not an answer:

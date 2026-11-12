@@ -165,7 +165,8 @@ export function askFrom(request: AskSource): Ask {
     allowFreeform: request.allowFreeform === true ? true : undefined,
   };
   const tool = request.action?.toolName;
-  if (ask.kind === "tool-approval" && tool) {
+  // v26 calls it `tool-approval`, eve 1.0 `approval`.
+  if ((ask.kind === "tool-approval" || ask.kind === "approval") && tool) {
     ask.card = approvalCard(tool, request.action?.input, request.requestId) ?? undefined;
   } else {
     const carried = parseCardPrompt(request.prompt);
@@ -289,7 +290,7 @@ const DECLINES = new Set(["cancel", "deny", "denied", "decline", "declined", "re
  * as answered, with what was said.
  */
 export function settleWith(ask: Pick<Ask, "kind" | "options" | "card" | "spend">, answer: Omit<AskAnswer, "requestId">, by?: string, at = Date.now()): AskSettled {
-  const approval = ask.kind === "tool-approval" || ask.card?.card === "approval" || ask.spend !== undefined;
+  const approval = ask.kind === "tool-approval" || ask.kind === "approval" || ask.card?.card === "approval" || ask.spend !== undefined;
   const option = ask.options?.find((o) => o.id === answer.optionId);
   const words = answer.text?.trim();
   if (approval && answer.optionId !== undefined) {

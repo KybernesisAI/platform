@@ -24,9 +24,9 @@ function storeWith(id = "session-dead") {
 }
 
 function completed(id) {
-  return { sessionId: id, async *[Symbol.asyncIterator]() {
-    yield { type: "message.completed", data: { finishReason: "stop", message: "fresh answer" } };
-    yield { type: "session.completed", data: {} };
+  return { sessionId: id, deliveryId: "d1", async *stream() {
+    yield { type: "content.completed", data: { kind: "text", phase: "reply", value: "fresh answer" } };
+    yield { type: "delivery.settled", data: { deliveryId: "d1", outcome: "handled" } };
   } };
 }
 
@@ -41,6 +41,11 @@ test("isSessionGone: 404, 410 session_expired and 409 session_not_active mean go
   assert.equal(isSessionGone(new ClientError(400, "Unsupported message part type")), false);
   assert.equal(isSessionGone(new ClientError(500, "boom")), false);
   assert.equal(isSessionGone(new TypeError("fetch failed")), false);
+});
+
+test("isSessionGone: a session an eve upgrade stranded (409 session_stranded) is gone", () => {
+  const stranded = new ClientError(409, JSON.stringify({ code: "session_stranded", error: "Built by another eve version.", eveVersion: "0.81.1" }));
+  assert.equal(isSessionGone(stranded), true);
 });
 
 test("a 409 'no longer active' on send replaces the session and the reply comes from the new one", async () => {
@@ -58,7 +63,7 @@ test("a 409 'no longer active' on send replaces the session and the reply comes 
       },
       async create() {
         created += 1;
-        return { response: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
+        return { delivery: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
       },
     },
   };
@@ -109,7 +114,7 @@ test("a backlog that never finishes is skipped; the dead run's own answer replac
       },
       async create() {
         created += 1;
-        return { response: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
+        return { delivery: completed("session-new"), session: { state: { sessionId: "session-new", streamIndex: 1 } } };
       },
     },
   };

@@ -183,14 +183,19 @@ export function magicFeedbackTool(options: MagicOptions = {}) {
 export function magicHook(options: MagicOptions = {}) {
   return defineHook({
     events: {
-      async "message.received"(event, ctx) {
+      // eve 1.0 (v27): delivery.consumed replaces message.received; the text is in its parts.
+      async "delivery.consumed"(event, ctx) {
+        const text = event.data.parts
+          .map((part) => (part.kind === "text" ? part.text : ""))
+          .filter(Boolean)
+          .join("\n");
         try {
           await recordTurn(
             {
               auth: ctx.session.auth.current,
               ...(ctx.channel.kind ? { channelKind: ctx.channel.kind } : {}),
               ...(ctx.channel.continuationToken ? { continuationToken: ctx.channel.continuationToken } : {}),
-              text: event.data.message,
+              text,
             },
             options,
           );
@@ -204,13 +209,15 @@ export function magicHook(options: MagicOptions = {}) {
 
 /** The standing guidance, plus what magic said to this person lately. */
 export function magicInstructions(options: MagicOptions = {}) {
-  return defineDynamic({
-    events: {
-      "turn.started": (_event, ctx) => {
-        const person = personAuth(ctx.session.auth.current)?.principalId;
-        const recent = person ? recentHeadsUps(readState(person, options), new Date()) : undefined;
-        return defineInstructions({ content: recent ? `${MAGIC_INSTRUCTIONS}\n\n${recent}` : MAGIC_INSTRUCTIONS });
-      },
-    },
+  // eve 1.0: one function, run before every model call. The turn-keyed memo
+  // reads the person's recent heads-ups once per turn, as turn.started did.
+  return defineDynamic(async (ctx) => {
+    const person = personAuth(ctx.session.auth.current)?.principalId;
+    const recent = person
+      ? await ctx.memo(["magic-recent", ctx.turn?.id ?? null], async () =>
+          recentHeadsUps(readState(person, options), ctx.now) ?? null,
+        )
+      : null;
+    return defineInstructions({ content: recent ? `${MAGIC_INSTRUCTIONS}\n\n${recent}` : MAGIC_INSTRUCTIONS });
   });
 }

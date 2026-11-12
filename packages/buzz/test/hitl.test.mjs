@@ -288,11 +288,51 @@ test("submitting a channel reply uses ClientSession.respond without consuming du
 
   await respondToPendingConversation(session, responses);
 
-  // No clientContext: on a respond, eve runs an extra step that ends on the agent's message.
+  // eve 1.0 answers name the interaction. No clientContext: on a respond, eve
+  // runs an extra step that ends on the agent's message.
   assert.deepEqual(calls, [{
-    responses,
-    options: { streamReconnectPolicy: { reconnect: false } },
+    responses: [{ interactionId: "request-1", optionId: "safe" }],
+    options: { reconnect: false },
   }]);
+});
+
+test("eve 1.0: the follower posts a question, waits through its answer, and publishes the resumed reply by line", async () => {
+  const states = [];
+  const messages = [];
+  const prompts = [];
+  // Stored lines 7..10; line 8 holds two events (the call and its question).
+  const at = (line, extra = {}) => ({ at: new Date(0).toISOString(), position: { line, index: 0 }, ...extra });
+  const events = [
+    { type: "call.requested", data: { callId: "c1", owner: { runId: "r1" }, capability: { kind: "tool", name: "gmail__send_email" }, input: { to: "a@example.com" } }, meta: at(8, { endOfLine: false }) },
+    { type: "interaction.opened", data: { interactionId: "i1", subject: { callId: "c1" }, request: { kind: "approval", prompt: "Send it?", options: [{ id: "approve", label: "Approve" }, { id: "deny", label: "Deny", style: "danger" }] } }, meta: { ...at(8), position: { line: 8, index: 1 } } },
+    { type: "interaction.settled", data: { interactionId: "i1", outcome: "accepted" }, meta: at(9) },
+    { type: "content.completed", data: { kind: "text", phase: "reply", value: "Sent." }, meta: at(10, { endOfLine: false }) },
+    { type: "turn.settled", data: { turnId: "t1", outcome: "completed" }, meta: { ...at(10), position: { line: 10, index: 1 } } },
+  ];
+  const session = {
+    get state() { return { sessionId: "session-1", streamIndex: 7 }; },
+    async *stream() { yield* events; },
+  };
+  await followPendingConversation(
+    session,
+    { id: "session-1", streamIndex: 7, speakerPublicKey: "speaker", resumeInFlight: true },
+    {
+      onState: (state) => states.push(structuredClone(state)),
+      onInputRequested: (requests) => prompts.push(requests),
+      onMessage: (message) => messages.push(message),
+    },
+    new AbortController().signal,
+  );
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0][0].requestId, "i1");
+  assert.equal(prompts[0][0].kind, "approval");
+  assert.deepEqual(prompts[0][0].action, { toolName: "gmail__send_email", input: { to: "a@example.com" } });
+  assert.match(formatInputRequests(prompts[0], { carry: true }), /kyb:ask/);
+  assert.equal(states[0].streamIndex, 9, "after the question's whole line");
+  assert.deepEqual(messages, ["Sent."]);
+  assert.equal(states.at(-1).streamIndex, 11);
+  assert.equal(states.at(-1).pendingInputRequests, undefined);
+  assert.equal(states.at(-1).resumeInFlight, undefined);
 });
 
 test("the follower awaits serialized durable state before any resumed publication", async () => {

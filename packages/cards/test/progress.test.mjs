@@ -61,26 +61,39 @@ test("one note per turn, and a replayed call is not posted twice", () => {
   assert.equal(fresh({ callId: "d", text: "No turn id." }), false);
 });
 
-test("the chat channel handler posts the note once and passes a renderer chain on", async () => {
-  const posted = [];
-  const thread = { post: async (m) => posted.push(m) };
-  const events = progressEvents();
-  const data = result("notify__working_on_it", { sent: true, message: "On it." });
-  await events["action.result"](data, { thread }, {});
-  await events["action.result"](data, { thread }, {});
-  await events["action.result"](result("artifacts__create", {}), { thread }, {});
-  assert.deepEqual(posted, ["On it."]);
+// eve 1.0 (v27): a settled call names no tool, so the note marks itself in its output.
+const settled = (output, outcome = "completed", callId = "call-1") => ({
+  type: "call.settled",
+  scope: { turnId: "turn-1" },
+  data: { callId, outcome, output },
+});
+const NOTE = { sent: true, kind: "kybernesis.progress-note", message: "On it." };
 
-  let ran = false;
-  await progressEvents()["action.result"](result("artifacts__create", {}), { thread }, {}, () => {
-    ran = true;
-  });
-  assert.equal(ran, true);
+test("v27: the chat channel handler posts the note once, on call.settled", async () => {
+  const posted = [];
+  const ctx = { channel: { thread: { post: async (m) => posted.push(m) } } };
+  const events = progressEvents();
+  await events["call.settled"](settled(NOTE), ctx);
+  await events["call.settled"](settled(NOTE), ctx);
+  await events["call.settled"](settled({ ok: true, message: "made a page" }, "completed", "call-2"), ctx);
+  await events["call.settled"](settled(NOTE, "failed", "call-3"), ctx);
+  assert.deepEqual(posted, ["On it."]);
 });
 
-test("a post that fails never fails the turn", async () => {
-  const thread = { post: async () => { throw new Error("rate limited"); } };
-  await progressEvents()["action.result"](result("notify__working_on_it", { message: "On it." }), { thread }, {});
+test("v27: a post that fails never fails the turn", async () => {
+  const ctx = { channel: { thread: { post: async () => { throw new Error("rate limited"); } } } };
+  await progressEvents()["call.settled"](settled(NOTE), ctx);
+});
+
+test("v27: call.requested carries the note before the tool runs, under any namespace and through the catalogue", () => {
+  const req = (name, input) => ({ callId: "c1", capability: { kind: "tool", name }, input });
+  assert.deepEqual(progressNotes("call.requested", req("notify__working_on_it", { message: "On it." }), { turnId: "t1" }), [
+    { callId: "c1", text: "On it.", turnId: "t1" },
+  ]);
+  assert.deepEqual(progressNotes("call.requested", req("eve__tool", { name: "notify__working_on_it", input: { message: "Via catalogue." } })), [
+    { callId: "c1", text: "Via catalogue." },
+  ]);
+  assert.deepEqual(progressNotes("call.requested", req("artifacts__create", { message: "x" })), []);
 });
 
 test("the step chip reads Update", () => {

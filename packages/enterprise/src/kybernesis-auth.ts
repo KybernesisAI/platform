@@ -191,6 +191,10 @@ export function kybernesisAuth(options: KybernesisAuthOptions): AuthFn<Request> 
       issuer: options.issuer,
       principalId: String(identity.sub),
       principalType: "user",
+      // eve 1.0 serves GET /eve/v1/info to operators only. A person with a
+      // grant on this agent reads it today for Studio's and the phone's agent
+      // panel (model, routines, channels, peers), so keep that working.
+      allowAgentInfo: true,
       subject: String(identity.sub),
       attributes: {
         org: String(identity.org),

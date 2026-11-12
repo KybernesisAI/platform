@@ -1,4 +1,4 @@
-import { defineDynamic, defineTool } from "eve/tools";
+import { defineDynamic, defineTool, type DynamicToolEntry } from "eve/tools";
 import { z } from "zod";
 import { resolveIdentity } from "./store.js";
 
@@ -115,12 +115,12 @@ export function toolName(peerName: string): string {
  * appears or disappears on the next turn; nothing to redeploy.
  */
 export function arpPeers(options: ArpPeersOptions = {}) {
-  return defineDynamic({
-    events: {
-      "turn.started": async () => {
-        const peers = await discoverPeers(options);
+  // eve 1.0: defineDynamic takes one function, run before every model call. The
+  // turn-keyed memo keeps discovery to once per turn, as the turn.started event did.
+  return defineDynamic(async (ctx) => {
+        const peers = await ctx.memo(["arp-peers", ctx.turn?.id ?? null], () => discoverPeers(options));
         if (peers.length === 0) return null;
-        const tools: Record<string, unknown> = {};
+        const tools: Record<string, DynamicToolEntry> = {};
         for (const peer of peers) {
           tools[toolName(peer.name)] = defineTool({
             description:
@@ -140,7 +140,5 @@ export function arpPeers(options: ArpPeersOptions = {}) {
           });
         }
         return tools;
-      },
-    },
   });
 }

@@ -1,5 +1,3 @@
-import { defineDurableCallback } from "eve/tools";
-
 /**
  * Which connector tools wait for the person before they run.
  *
@@ -41,6 +39,9 @@ export function personApproves(ctx: PolicyContext): "user-approval" | "not-appli
   return current?.principalType === "user" ? "user-approval" : "not-applicable";
 }
 
-/** The policy as a durable callback, so a parked call finds it again after a restart. */
-export const askBeforeSending = () =>
-  defineDurableCallback({ closure: {}, callback: (_closure: object, ctx: PolicyContext) => personApproves(ctx) });
+/**
+ * The policy as a plain function. eve 1.0 rebuilds dynamic tools (and their
+ * policies) from ordinary code before every model call, so a parked call finds
+ * it again after a restart without a durable callback.
+ */
+export const askBeforeSending = () => (ctx: PolicyContext) => personApproves(ctx);

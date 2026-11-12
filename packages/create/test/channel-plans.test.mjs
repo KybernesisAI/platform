@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { channelPlan } from "../dist/templates.js";
+import { EVE_LINE_TAG } from "../dist/util.js";
 
 test("exe slack: the agent's own Slack app from the control plane, identity on, nothing on the host", () => {
   const plan = channelPlan("slack", "planner", "exe");
@@ -9,7 +10,7 @@ test("exe slack: the agent's own Slack app from the control plane, identity on, 
   assert.match(plan.content, /identity: credential \? channelIdentity/);
   assert.doesNotMatch(plan.content, /SLACK_BOT_TOKEN|SLACK_SOCKET/);
   assert.deepEqual(plan.env, []);
-  assert.ok(plan.deps.includes("@kybernesis/multiplayer@eve-0.81"));
+  assert.ok(plan.deps.includes(`@kybernesis/multiplayer@${EVE_LINE_TAG}`));
 });
 
 test("exe imessage: the identity-gated Linq channel the Channels page connects, not Photon", () => {

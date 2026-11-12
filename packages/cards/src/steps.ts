@@ -42,6 +42,8 @@ export interface StepState {
   tasks: Set<string>;
   /** Each call's input, kept so a finished call can become a card its tool did not make (a memory save, an opened pull request). */
   inputs?: Map<string, unknown>;
+  /** v27: the call each task serves, by task id, so `task.ended` finds its step. */
+  taskCalls?: Map<string, string>;
 }
 
 export const newStepState = (): StepState => ({ steps: new Map(), tasks: new Set(), inputs: new Map() });
@@ -158,11 +160,104 @@ function presented(data: Obj, callId: string): string | undefined {
  * Feed one stream event. Returns the steps it changed, so a caller can update
  * only those; the full list is `state.steps`.
  */
-export function readStep(state: StepState, type: string, data: unknown, meta?: { at?: unknown }): Step[] {
+export function readStep(
+  state: StepState,
+  type: string,
+  data: unknown,
+  meta?: { at?: unknown },
+  scope?: { turnId?: string },
+): Step[] {
   if (!isObj(data)) return [];
   const at = typeof meta?.at === "string" ? Date.parse(meta.at) : undefined;
-  const turnId = text(data.turnId);
+  const turnId = text(data.turnId) ?? text(scope?.turnId);
   const changed: Step[] = [];
+
+  // eve 1.0 (v27): one call.requested per call; call.settled ends it; a task
+  // also gets call.started {taskId} and task.ended.
+  if (type === "call.requested") {
+    const callId = text(data.callId);
+    const capability = isObj(data.capability) ? data.capability : {};
+    const capKind = text(capability.kind);
+    const name = text(capability.name);
+    if (!callId || !name || capKind === "skill" || capKind === "control") return [];
+    const viaCatalogue = name === "eve__tool" && isObj(data.input) ? text(data.input.name) : undefined;
+    const tool = viaCatalogue ?? name;
+    if ((capability.hidden === true || hidden(tool)) && !viaCatalogue) return [];
+    if (state.steps.has(callId)) return [];
+    const input = viaCatalogue && isObj(data.input) ? data.input.input : data.input;
+    if (input !== undefined) (state.inputs ??= new Map()).set(callId, input);
+    const kind = capKind === "agent" ? (capability.remote === true ? "remote-agent-call" : "subagent-call") : undefined;
+    const chip = chipFor(tool, kind);
+    const step: Step = {
+      callId,
+      tool,
+      chip,
+      label: text(capability.label) ?? labelFor(tool, chip),
+      status: "running",
+      turnId,
+      at,
+      cards: [],
+    };
+    state.steps.set(callId, step);
+    changed.push(step);
+    return changed;
+  }
+
+  if (type === "call.started") {
+    const callId = text(data.callId);
+    const taskId = text(data.taskId);
+    if (callId && taskId) {
+      state.tasks.add(callId);
+      (state.taskCalls ??= new Map()).set(taskId, callId);
+    }
+    return [];
+  }
+
+  if (type === "call.progress") {
+    const callId = text(data.callId);
+    const step = callId ? state.steps.get(callId) : undefined;
+    const label = text(data.label);
+    if (!step || !label) return [];
+    step.label = label;
+    changed.push(step);
+    return changed;
+  }
+
+  if (type === "call.settled") {
+    const callId = text(data.callId);
+    if (!callId) return [];
+    let step = state.steps.get(callId);
+    const cards = cardsFromOutput(data.output);
+    if (!step) {
+      // A call this reader never saw requested (a replay window that starts
+      // mid-turn): v27 names no tool here, so only its cards can show.
+      if (cards.length === 0) return [];
+      step = { callId, tool: "show", chip: "Tool", label: "", status: "done", turnId, at, cards: [] };
+      state.steps.set(callId, step);
+    }
+    const label = text(data.label);
+    if (label && step.label !== "") step.label = label;
+    const outcome = text(data.outcome);
+    step.status =
+      outcome === "completed" ? "done" : outcome === "rejected" ? "rejected" : outcome === "interrupted" || outcome === "abandoned" ? "rejected" : "failed";
+    if (step.cards.length === 0) step.cards = cards;
+    if (step.cards.length === 0 && step.status === "done") {
+      step.cards = derivedCards(step.tool, state.inputs?.get(callId), data.output);
+    }
+    changed.push(step);
+    return changed;
+  }
+
+  if (type === "task.ended") {
+    const taskId = text(data.taskId);
+    const callId = taskId ? state.taskCalls?.get(taskId) : undefined;
+    const step = callId ? state.steps.get(callId) : undefined;
+    if (!step || step.status !== "running") return [];
+    const outcome = text(data.outcome);
+    step.status = outcome === "completed" ? "done" : outcome === "cancelled" ? "rejected" : "failed";
+    changed.push(step);
+    return changed;
+  }
 
   if (type === "actions.requested" && Array.isArray(data.actions)) {
     for (const raw of data.actions) {

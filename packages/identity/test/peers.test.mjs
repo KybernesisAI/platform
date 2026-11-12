@@ -41,10 +41,15 @@ test("askPeer returns the reply, a decline for 403, and a pending note on timeou
   assert.equal(JSON.parse(sent.init.body).connection_id, "c1");
 });
 
-test("arpPeers exposes one ask_<peer>_agent tool per connection on turn.started", async () => {
+test("arpPeers exposes one ask_<peer>_agent tool per connection, discovered once per turn", async () => {
   const dyn = arpPeers({ issuer: ISSUER, credential: "good", fetchImpl, cacheMs: 0 });
-  const handler = dyn.events?.["turn.started"] ?? dyn["turn.started"];
-  assert.equal(typeof handler, "function");
-  const tools = await handler({});
+  const resolver = dyn[Object.getOwnPropertySymbols(dyn).find((s) => s.description === "eve.dynamic")];
+  assert.equal(typeof resolver, "function");
+  const memo = new Map();
+  const ctx = { turn: { id: "t1" }, memo: async (key, fn) => { const k = JSON.stringify(key); if (!memo.has(k)) memo.set(k, await fn()); return memo.get(k); } };
+  const tools = await resolver(ctx);
+  const before = calls.length;
+  await resolver(ctx);
+  assert.equal(calls.length, before, "a second model call in the same turn does not rediscover");
   assert.ok(tools && tools.ask_ghost_agent, "ask_ghost_agent tool present");
 });

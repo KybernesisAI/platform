@@ -25,20 +25,15 @@
  *   computer, so this is one computer per AGENT, never per account.
  *
  * `prepare` runs at `eve build` inside the live computer (eve's
- * `installComputerUse` is the intended payload); `open()` returns the running
- * computer; the session hooks never delete it.
+ * `installComputerUse` is the intended payload); `start()` and `resume()`
+ * return the running computer; ending a session never deletes it.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { COMPUTER_USE_REVALIDATION_KEY } from "eve/computer-use/sandbox";
+import { Writable } from "node:stream";
 import type { SandboxSession } from "eve/sandbox";
-import {
-  defineSandboxProvider,
-  type SandboxProviderHandle,
-  type SandboxProviderResources,
-  type SandboxProviderTargetFile,
-} from "eve/sandbox/provider";
+import { defineSandboxProvider, type SandboxConnection, type SandboxProvider } from "eve/sandbox/provider";
 
 export interface DockerComputerEnvironmentOptions {
   /** Container name; one computer per agent. Default `agent-computer`. */
@@ -63,17 +58,16 @@ export interface DockerComputerOpenOptions {
   env?: Readonly<Record<string, string>>;
 }
 
-interface DockerComputerArtifact {
+type DockerComputerArtifact = {
   readonly container: string;
   readonly image: string;
   readonly version: 1;
-  readonly [key: string]: string | number;
-}
+};
 
-interface DockerComputerSessionState {
+type DockerComputerSessionState = {
   readonly container: string;
   readonly version: 1;
-}
+};
 
 const WORKSPACE = "/workspace";
 const USER = "agent";
@@ -166,7 +160,15 @@ function recipeHash(): string {
 // Kept in step with package.json by a test. Not read from package.json at run
 // time: eve bundles the agent's modules, so a relative require of
 // "../package.json" resolves inside eve's build output and throws.
-export const COMPUTER_VERSION = "0.4.3";
+export const COMPUTER_VERSION = "0.5.0";
+
+/**
+ * eve's computer-use stack revision (its `COMPUTER_USE_REVALIDATION_KEY`).
+ * eve 1.0 no longer exports it from `eve/extensions/computer-use/sandbox`, so
+ * it is copied here, and a test fails when the installed eve's differs.
+ * @internal
+ */
+export const COMPUTER_USE_REVALIDATION_KEY = "computer-use:0.12.5:2026-11-03.1";
 
 /** Identifies what a bake contains: this package's prepare and eve's computer-use stack. */
 export function bakeKey(): string {
@@ -304,15 +306,16 @@ function createSession(input: { container: string; env: Readonly<Record<string, 
       return { exitCode: result.exitCode, stdout: result.stdout.toString("utf8"), stderr: result.stderr };
     },
     async spawn(options) {
-      const child = nodeSpawn("docker", execArgs(options), { stdio: ["ignore", "pipe", "pipe"], signal: options.abortSignal });
+      const child = nodeSpawn("docker", execArgs(options, options.stdin === true), { stdio: [options.stdin ? "pipe" : "ignore", "pipe", "pipe"], signal: options.signal });
       const exitCode = new Promise<number>((resolveExit) => {
         child.on("close", (code, signal) => resolveExit(code ?? (signal ? 128 : 1)));
         child.on("error", () => resolveExit(1));
       });
       return {
         pid: child.pid,
-        stdout: Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-        stderr: Readable.toWeb(child.stderr) as ReadableStream<Uint8Array>,
+        ...(options.stdin && child.stdin ? { stdin: Writable.toWeb(child.stdin) as WritableStream<Uint8Array> } : {}),
+        stdout: Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>,
+        stderr: Readable.toWeb(child.stderr!) as ReadableStream<Uint8Array>,
         wait: async () => ({ exitCode: await exitCode }),
         kill: async () => {
           child.kill("SIGTERM");
@@ -350,19 +353,35 @@ function createSession(input: { container: string; env: Readonly<Record<string, 
     async writeTextFile({ path, content, encoding }) {
       await this.writeBinaryFile({ path, content: new Uint8Array(Buffer.from(content, (encoding ?? "utf8") as BufferEncoding)) });
     },
+    async writeFiles({ files }) {
+      for (const file of files) await this.writeBinaryFile({ path: file.path, content: file.content });
+    },
     async removePath({ path, recursive, force }) {
       await dockerOk(["exec", "-u", USER, container, "rm", `-${recursive ? "r" : ""}${force ? "f" : ""}`.replace(/^-$/, "-d"), resolvePath(path)], `remove ${path}`);
     },
   };
 }
 
-function handleFor(session: SandboxSession): SandboxProviderHandle<SandboxSession> {
+/**
+ * The connection eve 1.0 derives its session from: the same docker exec calls
+ * as `createSession`, in the shape a provider hands back.
+ */
+function connectionFor(input: { container: string; env: Readonly<Record<string, string>> }): SandboxConnection {
+  const session = createSession(input);
   return {
-    sandbox: session,
-    // The computer outlives every session on purpose; nothing is torn down.
-    async onSandboxStop() {},
-    async onRuntimeShutdown() {},
-    async onSandboxDelete() {},
+    workspaceRoot: WORKSPACE,
+    spawn: (options) => Promise.resolve(session.spawn({ ...options, env: { ...options.env } })),
+    async readFile({ path }) {
+      const exists = await docker(["exec", "-u", USER, input.container, "test", "-e", path]);
+      if (exists.exitCode !== 0) return null;
+      const bytes = await session.readBinaryFile({ path });
+      if (bytes === null) throw new Error(`cannot read ${path}`);
+      return bytes;
+    },
+    writeFiles: (options) => Promise.resolve(session.writeFiles(options)),
+    removePath: (options) => session.removePath(options),
+    // The computer outlives every session on purpose: stopping a session leaves it running.
+    async stop() {},
   };
 }
 
@@ -422,53 +441,60 @@ async function ensureComputer(options: Required<Pick<DockerComputerEnvironmentOp
   return image;
 }
 
-export const DockerComputer = defineSandboxProvider<
-  DockerComputerEnvironmentOptions | undefined,
-  DockerComputerOpenOptions | undefined,
-  DockerComputerArtifact,
-  DockerComputerSessionState,
-  SandboxSession
->({
+/**
+ * What the provider itself receives: the environment options, plus the
+ * computer's own `prepare` under another name. eve 1.0 takes `prepare` out of
+ * the options and runs it only while it builds a template; a computer that was
+ * recreated since (its recipe changed, or it was removed) needs it again at
+ * session start, so `DockerComputer` passes it through as `ensure`.
+ */
+type ProviderOptions = Omit<DockerComputerEnvironmentOptions, "prepare"> & { ensure?: DockerComputerEnvironmentOptions["prepare"] };
+
+const provider = defineSandboxProvider<ProviderOptions, DockerComputerOpenOptions | undefined, DockerComputerArtifact, DockerComputerSessionState>({
   name: "docker-computer",
   environment(options) {
-    const name = options?.name ?? "agent-computer";
-    const novncPort = options?.novncPort ?? 6080;
-    const env = options?.env ?? {};
+    const name = options.name ?? "agent-computer";
+    const novncPort = options.novncPort ?? 6080;
+    const env = options.env ?? {};
+    const ensure = options.ensure;
     return {
       async prepare(context) {
-        const image = await ensureComputer({ ...options, name, novncPort }, context.log);
+        const image = await ensureComputer({ ...options, name, novncPort }, (m) => context.log(m));
+        // eve seeds the workspace and skills, then runs the authored `prepare` on this computer.
+        context.log("preparing the computer");
+        await context.populate(connectionFor({ container: name, env }));
         const session = createSession({ container: name, env });
-        for (const file of targetFiles(context.resources)) {
-          await session.writeTextFile({ path: file.path, content: typeof file.content === "string" ? file.content : Buffer.from(file.content).toString("utf8") });
-        }
-        if (options?.prepare) {
-          context.log?.("preparing the computer");
-          await options.prepare(session);
-        }
         await session.run({ command: `sudo -n mkdir -p ${PREPARED_MARKER_DIR} && sudo -n touch ${PREPARED_MARKER}` });
-        return { container: name, image, version: 1 };
+        return { container: name, image, version: 1 as const };
       },
       async start(_context, open, artifact) {
         await ensureComputer({ ...options, name: artifact.container, novncPort }, undefined);
-        const session = createSession({ container: artifact.container, env: { ...env, ...(open?.env ?? {}) } });
-        await ensurePrepared(session, options?.prepare);
-        return { handle: handleFor(session), state: { container: artifact.container, version: 1 } };
+        const sessionEnv = { ...env, ...(open?.env ?? {}) };
+        await ensurePrepared(createSession({ container: artifact.container, env: sessionEnv }), ensure);
+        return { connection: connectionFor({ container: artifact.container, env: sessionEnv }), state: { container: artifact.container, version: 1 as const } };
       },
       async resume(_context, artifact, state) {
-        await ensureComputer({ ...options, name: state.container ?? artifact.container, novncPort }, undefined);
-        const session = createSession({ container: state.container, env });
-        await ensurePrepared(session, options?.prepare);
-        return handleFor(session);
+        const container = state.container ?? artifact.container;
+        await ensureComputer({ ...options, name: container, novncPort }, undefined);
+        await ensurePrepared(createSession({ container, env }), ensure);
+        return connectionFor({ container, env });
       },
+      // A session ending never removes the computer.
+      async onSessionEnd() {},
     };
   },
 });
 
-function targetFiles(resources: SandboxProviderResources): SandboxProviderTargetFile[] {
-  return [resources.workspace, resources.skills].flatMap((tree) =>
-    tree === undefined ? [] : tree.files.map((file) => ({ content: file.content, path: `${tree.targetPath}/${file.relativePath}` })),
-  );
-}
+type DockerComputerProvider = SandboxProvider<DockerComputerEnvironmentOptions | undefined, DockerComputerOpenOptions | undefined, SandboxSession>;
+
+export const DockerComputer: DockerComputerProvider = {
+  name: provider.name,
+  environment(options?: DockerComputerEnvironmentOptions) {
+    const { prepare, ...rest } = options ?? {};
+    // eve runs `prepare` while it builds the template; `ensure` re-runs it on a recreated computer.
+    return provider.environment({ ...rest, ...(prepare ? { prepare, ensure: prepare } : {}) } as never);
+  },
+} as DockerComputerProvider;
 
 // ---------------------------------------------------------------------------
 // Chrome on the computer. eve's computer-use stack installs Firefox ESR and its

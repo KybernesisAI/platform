@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { card, forModel, withCards } from "@kybernesis/cards";
-import { computer_use } from "eve/computer-use/tools";
+import { computer_use } from "eve/extensions/computer-use/tools";
 import { defineTool, type ToolContext } from "eve/tools";
 import { never } from "eve/tools/approval";
 import { z } from "zod";

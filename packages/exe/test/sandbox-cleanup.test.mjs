@@ -23,16 +23,14 @@ function context({ deleteError, getError } = {}) {
   };
 }
 
-for (const event of ["session.completed", "session.failed"]) {
-  test(`${event} deletes the terminal sandbox exactly once`, async () => {
-    const mock = context();
-    await terminalSandboxCleanupHook.events[event]({ type: event }, mock.ctx);
-    assert.equal(mock.deletes(), 1);
-  });
-}
+test("session.ended deletes the terminal sandbox exactly once", async () => {
+  const mock = context();
+  await terminalSandboxCleanupHook.events["session.ended"]({ type: "session.ended", data: { outcome: "completed" } }, mock.ctx);
+  assert.equal(mock.deletes(), 1);
+});
 
 test("resumable and non-terminal events have no cleanup handler", () => {
-  for (const event of ["session.waiting", "turn.completed", "turn.cancelled", "session.started"]) {
+  for (const event of ["session.waiting", "turn.settled", "turn.paused", "session.started", "session.completed", "session.failed"]) {
     assert.equal(terminalSandboxCleanupHook.events[event], undefined);
   }
 });
@@ -45,7 +43,7 @@ for (const failure of ["getSandbox", "delete"]) {
     const originalWarn = console.warn;
     console.warn = (...args) => warnings.push(args);
     try {
-      await terminalSandboxCleanupHook.events["session.failed"]({ type: "session.failed" }, mock.ctx);
+      await terminalSandboxCleanupHook.events["session.ended"]({ type: "session.ended", data: { outcome: "failed" } }, mock.ctx);
     } finally {
       console.warn = originalWarn;
     }

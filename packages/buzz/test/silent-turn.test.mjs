@@ -28,7 +28,7 @@ function clientAnswering(events) {
         return {
           state: { sessionId: id, streamIndex: 2 },
           stream: async function* () {},
-          send: async () => ({ sessionId: id, async *[Symbol.asyncIterator]() { yield* events; } }),
+          send: async () => ({ sessionId: id, deliveryId: "d1", async *stream() { yield* events; } }),
         };
       },
       async create() { throw new Error("not expected"); },
@@ -36,17 +36,23 @@ function clientAnswering(events) {
   };
 }
 
-const toolFailed = (toolName, message) => ({
-  type: "action.result",
-  data: { status: "failed", error: { code: "tool_failed", message }, result: { kind: "tool-result", callId: "c1", toolName, isError: true, output: message } },
-});
+let calls = 0;
+/** eve 1.0: the call names its tool when requested and settles by id. */
+const toolFailed = (toolName, message) => {
+  const callId = `c${++calls}`;
+  return [
+    { type: "call.requested", data: { callId, owner: { runId: "r1" }, capability: { kind: "tool", name: toolName }, input: {} } },
+    { type: "call.settled", data: { callId, outcome: "failed", error: { code: "tool_failed", message }, output: message } },
+  ];
+};
+const settled = (outcome = "handled") => ({ type: "delivery.settled", data: { deliveryId: "d1", outcome } });
 
 test("AC1: a turn whose only tool call fails names the tool and its error, verbatim", async () => {
   const events = [
-    toolFailed("todoist_get_all_sections", "Tool TODOIST_GET_ALL_SECTIONS not found (404)"),
-    toolFailed("todoist_get_all_sections", "Tool TODOIST_GET_ALL_SECTIONS not found (404)"),
-    { type: "message.completed", data: { finishReason: "stop", message: "" } },
-    { type: "session.waiting", data: {} },
+    ...toolFailed("todoist_get_all_sections", "Tool TODOIST_GET_ALL_SECTIONS not found (404)"),
+    ...toolFailed("todoist_get_all_sections", "Tool TODOIST_GET_ALL_SECTIONS not found (404)"),
+    { type: "turn.settled", data: { turnId: "t", outcome: "completed" } },
+    settled(),
   ];
   const result = await answerTurn(clientAnswering(events), storeWith(), "channel", "list my sections", "relay");
   assert.equal(result.message, "");
@@ -59,10 +65,11 @@ test("AC1: a turn whose only tool call fails names the tool and its error, verba
 });
 
 test("AC2: a failed model call is reported as such, with its code", async () => {
+  const error = { code: "MODEL_CALL_FAILED", message: "AI_APICallError: Overloaded" };
   const events = [
-    { type: "step.failed", data: { code: "MODEL_CALL_FAILED", message: "AI_APICallError: Overloaded", stepIndex: 0 } },
-    { type: "turn.failed", data: { code: "MODEL_CALL_FAILED", message: "AI_APICallError: Overloaded" } },
-    { type: "session.failed", data: {} },
+    { type: "model.settled", data: { runId: "r1", outcome: "failed", error } },
+    { type: "turn.settled", data: { turnId: "t", outcome: "failed", error } },
+    settled("failed"),
   ];
   const result = await answerTurn(clientAnswering(events), storeWith(), "channel", "hello", "relay");
   assert.equal(result.status, "failed");
@@ -73,14 +80,23 @@ test("AC2: a failed model call is reported as such, with its code", async () => 
 
 test("AC3: an empty completion with no failures keeps the existing sentence", async () => {
   const events = [
-    { type: "action.result", data: { status: "completed", result: { kind: "tool-result", callId: "c1", toolName: "arcana_recall", output: "nothing" } } },
-    { type: "message.completed", data: { finishReason: "stop", message: "" } },
-    { type: "session.completed", data: {} },
+    { type: "call.requested", data: { callId: "c9", owner: { runId: "r1" }, capability: { kind: "tool", name: "arcana_recall" }, input: {} } },
+    { type: "call.settled", data: { callId: "c9", outcome: "completed", output: "nothing" } },
+    { type: "turn.settled", data: { turnId: "t", outcome: "completed" } },
+    settled(),
   ];
   const result = await answerTurn(clientAnswering(events), storeWith(), "channel", "hello", "relay");
   assert.deepEqual(result.failures, []);
   assert.equal(silentTurnReply(result.failures), "I didn't get an answer back for that one — ask me again and I'll retry.");
   assert.equal(describeSilentTurn(result.failures), "no text: empty completion");
+});
+
+test("AC4 on eve 1.0: a rejected call names its tool from the call that requested it", () => {
+  const calls = new Map([["c1", { name: "gh_merge" }]]);
+  assert.equal(failureFromEvent({ type: "call.settled", data: { callId: "c1", outcome: "completed", output: "ok" } }, calls), null);
+  const f = failureFromEvent({ type: "call.settled", data: { callId: "c1", outcome: "rejected", output: { reason: "approval denied" } } }, calls);
+  assert.deepEqual(f, { kind: "tool", toolName: "gh_merge", message: '{"reason":"approval denied"}' });
+  assert.equal(failureFromEvent({ type: "call.settled", data: { callId: "zz", outcome: "failed", error: { message: "x" } } }).toolName, "a tool");
 });
 
 test("AC4: nothing in the reply is invented; unknown events are ignored", () => {

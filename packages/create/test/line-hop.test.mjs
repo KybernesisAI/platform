@@ -43,6 +43,13 @@ test("the manifest drops the browser extension, pins GitHub tools, raises ai and
   assert.deepEqual(again, { moves: [], registry: null });
 });
 
+test("a registry on an older eve line moves to the certified line's copy", () => {
+  const pkg = { registries: { "@kybernesis": LINE_URL } };
+  const next = "https://registry.kybernesis.ai/r/eve-1.0/{name}.json";
+  assert.deepEqual(migrateManifest(pkg, next), { moves: [], registry: { from: LINE_URL, to: next } });
+  assert.equal(pkg.registries["@kybernesis"], next);
+});
+
 test("a registry pointed somewhere of the owner's choosing, and an ai range already high enough, are left alone", () => {
   const pkg = { dependencies: { ai: "^7.1.0" }, registries: { "@kybernesis": "https://example.test/{name}.json" } };
   assert.deepEqual(migrateManifest(pkg, LINE_URL), { moves: [], registry: null });
@@ -140,6 +147,7 @@ test("an agent with no store has nothing to keep", () => {
 
 test("doctor reports what the hop would move without moving it", async () => {
   const { lineHopDoctorChecks } = await import("../dist/doctor.js");
+  const { EVE_VERSION } = await import("../dist/util.js");
   const a = agent({
     "package.json": JSON.stringify({ dependencies: { "@agent-browser/eve": "0.34.0" } }),
     "agent/extensions/browser.ts": AGENT_BROWSER_MOUNT,
@@ -148,12 +156,25 @@ test("doctor reports what the hop would move without moving it", async () => {
     const labels = lineHopDoctorChecks(a.dir).map((c) => `${c.verdict} ${c.label}`);
     assert.deepEqual(labels, [
       "warn @agent-browser/eve is installed",
-      "warn agent/extensions/browser.ts mounts an extension that does not run on eve 0.81.1",
+      `warn agent/extensions/browser.ts mounts an extension that does not run on eve ${EVE_VERSION}`,
     ]);
     assert.equal(a.read("agent/extensions/browser.ts"), AGENT_BROWSER_MOUNT);
     const clean = agent({ "package.json": "{}" });
     assert.deepEqual(lineHopDoctorChecks(clean.dir), []);
     clean.cleanup();
+  } finally {
+    a.cleanup();
+  }
+});
+
+test("code that uses what eve 1.0 renamed is reported, never rewritten", () => {
+  const source = 'export default defineEval({ test: (t) => t.calledSubagent("x") });\n';
+  const a = agent({ "package.json": "{}", "evals/route.eval.ts": source });
+  try {
+    const result = migrateSources(a.dir);
+    assert.deepEqual(result.manual.map((m) => m.file), ["evals/route.eval.ts"]);
+    assert.match(result.manual[0].action, /calledAgent/);
+    assert.equal(a.read("evals/route.eval.ts"), source);
   } finally {
     a.cleanup();
   }
