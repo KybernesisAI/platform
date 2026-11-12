@@ -19,6 +19,11 @@ eve registry add @kybernesis=https://registry.kybernesis.ai/r/eve-0.81/{name}.js
 `r/eve-0.81/` is generated from the `eve-0.81` branch by
 `node scripts/line-registry.mjs eve-0.81`; edit the items there, not here.
 
+`r/eve-1.0/` serves agents on eve 1.0 (release candidates first): the same
+items with every `@kybernesis/*` dependency tagged `@eve-1.0` and the source
+edits 1.0 needs (`LINE_PATCHES` in `scripts/line-registry.mjs`). Regenerate it
+with `node scripts/line-registry.mjs eve-1.0 .`.
+
 ## Items
 
 ### arcana — durable long-term memory

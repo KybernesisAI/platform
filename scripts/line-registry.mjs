@@ -45,7 +45,30 @@ const fromLine = (path) =>
 const tagged = (deps) =>
   deps?.map((dep) => (/^@kybernesis\/[^@/]+$/.test(dep) ? `${dep}@${line}` : dep));
 
-const withLineDeps = (item) => (item.dependencies ? { ...item, dependencies: tagged(item.dependencies) } : item);
+/**
+ * Source edits a line needs in files the items write, where the root copy must
+ * stay as it is for the line every agent still runs. Each is exact: a file
+ * that no longer contains `from` is left alone and reported.
+ */
+const LINE_PATCHES = {
+  // eve 1.0 exports the built-in tool definitions themselves, not factories.
+  "eve-1.0": [{ from: "export default noReply();", to: "export default noReply;" }],
+};
+
+const patched = (item) => {
+  const patches = LINE_PATCHES[line] ?? [];
+  if (!patches.length || !item.files) return item;
+  return {
+    ...item,
+    files: item.files.map((file) => {
+      let content = file.content;
+      for (const { from, to } of patches) if (typeof content === "string" && content.includes(from)) content = content.replaceAll(from, to);
+      return content === file.content ? file : { ...file, content };
+    }),
+  };
+};
+
+const withLineDeps = (item) => patched(item.dependencies ? { ...item, dependencies: tagged(item.dependencies) } : item);
 
 const write = (name, value) => writeFileSync(join(out, name), JSON.stringify(value, null, 2) + "\n");
 
