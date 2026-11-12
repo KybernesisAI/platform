@@ -1,4 +1,4 @@
-import { defineDynamic, defineTool } from "eve/tools";
+import { defineDynamic, defineTool, type DynamicToolEntry } from "eve/tools";
 import { z } from "zod";
 
 /**
@@ -261,15 +261,15 @@ function toolName(peer: string): string {
 }
 
 export function governedPeers(options: GovernedPeersOptions = {}) {
-  return defineDynamic({
-    events: {
-      "turn.started": async () => {
-        const all = await discover(options);
+  // eve 1.0: defineDynamic takes one function, run before every model call. The
+  // turn-keyed memo keeps discovery to once per turn, as the turn.started event did.
+  return defineDynamic(async (ctx) => {
+        const all = await ctx.memo(["governed-peers", ctx.turn?.id ?? null], () => discover(options));
         const skip = new Set((options.declared ?? []).map((n) => n.toLowerCase()));
         const peers = all.filter((p) => !skip.has(p.name.toLowerCase()));
         if (peers.length === 0) return null;
 
-        const tools: Record<string, unknown> = {};
+        const tools: Record<string, DynamicToolEntry> = {};
         for (const peer of peers) {
           tools[toolName(peer.name)] = defineTool({
             // The purpose recorded on the grant IS the routing hint. It was
@@ -290,7 +290,5 @@ export function governedPeers(options: GovernedPeersOptions = {}) {
           });
         }
         return tools;
-      },
-    },
   });
 }

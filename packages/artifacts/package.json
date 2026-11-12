@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/artifacts",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Artifacts for eve agents: pages an agent makes for a person (reports, dashboards, trackers) that KYBER Studio and the phone draw inline, stored on the agent's own machine.",
   "license": "Apache-2.0",
   "type": "module",
@@ -50,11 +50,11 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "eve": ">=0.81.1 <0.82.0"
+    "eve": ">=1.0.0-rc.10 <2.0.0"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.81.1",
+    "eve": "1.0.0-rc.10",
     "typescript": "7.0.2"
   },
   "publishConfig": {

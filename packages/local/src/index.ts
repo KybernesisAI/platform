@@ -1,9 +1,8 @@
-import { defineDurableCallback, defineDurableSchema, defineDynamic, defineTool } from "eve/tools";
+import { defineDynamic, defineTool, type DynamicContext, type DynamicToolEntry } from "eve/tools";
 import { z } from "zod";
 
-/** What a durable closure may hold: eve snapshots it as JSON and hands it back on replay. */
+/** What a memo may hold: eve saves it as JSON with the session. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type JsonObject = { [key: string]: JsonValue };
 
 
 /**
@@ -429,7 +428,7 @@ export function mcpInputSchema(spec: Record<string, unknown> | undefined): z.Zod
 const RESOLVE_BUDGET_MS = 6_000;
 
 /** Discovered tools, so a turn is not a relay round trip. */
-const discovered = new Map<string, { at: number; tools: Record<string, unknown> }>();
+const discovered = new Map<string, { at: number; found: Discovered }>();
 const DISCOVERY_TTL_MS = 5 * 60_000;
 
 /** Resolve, or give up quietly when the budget is gone. */
@@ -445,81 +444,86 @@ async function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
   }
 }
 
-/**
- * The options of the live mount, for durable callbacks: a parked call replays
- * in a fresh process with only its JSON closure, and options hold a guard
- * function and a credential, neither of which belongs in one.
- */
-let mounted: LocalToolsOptions = {};
+type ListedTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
+type Discovered = { server: { id: string; name: string }; tools: ListedTool[] }[];
 
-export function localMcpTools(options: LocalToolsOptions = {}) {
-  mounted = options;
-  const resolve = async (_event: unknown, ctx: unknown) => {
-    // The same context the effect tools get, so a guard sees discovery too:
-    // in a shared channel these tools should not merely refuse when called,
-    // they should not be offered.
-    const toolCtx = ctx as LocalToolContext;
-    const user = askingUser(toolCtx);
+/** Ask Studio which MCP servers it runs and what each offers, inside the budget. */
+async function discover(options: LocalToolsOptions, toolCtx: LocalToolContext): Promise<Discovered> {
+  const user = askingUser(toolCtx);
+  const cacheKey = user ?? "(shared)";
+  const cached = discovered.get(cacheKey);
+  if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) return cached.found;
 
-    const cacheKey = user ?? "(shared)";
-    const cached = discovered.get(cacheKey);
-    if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) {
-      return Object.keys(cached.tools).length ? cached.tools : null;
-    }
+  const began = Date.now();
+  const left = (): number => Math.max(0, RESOLVE_BUDGET_MS - (Date.now() - began));
 
-    const began = Date.now();
-    const left = (): number => Math.max(0, RESOLVE_BUDGET_MS - (Date.now() - began));
+  const servers = await within(
+    (async () => {
+      try {
+        const listed = (await call(options, "local-mcp", { method: "servers/list" }, toolCtx)) as {
+          servers?: { id: string; name: string }[];
+        };
+        return listed?.servers ?? [];
+      } catch {
+        // No desktop, or nothing set up. Neither is an error worth failing a
+        // turn over — the agent simply has no local tools this time.
+        return [];
+      }
+    })(),
+    left(),
+    [] as { id: string; name: string }[],
+  );
 
-    const servers = await within(
+  const found: Discovered = [];
+  for (const server of servers) {
+    if (left() <= 0) break;
+    const tools = await within(
       (async () => {
         try {
-          const listed = (await call(options, "local-mcp", { method: "servers/list" }, toolCtx)) as {
-            servers?: { id: string; name: string }[];
-          };
-          return listed?.servers ?? [];
+          const listed = (await call(
+            options,
+            "local-mcp",
+            { server: server.id, method: "tools/list" },
+            toolCtx,
+          )) as { tools?: ListedTool[] };
+          return listed?.tools ?? [];
         } catch {
-          // No desktop, or nothing set up. Neither is an error worth failing a
-          // turn over — the agent simply has no local tools this time.
+          // One server being down must not cost the others their tools.
           return [];
         }
       })(),
       left(),
-      [] as { id: string; name: string }[],
+      [] as ListedTool[],
     );
-    if (!servers.length) {
-      // Remembered, so an absent desktop is not re-asked on every message.
-      discovered.set(cacheKey, { at: Date.now(), tools: {} });
-      return null;
-    }
+    found.push({
+      server: { id: server.id, name: server.name },
+      tools: tools.map((t) => ({
+        name: t.name,
+        ...(t.description ? { description: t.description } : {}),
+        ...(t.inputSchema ? { inputSchema: t.inputSchema } : {}),
+      })),
+    });
+  }
+  // Remembered, so an absent desktop is not re-asked on every message.
+  discovered.set(cacheKey, { at: Date.now(), found });
+  return found;
+}
 
-    const entries: [string, unknown][] = [];
-    for (const server of servers) {
-      if (left() <= 0) break;
-      const tools = await within(
-        (async () => {
-          try {
-            const listed = (await call(
-              options,
-              "local-mcp",
-              { server: server.id, method: "tools/list" },
-              toolCtx,
-            )) as {
-              tools?: {
-                name: string;
-                description?: string;
-                inputSchema?: Record<string, unknown>;
-              }[];
-            };
-            return listed?.tools ?? [];
-          } catch {
-            // One server being down must not cost the others their tools.
-            return [];
-          }
-        })(),
-        left(),
-        [] as { name: string; description?: string; inputSchema?: Record<string, unknown> }[],
-      );
+export function localMcpTools(options: LocalToolsOptions = {}) {
+  // eve 1.0 runs this before every model call. What Studio offered is JSON,
+  // saved in a turn-keyed memo, so a turn sees one fixed set and a cold start
+  // rebuilds the same tools without another relay round trip.
+  return defineDynamic(async (ctx: DynamicContext) => {
+    // The same context the effect tools get, so a guard sees discovery too:
+    // in a shared channel these tools should not merely refuse when called,
+    // they should not be offered.
+    const toolCtx = ctx as unknown as LocalToolContext;
+    const found = (await ctx.memo(["local-mcp", ctx.turn?.id ?? null], async () =>
+      discover(options, toolCtx) as unknown as Promise<JsonValue>,
+    )) as unknown as Discovered;
 
+    const entries: [string, DynamicToolEntry][] = [];
+    for (const { server, tools } of found) {
       for (const tool of tools) {
         // Namespaced by server: two MCP servers exposing `query` are a real
         // possibility, and the model has to be able to say which one it means.
@@ -528,29 +532,18 @@ export function localMcpTools(options: LocalToolsOptions = {}) {
           defineTool({
             description:
               `${tool.description ?? tool.name} — runs on the user's own computer via ${server.name}.`,
-            inputSchema: defineDurableSchema({
-              closure: { spec: (tool.inputSchema ?? null) as JsonObject | null },
-              schema: ({ spec }) => mcpInputSchema((spec ?? undefined) as Record<string, unknown> | undefined),
-            }),
-            execute: defineDurableCallback({
-              closure: { server: server.id, tool: tool.name },
-              callback: ({ server, tool }, input: Record<string, unknown>, ctx?: LocalToolContext) =>
-                call(
-                  mounted,
-                  "local-mcp",
-                  { server, method: "tools/call", params: { name: tool, arguments: input } },
-                  ctx,
-                ),
-            }),
+            inputSchema: mcpInputSchema(tool.inputSchema),
+            execute: (input: Record<string, unknown>, ctx?: LocalToolContext) =>
+              call(
+                options,
+                "local-mcp",
+                { server: server.id, method: "tools/call", params: { name: tool.name, arguments: input } },
+                ctx,
+              ),
           }),
         ]);
       }
     }
-
-    const tools = Object.fromEntries(entries);
-    discovered.set(cacheKey, { at: Date.now(), tools });
-    return entries.length ? tools : null;
-  };
-
-  return defineDynamic({ events: { "turn.started": resolve } });
+    return entries.length ? Object.fromEntries(entries) : null;
+  });
 }

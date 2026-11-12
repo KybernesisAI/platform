@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "eve": "0.81.1",
+    "eve": "1.0.0-rc.10",
     "typescript": "7.0.2"
   },
   "engines": {

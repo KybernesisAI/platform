@@ -17,8 +17,8 @@ export async function deleteTerminalSessionSandbox(ctx: HookContext): Promise<vo
 /** Best-effort terminal sandbox cleanup for exe-hosted durable sessions. */
 export const terminalSandboxCleanupHook = defineHook({
   events: {
-    "session.completed": (_event, ctx) => deleteTerminalSessionSandbox(ctx),
-    "session.failed": (_event, ctx) => deleteTerminalSessionSandbox(ctx),
+    // eve 1.0 (v27): one `session.ended` replaces session.completed/session.failed.
+    "session.ended": (_event, ctx) => deleteTerminalSessionSandbox(ctx),
   },
 });
 

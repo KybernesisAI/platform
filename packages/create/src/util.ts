@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
-export const EVE_VERSION = "0.81.1";
+export const EVE_VERSION = "1.0.0-rc.10";
 /** The npm dist-tag every @kybernesis package carries for EVE_VERSION's line, e.g. `eve-0.81`. */
 export const EVE_LINE_TAG = `eve-${EVE_VERSION.split(".").slice(0, 2).join(".")}`;
 /**
