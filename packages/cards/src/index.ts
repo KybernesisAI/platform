@@ -31,6 +31,7 @@ export {
   progressNotes,
   progressGate,
   progressEvents,
+  PROGRESS_KIND,
   type ProgressNote,
 } from "./progress.js";
 export { derivedCards, outputObject, formPrompt, formAnswer, readFormAnswer } from "./derive.js";
@@ -71,3 +72,22 @@ export {
   type SpendNeed,
   type VaultNeed,
 } from "./carried-asks.js";
+export {
+  streamEvents,
+  lineFormat,
+  isTransportRecord,
+  turnIdOf,
+  replyText,
+  narrationText,
+  turnEnd,
+  failureMessage,
+  waitsOnPerson,
+  sessionSettled,
+  openedRequests,
+  settledRequestIds,
+  toAnswers,
+  type StreamEvent,
+  type TurnEnd,
+  type OpenRequest,
+  type Answer,
+} from "./stream.js";

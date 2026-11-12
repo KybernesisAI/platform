@@ -18,6 +18,9 @@
 /** The tool's name without its mount namespace. */
 export const PROGRESS_TOOL = "working_on_it";
 
+/** What `working_on_it` puts in its output's `kind`, so a reader of a settled call (which names no tool on eve 1.0) knows it is a note. */
+export const PROGRESS_KIND = "kybernesis.progress-note";
+
 /** Past this many characters a note is cut: it is one sentence, not a reply. */
 export const PROGRESS_MAX = 280;
 
@@ -55,9 +58,9 @@ export function progressText(value: unknown): string | undefined {
  * `actions.requested` handler already sets its typing label). A call through
  * eve's catalogue (`eve__tool`) names the real tool in its input.
  */
-export function progressNotes(type: string, data: unknown): ProgressNote[] {
+export function progressNotes(type: string, data: unknown, scope?: { turnId?: string }): ProgressNote[] {
   if (!isObj(data)) return [];
-  const turnId = str(data.turnId);
+  const turnId = str(data.turnId) ?? str(scope?.turnId);
   const note = (callId: string | undefined, text: string | undefined): ProgressNote[] =>
     callId && text ? [{ callId, text, ...(turnId ? { turnId } : {}) }] : [];
 
@@ -71,6 +74,24 @@ export function progressNotes(type: string, data: unknown): ProgressNote[] {
       const input = viaCatalogue ? (raw.input as Obj).input : raw.input;
       return note(callId, isObj(input) ? progressText(input.message) : undefined);
     });
+  }
+
+  // eve 1.0 (v27): one call.requested per call, naming what it invokes.
+  if (type === "call.requested") {
+    const capability = isObj(data.capability) ? data.capability : {};
+    const viaCatalogue = str(capability.name) === "eve__tool" && isObj(data.input);
+    const tool = viaCatalogue ? str((data.input as Obj).name) : str(capability.name);
+    if (!isProgressTool(tool)) return [];
+    const input = viaCatalogue ? (data.input as Obj).input : data.input;
+    return note(str(data.callId), isObj(input) ? progressText(input.message) : undefined);
+  }
+
+  // v27 call.settled names no tool, so the note marks itself in its output.
+  if (type === "call.settled") {
+    if (data.outcome !== "completed") return [];
+    const output = isObj(data.output) ? data.output : {};
+    if (output.kind !== PROGRESS_KIND) return [];
+    return note(str(data.callId), progressText(output.message));
   }
 
   if (type === "action.result") {
@@ -114,28 +135,30 @@ interface ChatThread {
  *
  *     linqChannel({ credentials, events: progressEvents() })
  *
- * It handles `action.result` only, because the channel's default
- * `actions.requested` handler is what shows the typing indicator, and an
- * override would replace it. The tool returns at once, so the note still
- * arrives before the work. A failed post is logged and never fails the turn.
+ * eve 1.0: it handles `call.settled` only, because the channel's built-in
+ * `call.requested` handler is what shows the typing indicator, and a supplied
+ * handler replaces the built-in one. The tool returns at once, so the note
+ * still arrives before the work. A failed post is logged and never fails the
+ * turn.
  */
 export function progressEvents(): {
-  "action.result"(eventData: unknown, channel: { thread?: ChatThread | null }, ...rest: unknown[]): Promise<void>;
+  "call.settled"(
+    event: { type: string; data: unknown; scope?: { turnId?: string } },
+    ctx: { channel?: { thread?: ChatThread | null } },
+  ): Promise<void>;
 } {
   const fresh = progressGate();
   return {
-    async "action.result"(eventData, channel, ...rest) {
-      for (const note of progressNotes("action.result", eventData)) {
-        if (!channel.thread || !fresh(note)) continue;
+    async "call.settled"(event, ctx) {
+      const thread = ctx.channel?.thread;
+      for (const note of progressNotes("call.settled", event.data, event.scope)) {
+        if (!thread || !fresh(note)) continue;
         try {
-          await channel.thread.post(note.text);
+          await thread.post(note.text);
         } catch (error) {
           console.warn(`[progress] could not post the note: ${(error as Error).message}`);
         }
       }
-      // A renderer chain (Slack) passes the rest of the chain last; let it run.
-      const next = rest.at(-1);
-      if (typeof next === "function") await (next as () => unknown)();
     },
   };
 }

@@ -1,3 +1,4 @@
+import { failureMessage, replyText, streamEvents, turnEnd, waitsOnPerson } from "@kybernesis/cards";
 import { defineDynamic, defineTool, type DynamicToolEntry } from "eve/tools";
 import { z } from "zod";
 
@@ -211,34 +212,38 @@ async function ask(
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        let event: { type?: string; data?: Record<string, unknown> };
+        let record: unknown;
         try {
-          event = JSON.parse(line);
+          record = JSON.parse(line);
         } catch {
           continue;
         }
-        // Only a terminal message is the answer: eve emits narration as its own
-        // completed message with finishReason "tool-calls", and treating those
-        // as the reply returns the peer's intentions instead of its answer.
-        if (event.type === "message.completed" && event.data?.finishReason === "stop") {
-          reply = String(event.data.message ?? "");
-        }
-        if (event.type === "turn.failed" || event.type === "session.failed") {
-          const detail = (event.data as { message?: string } | undefined)?.message;
-          throw new Error(`${peer.name} failed to answer${detail ? `: ${detail}` : "."}`);
-        }
-        // eve ≥0.69 holds the peer's turn open at a question from inside one of
-        // its tools instead of ending it. Nobody on this side can answer it, so
-        // say so now rather than waiting out the whole timeout.
-        if (event.type === "turn.waiting" && event.data?.on === "input") {
-          await reader.cancel().catch(() => {});
-          reply = ""; // what it said before the question is not its answer
-          throw new Error(`${peer.name} is waiting for someone on its side to answer a question or approve a step, so it cannot reply yet.`);
-        }
-        if (event.type === "session.waiting" || event.type === "turn.completed") {
-          await reader.cancel().catch(() => {});
-          if (reply) return reply;
-          throw new Error(`${peer.name} finished its turn without a reply.`);
+        // The peer may be on eve 0.81 (v26: one event per line) or 1.0 (v27:
+        // event lines of facts, and progress records); read both.
+        for (const event of streamEvents(record)) {
+          // Only a terminal message is the answer: eve emits narration as its
+          // own completed message, and treating that as the reply returns the
+          // peer's intentions instead of its answer.
+          const said = replyText(event);
+          if (said !== undefined) reply = said;
+          const ended = turnEnd(event);
+          if (ended === "failed" || event.type === "session.failed") {
+            const detail = failureMessage(event);
+            throw new Error(`${peer.name} failed to answer${detail ? `: ${detail}` : "."}`);
+          }
+          // eve ≥0.69 holds the peer's turn open at a question from inside one of
+          // its tools instead of ending it. Nobody on this side can answer it, so
+          // say so now rather than waiting out the whole timeout.
+          if (waitsOnPerson(event)) {
+            await reader.cancel().catch(() => {});
+            reply = ""; // what it said before the question is not its answer
+            throw new Error(`${peer.name} is waiting for someone on its side to answer a question or approve a step, so it cannot reply yet.`);
+          }
+          if (ended || event.type === "session.waiting" || event.type === "session.ended") {
+            await reader.cancel().catch(() => {});
+            if (reply) return reply;
+            throw new Error(`${peer.name} finished its turn without a reply.`);
+          }
         }
       }
     }

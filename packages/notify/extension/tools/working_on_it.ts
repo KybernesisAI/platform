@@ -31,7 +31,9 @@ export default defineTool({
     start: ({ message }) => message,
   },
   async execute({ message }) {
-    return { sent: true, message: message.replace(/\s+/g, " ").trim() };
+    // `kind` marks the output as a note: on eve 1.0 a settled call names no tool
+    // (PROGRESS_KIND in @kybernesis/cards).
+    return { sent: true, kind: "kybernesis.progress-note", message: message.replace(/\s+/g, " ").trim() };
   },
   toModelOutput: () => ({
     type: "text" as const,

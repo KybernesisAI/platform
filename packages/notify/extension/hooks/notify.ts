@@ -30,33 +30,37 @@ function settings(): { issuer: string; credential: string } | null {
 
 export default defineHook({
   events: {
-    async "input.requested"(event, ctx) {
+    // eve 1.0 (v27): a question or approval opens an interaction. Sign-ins
+    // open one too; they never pushed before and still don't.
+    async "interaction.opened"(event, ctx) {
       try {
         const s = settings();
         const user = askingUser(ctx as never);
         const sessionId = (ctx as { session?: { id?: string } }).session?.id;
         if (!s || !user || !sessionId) return;
-        // Both shapes eve has used: the prompt at the top level, or under the tool call's input.
-        const first = (event as unknown as { data?: { requests?: readonly { prompt?: string; action?: { input?: Record<string, unknown> } }[] } }).data?.requests?.[0];
-        const inner = (first?.action?.input ?? {}) as { prompt?: unknown; question?: unknown };
-        const prompt = first?.prompt ?? (typeof inner.prompt === "string" ? inner.prompt : typeof inner.question === "string" ? inner.question : "");
+        const request = event.data.request;
+        if (request.kind === "sign-in") return;
+        const prompt = request.prompt ?? "";
         const r = await notify({ ...s, user, sessionId, kind: "question", body: prompt ? preview(prompt) : undefined });
         console.log(`[notify] question for ${user.slice(0, 8)} → ${r.status}`);
       } catch {
         /* never fail the turn */
       }
     },
-    async "message.completed"(event, ctx) {
+    // The answer is text content in the reply phase (v26 message.completed).
+    async "content.completed"(event, ctx) {
       try {
         const sessionId = (ctx as { session?: { id?: string } }).session?.id;
-        const data = (event as { data?: { message?: string; finishReason?: string } }).data;
-        if (!sessionId || typeof data?.message !== "string" || data.finishReason === "tool-calls") return;
-        lastReply.set(sessionId, data.message);
+        const data = event.data;
+        if (!sessionId || data.kind !== "text" || data.phase !== "reply" || typeof data.value !== "string") return;
+        lastReply.set(sessionId, data.value);
       } catch {
         /* never fail the turn */
       }
     },
-    async "session.waiting"(_event, ctx) {
+    // A turn that waits on background work keeps running in v27, so
+    // turn.settled is the moment v26's session.waiting marked.
+    async "turn.settled"(event, ctx) {
       try {
         const s = settings();
         const user = askingUser(ctx as never);
@@ -64,6 +68,7 @@ export default defineHook({
         if (!sessionId) return;
         const reply = lastReply.get(sessionId);
         lastReply.delete(sessionId);
+        if (event.data.outcome !== "completed") return;
         // A turn that ended without a reply — a question parked, a cancel — already said what it had to.
         if (!s || !user || !reply) return;
         // A reply the person is already hearing: a live voice call relays each

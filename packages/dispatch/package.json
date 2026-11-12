@@ -56,5 +56,8 @@
     "@kybernesis/enterprise": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "@kybernesis/cards": "^0.9.0"
   }
 }
