@@ -131,7 +131,7 @@ const PREPARED_MARKER = `${PREPARED_MARKER_DIR}/prepared`;
  */
 async function ensurePrepared(session: SandboxSession, prepare: DockerComputerEnvironmentOptions["prepare"]): Promise<void> {
   if (!prepare) return;
-  const marker = await session.run({ command: `test -f ${PREPARED_MARKER}` });
+  const marker = await session.run({ command: `test -f ${PREPARED_MARKER} || exit ${PROBE_NO}` });
   if (marker.exitCode === 0) return;
   await prepare(session);
   await session.run({ command: `sudo -n mkdir -p ${PREPARED_MARKER_DIR} && sudo -n touch ${PREPARED_MARKER}` });
@@ -160,7 +160,7 @@ function recipeHash(): string {
 // Kept in step with package.json by a test. Not read from package.json at run
 // time: eve bundles the agent's modules, so a relative require of
 // "../package.json" resolves inside eve's build output and throws.
-export const COMPUTER_VERSION = "0.5.0";
+export const COMPUTER_VERSION = "0.5.1";
 
 /**
  * eve's computer-use stack revision (its `COMPUTER_USE_REVALIDATION_KEY`).
@@ -188,13 +188,21 @@ export const INSTALLED_MARKER = () => `${PREPARED_MARKER_DIR}/installed-${bakeKe
 
 /** @internal Whether this computer came from a bake that matches the installed packages. */
 export async function isBakedComputer(sandbox: SandboxSession): Promise<boolean> {
-  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()}` });
+  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()} || exit ${PROBE_NO}` });
   return result.exitCode === 0;
 }
 
 /** @internal Whether the current stack is already on this computer, from a bake or an earlier build. */
+/**
+ * @internal The exit code a probe uses for "no". eve 1.0 fails preparation on
+ * any `sandbox.run` that exits exactly 1, so a check that runs inside
+ * `prepare` (a marker test, the desktop's readiness test) answers "no" with
+ * this code instead of 1.
+ */
+export const PROBE_NO = 3;
+
 export async function hasCurrentInstall(sandbox: SandboxSession): Promise<boolean> {
-  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()} || test -f ${INSTALLED_MARKER()}` });
+  const result = await sandbox.run({ command: `test -f ${BAKED_MARKER()} || test -f ${INSTALLED_MARKER()} || exit ${PROBE_NO}` });
   return result.exitCode === 0;
 }
 
@@ -205,7 +213,7 @@ export async function markCurrentInstall(sandbox: SandboxSession): Promise<void>
 
 /** @internal Whether any earlier `prepare` finished on this computer, whatever version it installed. */
 export async function hasEarlierInstall(sandbox: SandboxSession): Promise<boolean> {
-  const result = await sandbox.run({ command: `test -f ${PREPARED_MARKER}` });
+  const result = await sandbox.run({ command: `test -f ${PREPARED_MARKER} || exit ${PROBE_NO}` });
   return result.exitCode === 0;
 }
 

@@ -1,6 +1,6 @@
 import { installComputerUse, startComputerUse } from "eve/extensions/computer-use/sandbox";
 import type { SandboxSession } from "eve/sandbox";
-import { hasCurrentInstall, hasEarlierInstall, installChrome, installDesktopShell, markCurrentInstall, startDesktopShell } from "./provider.js";
+import { PROBE_NO, hasCurrentInstall, hasEarlierInstall, installChrome, installDesktopShell, markCurrentInstall, startDesktopShell } from "./provider.js";
 
 /**
  * Everything the computer needs, once, at `eve build`: eve's desktop stack,
@@ -70,10 +70,10 @@ export function computerUpCommand(sandbox: Pick<SandboxSession, "resolvePath">):
     "set -u",
     "newest=$(pgrep -n -x xfsettingsd || true)",
     'for pid in $(pgrep -x xfsettingsd || true); do [ "$pid" = "$newest" ] || kill "$pid" 2>/dev/null || true; done',
-    '[ -n "$newest" ] || exit 1',
-    "xdpyinfo -display :99 >/dev/null 2>&1 || exit 1",
-    "DISPLAY=:99 xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -Eq 'window id # 0x[1-9a-f]' || exit 1",
-    `COMPUTER_USE_REQUEST='{"action":"health"}' COMPUTER_USE_SOCKET_PATH='${root}/cua-driver.sock' node '${driverRoot}/client.mjs' >/dev/null 2>&1 || exit 1`,
+    `[ -n "$newest" ] || exit ${PROBE_NO}`,
+    `xdpyinfo -display :99 >/dev/null 2>&1 || exit ${PROBE_NO}`,
+    `DISPLAY=:99 xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -Eq 'window id # 0x[1-9a-f]' || exit ${PROBE_NO}`,
+    `COMPUTER_USE_REQUEST='{"action":"health"}' COMPUTER_USE_SOCKET_PATH='${root}/cua-driver.sock' node '${driverRoot}/client.mjs' >/dev/null 2>&1 || exit ${PROBE_NO}`,
     "exit 0",
   ].join("\n");
 }

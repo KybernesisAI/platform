@@ -3,6 +3,13 @@ import { test } from "node:test";
 
 import { computerUpCommand, prepareComputer, startComputer, stripFirefoxInstall } from "../dist/lifecycle.js";
 
+// eve 1.0 fails preparation on any sandbox.run that exits exactly 1
+// (createLoggingSandboxSession), so every fake here does the same.
+const strict = (result, command) => {
+  if (result.exitCode === 1) throw new Error(`Sandbox preparation failed because sandbox.run command exited with code 1:\n${command}`);
+  return result;
+};
+
 const sandbox = (upExit) => {
   const commands = [];
   return {
@@ -10,11 +17,17 @@ const sandbox = (upExit) => {
     resolvePath: (path) => `/workspace/${path}`,
     run: async ({ command }) => {
       commands.push(command);
-      if (command === computerUpCommand(sandbox(0))) return { exitCode: upExit, stdout: "", stderr: "" };
+      if (command === computerUpCommand(sandbox(0))) return strict({ exitCode: upExit, stdout: "", stderr: "" }, command);
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   };
 };
+
+test("no probe that runs during prepare answers no with exit 1", () => {
+  const command = computerUpCommand({ resolvePath: (path) => `/workspace/${path}` });
+  assert.doesNotMatch(command, /exit 1\b/);
+  assert.match(command, /exit 3/);
+});
 
 test("the up check keeps only the newest settings daemon and tests eve's display, window manager and driver", () => {
   const command = computerUpCommand({ resolvePath: (path) => `/workspace/${path}` });
@@ -36,7 +49,7 @@ test("a computer that is already up does not start eve's display again", async (
 });
 
 test("a computer that is down clears old settings daemons before eve starts the display", async () => {
-  const box = sandbox(1);
+  const box = sandbox(3);
   await startComputer(box);
   const kill = box.commands.findIndex((command) => command === "pkill -x xfsettingsd || true");
   const display = box.commands.findIndex((command) => command.includes("dbus-launch"));
@@ -57,7 +70,9 @@ const preparing = ({ markers = [], installExit = 0 } = {}) => {
       commands.push(command);
       if (command.startsWith("test -f /usr/local/share/kybernesis-computer/")) {
         const found = command.split(" || ").some((part) => markers.some((m) => part.endsWith(`/${m}`) || part.includes(`/${m}-`)));
-        return { exitCode: found ? 0 : 1, stdout: "", stderr: "" };
+        // A probe answers "no" with the code after `|| exit`, or test's own 1.
+        const no = Number(/\|\| exit (\d+)$/.exec(command)?.[1] ?? 1);
+        return strict({ exitCode: found ? 0 : no, stdout: "", stderr: "" }, command);
       }
       if (command.includes("install-computer-use.sh")) return { exitCode: installExit, stdout: "", stderr: "Mozilla's repository does not offer the Firefox ESR 140 line" };
       return { exitCode: 0, stdout: "", stderr: "" };
