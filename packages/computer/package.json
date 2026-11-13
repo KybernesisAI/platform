@@ -1,6 +1,6 @@
 {
   "name": "@kybernesis/computer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A persistent, isolated computer for an eve agent — a Docker desktop with Chrome that a person can watch and take over — plus the rule for when an agent uses it instead of a connector, a tool, or the person's own machine.",
   "license": "Apache-2.0",
   "type": "module",
