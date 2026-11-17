@@ -1,0 +1,3 @@
+# Required checks for ship (read from master). The review status is always required too.
+build
+samantha/review
