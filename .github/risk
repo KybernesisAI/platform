@@ -2,7 +2,9 @@
 # defaults already cover judges, auth, money, secrets, deploy, migrations and guard rails;
 # these are this repo's own. A pull request touching one gets parallel bug hunters, a
 # confirm vote and a separate security status.
-^scripts/(release|prepublish|trust-publisher|check-eve-line|line-registry)\.mjs$
+^scripts/(prepublish|trust-publisher|check-eve-line|line-registry)\.mjs$
+# Owner-only setup: writes the owner's keys on the agent.
+^packages/manage/src/setup(-env)?\.ts$
 ^packages/(enterprise|identity|dispatch|vault|payments|local)/src/
 ^packages/create/src/util\.ts$
 ^registry/registry/
