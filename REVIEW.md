@@ -1,8 +1,25 @@
 # Review rules: platform
 
-The product monorepo: the `@kybernesis/*` packages that make eve agents enterprise-ready, the `kyb` CLI and the registry. They ship to enterprises through npm. A reviewer reads this file and AGENTS.md from `master`, reviews the pull request's exact head commit, and runs `.claude/skills/verify` itself. Findings are Important (blocks the merge), Nit, or Pre-existing. Start the findings comment with the count of each. At most five Nits.
+The product monorepo: the `@kybernesis/*` packages that make eve agents enterprise-ready, the `kyb` CLI and the registry. They ship to enterprises through npm. A reviewer reads this file and AGENTS.md from `master`, reviews the pull request's exact head commit at the depth `review-tier` prints, and runs `.claude/skills/verify` itself. Findings are Important (blocks the merge), Nit, or Pre-existing.
 
-What failure looks like here: a package that installs but breaks on a client's machine, a release that skips or doubles a version, or our own names leaking into enterprise code.
+## What failure looks like here
+
+A package that installs but breaks on a client's machine, a release that skips or doubles a version, or our own names leaking into enterprise code. A finding that can't be tied to one of these, or to a broken done-when line, is a Nit at most.
+
+## How to write the findings
+
+- Start with the counts: `Important <a>, Nit <b>, Pre-existing <c>.` When there is nothing to fix, say "Nothing to fix." and stop.
+- Every finding cites a file and line and says what fails and how to fix it. No guesses from a name.
+- At most 5 Nits; keep the ones that matter most.
+- Name the bug class when a mistake can repeat, so every instance gets fixed, not only the line quoted.
+- Review depth comes from the changed files (`review-tier`): the build plugin's defaults plus `.github/risk` mark the deep paths, which get parallel bug hunters, a confirm vote and a separate security status.
+
+## Skip
+
+- `registry/r/**` (generated from `registry/registry/*.ts`; check the generator ran, not each line).
+- `package-lock.json` except for the dependency row.
+- `dist/` and other build output.
+- Whitespace and formatting the repo's own tools already enforce.
 
 ## Always check
 
