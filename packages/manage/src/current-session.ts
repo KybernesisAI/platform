@@ -31,6 +31,16 @@ export function readCurrentSession(appRoot: string): CurrentSession | undefined 
     if (typeof raw !== "object" || raw === null) return undefined;
     const o = raw as Record<string, unknown>;
     if (typeof o.sessionId !== "string" || o.sessionId === "") return undefined;
+    // A terminated local run cannot receive a routine's next message. When
+    // there is no local record (hosted stores), keep the existing policy.
+    if (/^wrun_[a-zA-Z0-9_-]+$/.test(o.sessionId)) {
+      try {
+        const run = JSON.parse(readFileSync(join(appRoot, ".eve", ".workflow-data", "runs", `${o.sessionId}.json`), "utf8")) as { status?: unknown };
+        if (run?.status === "cancelled" || run?.status === "completed" || run?.status === "failed") return undefined;
+      } catch {
+        // No local evidence of termination.
+      }
+    }
     return {
       sessionId: o.sessionId,
       ...(typeof o.principalId === "string" ? { principalId: o.principalId } : {}),
